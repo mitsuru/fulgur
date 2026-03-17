@@ -1,3 +1,4 @@
+use crate::asset::AssetBundle;
 use crate::config::{Config, ConfigBuilder, Margin, PageSize};
 use crate::error::Result;
 use crate::pageable::Pageable;
@@ -7,12 +8,14 @@ use std::path::Path;
 /// Reusable PDF generation engine.
 pub struct Engine {
     config: Config,
+    assets: Option<AssetBundle>,
 }
 
 impl Engine {
     pub fn builder() -> EngineBuilder {
         EngineBuilder {
             config_builder: Config::builder(),
+            assets: None,
         }
     }
 
@@ -25,10 +28,34 @@ impl Engine {
         render_to_pdf(root, &self.config)
     }
 
+    pub fn assets(&self) -> Option<&AssetBundle> {
+        self.assets.as_ref()
+    }
+
     /// Render HTML string to PDF bytes.
+    /// If an AssetBundle is set, its CSS will be injected as a <style> block.
     pub fn render_html(&self, html: &str) -> Result<Vec<u8>> {
+        let final_html = if let Some(assets) = &self.assets {
+            let combined_css = assets.combined_css();
+            if combined_css.is_empty() {
+                html.to_string()
+            } else {
+                // Inject CSS into the HTML
+                let style_block = format!("<style>{}</style>", combined_css);
+                if let Some(pos) = html.find("</head>") {
+                    format!("{}{}{}", &html[..pos], style_block, &html[pos..])
+                } else if let Some(pos) = html.find("<body") {
+                    format!("{}{}{}", &html[..pos], style_block, &html[pos..])
+                } else {
+                    format!("{}{}", style_block, html)
+                }
+            }
+        } else {
+            html.to_string()
+        };
+
         let doc = crate::blitz_adapter::parse_and_layout(
-            html,
+            &final_html,
             self.config.content_width(),
             self.config.content_height(),
         );
@@ -61,6 +88,7 @@ impl Engine {
 
 pub struct EngineBuilder {
     config_builder: ConfigBuilder,
+    assets: Option<AssetBundle>,
 }
 
 impl EngineBuilder {
@@ -89,9 +117,15 @@ impl EngineBuilder {
         self
     }
 
+    pub fn assets(mut self, assets: AssetBundle) -> Self {
+        self.assets = Some(assets);
+        self
+    }
+
     pub fn build(self) -> Engine {
         Engine {
             config: self.config_builder.build(),
+            assets: self.assets,
         }
     }
 }

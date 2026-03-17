@@ -1,6 +1,6 @@
 //! Convert a Blitz DOM (after style resolution + layout) into a Pageable tree.
 
-use crate::pageable::{BlockPageable, Pageable, SpacerPageable};
+use crate::pageable::{BlockPageable, BlockStyle, Pageable, SpacerPageable};
 use crate::paragraph::{ParagraphPageable, ShapedGlyph, ShapedGlyphRun, ShapedLine};
 use blitz_dom::{Node, NodeData};
 use blitz_html::HtmlDocument;
@@ -48,7 +48,8 @@ fn convert_node(doc: &blitz_dom::BaseDocument, node_id: usize) -> Box<dyn Pageab
         })
         .collect();
 
-    let mut block = BlockPageable::new(child_pageables);
+    let style = extract_block_style(node);
+    let mut block = BlockPageable::new(child_pageables).with_style(style);
     block.wrap(width, 10000.0);
     Box::new(block)
 }
@@ -92,7 +93,6 @@ fn extract_paragraph(doc: &blitz_dom::BaseDocument, node: &Node) -> Option<Parag
                 }
 
                 if !glyphs.is_empty() {
-                    // Extract the text segment for this run
                     let run_text = text.clone();
 
                     glyph_runs.push(ShapedGlyphRun {
@@ -122,12 +122,59 @@ fn extract_paragraph(doc: &blitz_dom::BaseDocument, node: &Node) -> Option<Parag
     Some(ParagraphPageable::new(shaped_lines))
 }
 
+/// Extract visual style (background, borders, padding) from a node.
+fn extract_block_style(node: &Node) -> BlockStyle {
+    let layout = node.final_layout;
+    let mut style = BlockStyle::default();
+
+    // Read border widths and padding from Taffy layout
+    style.border_widths = [
+        layout.border.top,
+        layout.border.right,
+        layout.border.bottom,
+        layout.border.left,
+    ];
+    style.padding = [
+        layout.padding.top,
+        layout.padding.right,
+        layout.padding.bottom,
+        layout.padding.left,
+    ];
+
+    // Extract colors from computed styles
+    if let Some(styles) = node.primary_styles() {
+        let current_color = styles.clone_color();
+
+        // Background color — access the computed value directly
+        let bg = styles.clone_background_color();
+        let bg_abs = bg.resolve_to_absolute(&current_color);
+        let r = (bg_abs.components.0.clamp(0.0, 1.0) * 255.0) as u8;
+        let g = (bg_abs.components.1.clamp(0.0, 1.0) * 255.0) as u8;
+        let b = (bg_abs.components.2.clamp(0.0, 1.0) * 255.0) as u8;
+        let a = (bg_abs.alpha.clamp(0.0, 1.0) * 255.0) as u8;
+        if a > 0 {
+            style.background_color = Some([r, g, b, a]);
+        }
+
+        // Border color (use top border color for all sides for simplicity)
+        let bc = styles.clone_border_top_color();
+        let bc_abs = bc.resolve_to_absolute(&current_color);
+        style.border_color = [
+            (bc_abs.components.0.clamp(0.0, 1.0) * 255.0) as u8,
+            (bc_abs.components.1.clamp(0.0, 1.0) * 255.0) as u8,
+            (bc_abs.components.2.clamp(0.0, 1.0) * 255.0) as u8,
+            (bc_abs.alpha.clamp(0.0, 1.0) * 255.0) as u8,
+        ];
+    }
+
+    style
+}
+
 /// Get text color from a DOM node's computed styles.
 fn get_text_color(doc: &blitz_dom::BaseDocument, node_id: usize) -> [u8; 4] {
     if let Some(node) = doc.get_node(node_id) {
         if let Some(styles) = node.primary_styles() {
             let color = styles.clone_color();
-            // AbsoluteColor has components (f32, f32, f32) in 0.0-1.0 range and alpha as f32
             let r = (color.components.0.clamp(0.0, 1.0) * 255.0) as u8;
             let g = (color.components.1.clamp(0.0, 1.0) * 255.0) as u8;
             let b = (color.components.2.clamp(0.0, 1.0) * 255.0) as u8;

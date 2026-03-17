@@ -1,8 +1,10 @@
+pub mod asset;
 pub mod blitz_adapter;
 pub mod config;
 pub mod convert;
 pub mod engine;
 pub mod error;
+pub mod image;
 pub mod pageable;
 pub mod paginate;
 pub mod paragraph;

@@ -83,6 +83,21 @@ impl Clone for Box<dyn Pageable> {
     }
 }
 
+// ─── BlockStyle ──────────────────────────────────────────
+
+/// Visual style for a block element.
+#[derive(Clone, Debug, Default)]
+pub struct BlockStyle {
+    /// Background color as RGBA
+    pub background_color: Option<[u8; 4]>,
+    /// Border color as RGBA
+    pub border_color: [u8; 4],
+    /// Border widths: top, right, bottom, left
+    pub border_widths: [f32; 4],
+    /// Padding: top, right, bottom, left
+    pub padding: [f32; 4],
+}
+
 // ─── BlockPageable ───────────────────────────────────────
 
 /// A block container that stacks children vertically.
@@ -92,6 +107,7 @@ pub struct BlockPageable {
     pub children: Vec<Box<dyn Pageable>>,
     pub pagination: Pagination,
     pub cached_size: Option<Size>,
+    pub style: BlockStyle,
 }
 
 impl BlockPageable {
@@ -100,11 +116,17 @@ impl BlockPageable {
             children,
             pagination: Pagination::default(),
             cached_size: None,
+            style: BlockStyle::default(),
         }
     }
 
     pub fn with_pagination(mut self, pagination: Pagination) -> Self {
         self.pagination = pagination;
+        self
+    }
+
+    pub fn with_style(mut self, style: BlockStyle) -> Self {
+        self.style = style;
         self
     }
 }
@@ -164,8 +186,8 @@ impl Pageable for BlockPageable {
                     }
 
                     return Some((
-                        Box::new(BlockPageable::new(first_children).with_pagination(self.pagination)),
-                        Box::new(BlockPageable::new(second_children).with_pagination(self.pagination)),
+                        Box::new(BlockPageable::new(first_children).with_pagination(self.pagination).with_style(self.style.clone())),
+                        Box::new(BlockPageable::new(second_children).with_pagination(self.pagination).with_style(self.style.clone())),
                     ));
                 }
                 // Can't split child; put it on the next page
@@ -190,16 +212,98 @@ impl Pageable for BlockPageable {
         let second_children: Vec<Box<dyn Pageable>> = self.children[split_index..].iter().map(|c| c.clone_box()).collect();
 
         Some((
-            Box::new(BlockPageable::new(first_children).with_pagination(self.pagination)),
-            Box::new(BlockPageable::new(second_children).with_pagination(self.pagination)),
+            Box::new(BlockPageable::new(first_children).with_pagination(self.pagination).with_style(self.style.clone())),
+            Box::new(BlockPageable::new(second_children).with_pagination(self.pagination).with_style(self.style.clone())),
         ))
     }
 
     fn draw(&self, canvas: &mut Canvas<'_, '_>, x: Pt, y: Pt, avail_width: Pt, avail_height: Pt) {
-        let _ = avail_height;
-        let mut current_y = y;
+        let total_height = self.cached_size.map(|s| s.height).unwrap_or(avail_height);
+
+        // Draw background
+        if let Some(bg) = &self.style.background_color {
+            if let Some(rect) = krilla::geom::Rect::from_xywh(x, y, avail_width, total_height) {
+                let mut pb = krilla::geom::PathBuilder::new();
+                pb.push_rect(rect);
+                if let Some(path) = pb.finish() {
+                    canvas.surface.set_fill(Some(krilla::paint::Fill {
+                        paint: krilla::color::rgb::Color::new(bg[0], bg[1], bg[2]).into(),
+                        opacity: krilla::num::NormalizedF32::new(bg[3] as f32 / 255.0)
+                            .unwrap_or(krilla::num::NormalizedF32::ONE),
+                        rule: Default::default(),
+                    }));
+                    canvas.surface.set_stroke(None);
+                    canvas.surface.draw_path(&path);
+                }
+            }
+        }
+
+        // Draw borders
+        let [bt, br, bb, bl] = self.style.border_widths;
+        if bt > 0.0 || br > 0.0 || bb > 0.0 || bl > 0.0 {
+            let bc = &self.style.border_color;
+            let stroke = krilla::paint::Stroke {
+                paint: krilla::color::rgb::Color::new(bc[0], bc[1], bc[2]).into(),
+                opacity: krilla::num::NormalizedF32::new(bc[3] as f32 / 255.0)
+                    .unwrap_or(krilla::num::NormalizedF32::ONE),
+                ..Default::default()
+            };
+
+            canvas.surface.set_fill(None);
+
+            // Top border
+            if bt > 0.0 {
+                canvas.surface.set_stroke(Some(krilla::paint::Stroke { width: bt, ..stroke.clone() }));
+                let mut pb = krilla::geom::PathBuilder::new();
+                pb.move_to(x, y + bt / 2.0);
+                pb.line_to(x + avail_width, y + bt / 2.0);
+                if let Some(path) = pb.finish() {
+                    canvas.surface.draw_path(&path);
+                }
+            }
+
+            // Bottom border
+            if bb > 0.0 {
+                canvas.surface.set_stroke(Some(krilla::paint::Stroke { width: bb, ..stroke.clone() }));
+                let mut pb = krilla::geom::PathBuilder::new();
+                pb.move_to(x, y + total_height - bb / 2.0);
+                pb.line_to(x + avail_width, y + total_height - bb / 2.0);
+                if let Some(path) = pb.finish() {
+                    canvas.surface.draw_path(&path);
+                }
+            }
+
+            // Left border
+            if bl > 0.0 {
+                canvas.surface.set_stroke(Some(krilla::paint::Stroke { width: bl, ..stroke.clone() }));
+                let mut pb = krilla::geom::PathBuilder::new();
+                pb.move_to(x + bl / 2.0, y);
+                pb.line_to(x + bl / 2.0, y + total_height);
+                if let Some(path) = pb.finish() {
+                    canvas.surface.draw_path(&path);
+                }
+            }
+
+            // Right border
+            if br > 0.0 {
+                canvas.surface.set_stroke(Some(krilla::paint::Stroke { width: br, ..stroke }));
+                let mut pb = krilla::geom::PathBuilder::new();
+                pb.move_to(x + avail_width - br / 2.0, y);
+                pb.line_to(x + avail_width - br / 2.0, y + total_height);
+                if let Some(path) = pb.finish() {
+                    canvas.surface.draw_path(&path);
+                }
+            }
+
+            canvas.surface.set_stroke(None);
+        }
+
+        // Draw children with padding offset
+        let pad_top = self.style.padding[0];
+        let pad_left = self.style.padding[3];
+        let mut current_y = y + pad_top;
         for child in &self.children {
-            child.draw(canvas, x, current_y, avail_width, child.height());
+            child.draw(canvas, x + pad_left, current_y, avail_width, child.height());
             current_y += child.height();
         }
     }
