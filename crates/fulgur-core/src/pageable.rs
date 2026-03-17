@@ -98,13 +98,23 @@ pub struct BlockStyle {
     pub padding: [f32; 4],
 }
 
+// ─── PositionedChild ─────────────────────────────────────
+
+/// A child element with its Taffy-computed position.
+#[derive(Clone)]
+pub struct PositionedChild {
+    pub child: Box<dyn Pageable>,
+    pub x: Pt,
+    pub y: Pt,
+}
+
 // ─── BlockPageable ───────────────────────────────────────
 
-/// A block container that stacks children vertically.
+/// A block container that positions children using Taffy layout coordinates.
 /// Handles margin/border/padding/background and page splitting.
 #[derive(Clone)]
 pub struct BlockPageable {
-    pub children: Vec<Box<dyn Pageable>>,
+    pub children: Vec<PositionedChild>,
     pub pagination: Pagination,
     pub cached_size: Option<Size>,
     pub style: BlockStyle,
@@ -112,6 +122,22 @@ pub struct BlockPageable {
 
 impl BlockPageable {
     pub fn new(children: Vec<Box<dyn Pageable>>) -> Self {
+        // Legacy constructor: stack children vertically
+        let mut y = 0.0;
+        let positioned: Vec<PositionedChild> = children.into_iter().map(|child| {
+            let child_y = y;
+            y += child.height();
+            PositionedChild { child, x: 0.0, y: child_y }
+        }).collect();
+        Self {
+            children: positioned,
+            pagination: Pagination::default(),
+            cached_size: None,
+            style: BlockStyle::default(),
+        }
+    }
+
+    pub fn with_positioned_children(children: Vec<PositionedChild>) -> Self {
         Self {
             children,
             pagination: Pagination::default(),
@@ -132,12 +158,12 @@ impl BlockPageable {
 }
 
 impl Pageable for BlockPageable {
-    fn wrap(&mut self, avail_width: Pt, avail_height: Pt) -> Size {
-        let mut total_height: Pt = 0.0;
-        for child in &mut self.children {
-            let child_size = child.wrap(avail_width, avail_height - total_height);
-            total_height += child_size.height;
-        }
+    fn wrap(&mut self, avail_width: Pt, _avail_height: Pt) -> Size {
+        // Use max of children's (y + height) for total height
+        let total_height = self.children.iter_mut().fold(0.0f32, |max_h, pc| {
+            let child_h = pc.child.height();
+            max_h.max(pc.y + child_h)
+        });
         let size = Size { width: avail_width, height: total_height };
         self.cached_size = Some(size);
         size
@@ -150,70 +176,52 @@ impl Pageable for BlockPageable {
             return None;
         }
 
-        // Check for forced breaks first (break-before/break-after),
-        // even if content fits on one page
-        let has_forced_break = self.children.iter().enumerate().any(|(i, child)| {
-            (child.pagination().break_before == BreakBefore::Page && i > 0)
-                || (child.pagination().break_after == BreakAfter::Page && i < self.children.len() - 1)
+        let has_forced_break = self.children.iter().enumerate().any(|(i, pc)| {
+            (pc.child.pagination().break_before == BreakBefore::Page && i > 0)
+                || (pc.child.pagination().break_after == BreakAfter::Page && i < self.children.len() - 1)
         });
 
         let total_height = self.cached_size.map(|s| s.height).unwrap_or(0.0);
         if total_height <= avail_height && !has_forced_break {
-            return None; // Fits entirely and no forced breaks
+            return None;
         }
 
-        let mut consumed: Pt = 0.0;
+        // Split based on children's y positions
         let mut split_index = self.children.len();
 
-        for (i, child) in self.children.iter().enumerate() {
-            let child_h = child.height();
-
-            // Check break-before
-            if child.pagination().break_before == BreakBefore::Page && i > 0 && consumed > 0.0 {
+        for (i, pc) in self.children.iter().enumerate() {
+            if pc.child.pagination().break_before == BreakBefore::Page && i > 0 && pc.y > 0.0 {
                 split_index = i;
                 break;
             }
 
-            if consumed + child_h > avail_height {
-                // Try to split the child itself
-                if let Some((first_part, second_part)) = child.split(avail_width, avail_height - consumed) {
-                    let mut first_children: Vec<Box<dyn Pageable>> = self.children[..i].iter().map(|c| c.clone_box()).collect();
-                    first_children.push(first_part);
-
-                    let mut second_children = vec![second_part];
-                    for c in &self.children[i + 1..] {
-                        second_children.push(c.clone_box());
-                    }
-
-                    return Some((
-                        Box::new(BlockPageable::new(first_children).with_pagination(self.pagination).with_style(self.style.clone())),
-                        Box::new(BlockPageable::new(second_children).with_pagination(self.pagination).with_style(self.style.clone())),
-                    ));
-                }
-                // Can't split child; put it on the next page
-                split_index = i;
+            if pc.y + pc.child.height() > avail_height {
+                split_index = i.max(1); // At least keep first child
                 break;
             }
 
-            consumed += child_h;
-
-            // Check break-after
-            if child.pagination().break_after == BreakAfter::Page {
+            if pc.child.pagination().break_after == BreakAfter::Page {
                 split_index = i + 1;
                 break;
             }
         }
 
-        if split_index == 0 || split_index == self.children.len() {
-            return None; // Can't split meaningfully
+        if split_index == 0 || split_index >= self.children.len() {
+            return None;
         }
 
-        let first_children: Vec<Box<dyn Pageable>> = self.children[..split_index].iter().map(|c| c.clone_box()).collect();
-        let second_children: Vec<Box<dyn Pageable>> = self.children[split_index..].iter().map(|c| c.clone_box()).collect();
+        let split_y = self.children[split_index].y;
+
+        let first: Vec<PositionedChild> = self.children[..split_index].iter()
+            .map(|pc| PositionedChild { child: pc.child.clone_box(), x: pc.x, y: pc.y })
+            .collect();
+        let second: Vec<PositionedChild> = self.children[split_index..].iter()
+            .map(|pc| PositionedChild { child: pc.child.clone_box(), x: pc.x, y: pc.y - split_y })
+            .collect();
 
         Some((
-            Box::new(BlockPageable::new(first_children).with_pagination(self.pagination).with_style(self.style.clone())),
-            Box::new(BlockPageable::new(second_children).with_pagination(self.pagination).with_style(self.style.clone())),
+            Box::new(BlockPageable::with_positioned_children(first).with_pagination(self.pagination).with_style(self.style.clone())),
+            Box::new(BlockPageable::with_positioned_children(second).with_pagination(self.pagination).with_style(self.style.clone())),
         ))
     }
 
@@ -251,60 +259,40 @@ impl Pageable for BlockPageable {
 
             canvas.surface.set_fill(None);
 
-            // Top border
             if bt > 0.0 {
                 canvas.surface.set_stroke(Some(krilla::paint::Stroke { width: bt, ..stroke.clone() }));
                 let mut pb = krilla::geom::PathBuilder::new();
                 pb.move_to(x, y + bt / 2.0);
                 pb.line_to(x + avail_width, y + bt / 2.0);
-                if let Some(path) = pb.finish() {
-                    canvas.surface.draw_path(&path);
-                }
+                if let Some(path) = pb.finish() { canvas.surface.draw_path(&path); }
             }
-
-            // Bottom border
             if bb > 0.0 {
                 canvas.surface.set_stroke(Some(krilla::paint::Stroke { width: bb, ..stroke.clone() }));
                 let mut pb = krilla::geom::PathBuilder::new();
                 pb.move_to(x, y + total_height - bb / 2.0);
                 pb.line_to(x + avail_width, y + total_height - bb / 2.0);
-                if let Some(path) = pb.finish() {
-                    canvas.surface.draw_path(&path);
-                }
+                if let Some(path) = pb.finish() { canvas.surface.draw_path(&path); }
             }
-
-            // Left border
             if bl > 0.0 {
                 canvas.surface.set_stroke(Some(krilla::paint::Stroke { width: bl, ..stroke.clone() }));
                 let mut pb = krilla::geom::PathBuilder::new();
                 pb.move_to(x + bl / 2.0, y);
                 pb.line_to(x + bl / 2.0, y + total_height);
-                if let Some(path) = pb.finish() {
-                    canvas.surface.draw_path(&path);
-                }
+                if let Some(path) = pb.finish() { canvas.surface.draw_path(&path); }
             }
-
-            // Right border
             if br > 0.0 {
                 canvas.surface.set_stroke(Some(krilla::paint::Stroke { width: br, ..stroke }));
                 let mut pb = krilla::geom::PathBuilder::new();
                 pb.move_to(x + avail_width - br / 2.0, y);
                 pb.line_to(x + avail_width - br / 2.0, y + total_height);
-                if let Some(path) = pb.finish() {
-                    canvas.surface.draw_path(&path);
-                }
+                if let Some(path) = pb.finish() { canvas.surface.draw_path(&path); }
             }
-
             canvas.surface.set_stroke(None);
         }
 
-        // Draw children with padding offset
-        let pad_top = self.style.padding[0];
-        let pad_left = self.style.padding[3];
-        let mut current_y = y + pad_top;
-        for child in &self.children {
-            child.draw(canvas, x + pad_left, current_y, avail_width, child.height());
-            current_y += child.height();
+        // Draw children at their Taffy-computed positions
+        for pc in &self.children {
+            pc.child.draw(canvas, x + pc.x, y + pc.y, avail_width, pc.child.height());
         }
     }
 

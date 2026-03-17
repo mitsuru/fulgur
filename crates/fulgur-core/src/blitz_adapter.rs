@@ -6,14 +6,19 @@ use blitz_html::HtmlDocument;
 use blitz_traits::shell::{ColorScheme, Viewport};
 
 /// Parse HTML and return a fully resolved document (styles + layout computed).
+///
+/// We pass the content width as the viewport width so Taffy wraps text
+/// at the right column. The viewport height is set very large so that
+/// Taffy lays out the full document without clipping — our own pagination
+/// algorithm handles page breaks.
 pub fn parse_and_layout(
     html: &str,
     viewport_width: f32,
-    viewport_height: f32,
+    _viewport_height: f32,
 ) -> HtmlDocument {
     let viewport = Viewport::new(
         viewport_width as u32,
-        viewport_height as u32,
+        10000, // Large height — let Taffy lay out everything, we paginate later
         1.0,
         ColorScheme::Light,
     );

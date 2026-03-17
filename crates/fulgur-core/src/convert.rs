@@ -1,6 +1,6 @@
 //! Convert a Blitz DOM (after style resolution + layout) into a Pageable tree.
 
-use crate::pageable::{BlockPageable, BlockStyle, Pageable, SpacerPageable};
+use crate::pageable::{BlockPageable, BlockStyle, Pageable, PositionedChild, SpacerPageable};
 use crate::paragraph::{ParagraphPageable, ShapedGlyph, ShapedGlyphRun, ShapedLine};
 use blitz_dom::{Node, NodeData};
 use blitz_html::HtmlDocument;
@@ -10,7 +10,29 @@ use std::sync::Arc;
 /// Convert a resolved Blitz document into a Pageable tree.
 pub fn dom_to_pageable(doc: &HtmlDocument) -> Box<dyn Pageable> {
     let root = doc.root_element();
+    // Debug: print layout tree structure
+    if std::env::var("FULGUR_DEBUG").is_ok() {
+        debug_print_tree(doc.deref(), root.id, 0);
+    }
     convert_node(doc.deref(), root.id)
+}
+
+fn debug_print_tree(doc: &blitz_dom::BaseDocument, node_id: usize, depth: usize) {
+    let Some(node) = doc.get_node(node_id) else { return };
+    let layout = node.final_layout;
+    let indent = "  ".repeat(depth);
+    let tag = match &node.data {
+        NodeData::Element(e) => e.name.local.to_string(),
+        NodeData::Text(_) => "#text".to_string(),
+        NodeData::Comment => "#comment".to_string(),
+        _ => "#other".to_string(),
+    };
+    eprintln!("{indent}{tag} id={} pos=({},{}) size={}x{} inline_root={}",
+        node_id, layout.location.x, layout.location.y,
+        layout.size.width, layout.size.height, node.flags.is_inline_root());
+    for &child_id in &node.children {
+        debug_print_tree(doc, child_id, depth + 1);
+    }
 }
 
 fn convert_node(doc: &blitz_dom::BaseDocument, node_id: usize) -> Box<dyn Pageable> {
@@ -35,23 +57,58 @@ fn convert_node(doc: &blitz_dom::BaseDocument, node_id: usize) -> Box<dyn Pageab
         return Box::new(spacer);
     }
 
-    // Container node — recurse into children
-    let child_pageables: Vec<Box<dyn Pageable>> = children
-        .iter()
-        .filter_map(|&child_id| {
-            let child = doc.get_node(child_id)?;
-            // Skip comment nodes
-            if matches!(&child.data, NodeData::Comment) {
-                return None;
-            }
-            Some(convert_node(doc, child_id))
-        })
-        .collect();
+    // Container node — collect children with Taffy-computed positions
+    let positioned_children = collect_positioned_children(doc, children);
 
     let style = extract_block_style(node);
-    let mut block = BlockPageable::new(child_pageables).with_style(style);
+    let mut block = BlockPageable::with_positioned_children(positioned_children).with_style(style);
     block.wrap(width, 10000.0);
     Box::new(block)
+}
+
+/// Collect positioned children, flattening zero-size pass-through containers
+/// (like thead, tbody, tr) so their children appear directly in the parent.
+fn collect_positioned_children(
+    doc: &blitz_dom::BaseDocument,
+    child_ids: &[usize],
+) -> Vec<PositionedChild> {
+    let mut result = Vec::new();
+    for &child_id in child_ids {
+        let Some(child_node) = doc.get_node(child_id) else { continue };
+
+        if matches!(&child_node.data, NodeData::Comment) {
+            continue;
+        }
+        if is_non_visual_element(child_node) {
+            continue;
+        }
+
+        let child_layout = child_node.final_layout;
+
+        // Zero-size leaf nodes (whitespace text, etc.) — skip
+        if child_layout.size.height == 0.0 && child_layout.size.width == 0.0
+            && child_node.children.is_empty()
+        {
+            continue;
+        }
+
+        // Zero-size container (thead, tbody, tr, etc.) — flatten children into parent
+        if child_layout.size.height == 0.0 && child_layout.size.width == 0.0
+            && !child_node.children.is_empty()
+        {
+            let nested = collect_positioned_children(doc, &child_node.children);
+            result.extend(nested);
+            continue;
+        }
+
+        let child_pageable = convert_node(doc, child_id);
+        result.push(PositionedChild {
+            child: child_pageable,
+            x: child_layout.location.x,
+            y: child_layout.location.y,
+        });
+    }
+    result
 }
 
 /// Extract a ParagraphPageable from an inline root node.
@@ -80,10 +137,10 @@ fn extract_paragraph(doc: &blitz_dom::BaseDocument, node: &Node) -> Option<Parag
                 let brush = &glyph_run.style().brush;
                 let color = get_text_color(doc, brush.id);
 
-                // Extract positioned glyphs
+                // Extract raw glyphs (relative offsets, not absolute positions)
                 let text_len = text.len();
                 let mut glyphs = Vec::new();
-                for g in glyph_run.positioned_glyphs() {
+                for g in glyph_run.glyphs() {
                     glyphs.push(ShapedGlyph {
                         id: g.id,
                         x_advance: g.advance / font_size,
@@ -103,7 +160,7 @@ fn extract_paragraph(doc: &blitz_dom::BaseDocument, node: &Node) -> Option<Parag
                         color,
                         glyphs,
                         text: run_text,
-                        x_offset: 0.0,
+                        x_offset: glyph_run.offset(),
                     });
                 }
             }
@@ -169,6 +226,16 @@ fn extract_block_style(node: &Node) -> BlockStyle {
     }
 
     style
+}
+
+/// Check if a node is a non-visual element (head, script, style, etc.)
+fn is_non_visual_element(node: &Node) -> bool {
+    if let Some(elem) = node.element_data() {
+        let tag = elem.name.local.as_ref();
+        matches!(tag, "head" | "script" | "style" | "link" | "meta" | "title" | "noscript")
+    } else {
+        false
+    }
 }
 
 /// Get text color from a DOM node's computed styles.

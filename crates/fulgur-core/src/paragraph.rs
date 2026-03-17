@@ -128,18 +128,17 @@ impl Pageable for ParagraphPageable {
                     continue;
                 };
 
-                let upem = font.units_per_em();
-
                 // Convert shaped glyphs to Krilla glyphs
+                // Values are already normalized (/ font_size) in convert.rs
                 let krilla_glyphs: Vec<krilla::text::KrillaGlyph> = run
                     .glyphs
                     .iter()
                     .map(|g| krilla::text::KrillaGlyph {
                         glyph_id: krilla::text::GlyphId::new(g.id),
                         text_range: g.text_range.clone(),
-                        x_advance: g.x_advance / upem,
-                        x_offset: g.x_offset / upem,
-                        y_offset: g.y_offset / upem,
+                        x_advance: g.x_advance,
+                        x_offset: g.x_offset,
+                        y_offset: g.y_offset,
                         y_advance: 0.0,
                         location: None,
                     })
