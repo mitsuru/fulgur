@@ -1,0 +1,8 @@
+[package]
+name = "fulgur-core"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+krilla = "0.6.0"
+thiserror = "2"

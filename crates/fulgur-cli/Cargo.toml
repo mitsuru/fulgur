@@ -1,0 +1,12 @@
+[package]
+name = "fulgur-cli"
+version = "0.1.0"
+edition = "2024"
+
+[[bin]]
+name = "fulgur"
+path = "src/main.rs"
+
+[dependencies]
+fulgur-core = { path = "../fulgur-core" }
+clap = { version = "4", features = ["derive"] }
