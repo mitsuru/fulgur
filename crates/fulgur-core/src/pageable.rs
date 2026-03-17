@@ -48,8 +48,8 @@ impl Default for Pagination {
 
 /// Wrapper around Krilla Surface for drawing commands.
 /// This decouples Pageable types from Krilla's concrete Surface type.
-pub struct Canvas<'a> {
-    pub surface: &'a mut krilla::surface::Surface<'a>,
+pub struct Canvas<'a, 'b> {
+    pub surface: &'a mut krilla::surface::Surface<'b>,
 }
 
 /// Core pagination-aware layout trait.
@@ -63,7 +63,7 @@ pub trait Pageable: Send + Sync {
         -> Option<(Box<dyn Pageable>, Box<dyn Pageable>)>;
 
     /// Emit drawing commands.
-    fn draw(&self, canvas: &mut Canvas, x: Pt, y: Pt, avail_width: Pt, avail_height: Pt);
+    fn draw(&self, canvas: &mut Canvas<'_, '_>, x: Pt, y: Pt, avail_width: Pt, avail_height: Pt);
 
     /// CSS pagination properties for this element.
     fn pagination(&self) -> Pagination {
@@ -195,7 +195,7 @@ impl Pageable for BlockPageable {
         ))
     }
 
-    fn draw(&self, canvas: &mut Canvas, x: Pt, y: Pt, avail_width: Pt, avail_height: Pt) {
+    fn draw(&self, canvas: &mut Canvas<'_, '_>, x: Pt, y: Pt, avail_width: Pt, avail_height: Pt) {
         let _ = avail_height;
         let mut current_y = y;
         for child in &self.children {
