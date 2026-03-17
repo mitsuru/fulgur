@@ -5,6 +5,7 @@ pub mod engine;
 pub mod error;
 pub mod pageable;
 pub mod paginate;
+pub mod paragraph;
 pub mod render;
 
 pub use config::{Config, ConfigBuilder, Margin, PageSize};
