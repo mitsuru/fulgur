@@ -53,22 +53,21 @@ fn convert_node(doc: &blitz_dom::BaseDocument, node_id: usize) -> Box<dyn Pageab
     if node.flags.is_inline_root()
         && let Some(paragraph) = extract_paragraph(doc, node)
     {
-            // Wrap in a BlockPageable to apply background/border/padding styles
-            let style = extract_block_style(node);
-            let has_style = style.background_color.is_some()
-                || style.border_widths.iter().any(|&w| w > 0.0)
-                || style.padding.iter().any(|&p| p > 0.0);
-            if has_style {
-                let child = PositionedChild {
-                    child: Box::new(paragraph),
-                    x: 0.0,
-                    y: 0.0,
-                };
-                let mut block =
-                    BlockPageable::with_positioned_children(vec![child]).with_style(style);
-                block.wrap(width, height);
-                return Box::new(block);
-            }
+        // Wrap in a BlockPageable to apply background/border/padding styles
+        let style = extract_block_style(node);
+        let has_style = style.background_color.is_some()
+            || style.border_widths.iter().any(|&w| w > 0.0)
+            || style.padding.iter().any(|&p| p > 0.0);
+        if has_style {
+            let child = PositionedChild {
+                child: Box::new(paragraph),
+                x: 0.0,
+                y: 0.0,
+            };
+            let mut block = BlockPageable::with_positioned_children(vec![child]).with_style(style);
+            block.wrap(width, height);
+            return Box::new(block);
+        }
         return Box::new(paragraph);
     }
 
@@ -274,11 +273,11 @@ fn get_text_color(doc: &blitz_dom::BaseDocument, node_id: usize) -> [u8; 4] {
     if let Some(node) = doc.get_node(node_id)
         && let Some(styles) = node.primary_styles()
     {
-            let color = styles.clone_color();
-            let r = (color.components.0.clamp(0.0, 1.0) * 255.0) as u8;
-            let g = (color.components.1.clamp(0.0, 1.0) * 255.0) as u8;
-            let b = (color.components.2.clamp(0.0, 1.0) * 255.0) as u8;
-            let a = (color.alpha.clamp(0.0, 1.0) * 255.0) as u8;
+        let color = styles.clone_color();
+        let r = (color.components.0.clamp(0.0, 1.0) * 255.0) as u8;
+        let g = (color.components.1.clamp(0.0, 1.0) * 255.0) as u8;
+        let b = (color.components.2.clamp(0.0, 1.0) * 255.0) as u8;
+        let a = (color.alpha.clamp(0.0, 1.0) * 255.0) as u8;
         return [r, g, b, a];
     }
     [0, 0, 0, 255] // Default: black

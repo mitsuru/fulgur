@@ -235,28 +235,28 @@ impl Pageable for BlockPageable {
             if child_avail > 0.0
                 && let Some((first_part, second_part)) = pc.child.split(0.0, child_avail)
             {
-                    let first = vec![PositionedChild {
-                        child: first_part,
-                        x: pc.x,
-                        y: pc.y,
-                    }];
-                    let second = vec![PositionedChild {
-                        child: second_part,
-                        x: pc.x,
-                        y: 0.0,
-                    }];
-                    return Some((
-                        Box::new(
-                            BlockPageable::with_positioned_children(first)
-                                .with_pagination(self.pagination)
-                                .with_style(self.style.clone()),
-                        ),
-                        Box::new(
-                            BlockPageable::with_positioned_children(second)
-                                .with_pagination(self.pagination)
-                                .with_style(self.style.clone()),
-                        ),
-                    ));
+                let first = vec![PositionedChild {
+                    child: first_part,
+                    x: pc.x,
+                    y: pc.y,
+                }];
+                let second = vec![PositionedChild {
+                    child: second_part,
+                    x: pc.x,
+                    y: 0.0,
+                }];
+                return Some((
+                    Box::new(
+                        BlockPageable::with_positioned_children(first)
+                            .with_pagination(self.pagination)
+                            .with_style(self.style.clone()),
+                    ),
+                    Box::new(
+                        BlockPageable::with_positioned_children(second)
+                            .with_pagination(self.pagination)
+                            .with_style(self.style.clone()),
+                    ),
+                ));
             }
             return None;
         }
