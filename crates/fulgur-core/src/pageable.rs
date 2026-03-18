@@ -232,8 +232,9 @@ impl Pageable for BlockPageable {
         if let Some(idx) = overflow_child_index {
             let pc = &self.children[idx];
             let child_avail = avail_height - pc.y;
-            if child_avail > 0.0 {
-                if let Some((first_part, second_part)) = pc.child.split(0.0, child_avail) {
+            if child_avail > 0.0
+                && let Some((first_part, second_part)) = pc.child.split(0.0, child_avail)
+            {
                     let first = vec![PositionedChild {
                         child: first_part,
                         x: pc.x,
@@ -256,7 +257,6 @@ impl Pageable for BlockPageable {
                                 .with_style(self.style.clone()),
                         ),
                     ));
-                }
             }
             return None;
         }
@@ -302,20 +302,20 @@ impl Pageable for BlockPageable {
         let total_height = self.cached_size.map(|s| s.height).unwrap_or(avail_height);
 
         // Draw background
-        if let Some(bg) = &self.style.background_color {
-            if let Some(rect) = krilla::geom::Rect::from_xywh(x, y, avail_width, total_height) {
-                let mut pb = krilla::geom::PathBuilder::new();
-                pb.push_rect(rect);
-                if let Some(path) = pb.finish() {
-                    canvas.surface.set_fill(Some(krilla::paint::Fill {
-                        paint: krilla::color::rgb::Color::new(bg[0], bg[1], bg[2]).into(),
-                        opacity: krilla::num::NormalizedF32::new(bg[3] as f32 / 255.0)
-                            .unwrap_or(krilla::num::NormalizedF32::ONE),
-                        rule: Default::default(),
-                    }));
-                    canvas.surface.set_stroke(None);
-                    canvas.surface.draw_path(&path);
-                }
+        if let Some(bg) = &self.style.background_color
+            && let Some(rect) = krilla::geom::Rect::from_xywh(x, y, avail_width, total_height)
+        {
+            let mut pb = krilla::geom::PathBuilder::new();
+            pb.push_rect(rect);
+            if let Some(path) = pb.finish() {
+                canvas.surface.set_fill(Some(krilla::paint::Fill {
+                    paint: krilla::color::rgb::Color::new(bg[0], bg[1], bg[2]).into(),
+                    opacity: krilla::num::NormalizedF32::new(bg[3] as f32 / 255.0)
+                        .unwrap_or(krilla::num::NormalizedF32::ONE),
+                    rule: Default::default(),
+                }));
+                canvas.surface.set_stroke(None);
+                canvas.surface.draw_path(&path);
             }
         }
 
