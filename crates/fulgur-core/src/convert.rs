@@ -49,6 +49,52 @@ fn convert_node(doc: &blitz_dom::BaseDocument, node_id: usize) -> Box<dyn Pageab
     let height = layout.size.height;
     let width = layout.size.width;
 
+    // Check if this is a list item with an outside marker (must be before inline root check)
+    if let Some(elem_data) = node.element_data()
+        && elem_data.list_item_data.is_some()
+    {
+        let (marker_lines, marker_width) = extract_marker_lines(doc, node);
+        let style = extract_block_style(node);
+
+        // Build body: if inline root, use paragraph; otherwise collect block children
+        let body: Box<dyn Pageable> = if node.flags.is_inline_root()
+            && let Some(paragraph) = extract_paragraph(doc, node)
+        {
+            let has_style = style.background_color.is_some()
+                || style.border_widths.iter().any(|&w| w > 0.0)
+                || style.padding.iter().any(|&p| p > 0.0);
+            if has_style {
+                let child = PositionedChild {
+                    child: Box::new(paragraph),
+                    x: 0.0,
+                    y: 0.0,
+                };
+                let mut block = BlockPageable::with_positioned_children(vec![child]).with_style(style);
+                block.wrap(width, height);
+                Box::new(block)
+            } else {
+                Box::new(paragraph)
+            }
+        } else {
+            let children: &[usize] = &node.children;
+            let positioned_children = collect_positioned_children(doc, children);
+            let mut block = BlockPageable::with_positioned_children(positioned_children).with_style(style);
+            block.wrap(width, 10000.0);
+            Box::new(block)
+        };
+
+        let mut item = ListItemPageable {
+            marker_lines,
+            marker_width,
+            body,
+            style: BlockStyle::default(),
+            width,
+            height: 0.0,
+        };
+        item.wrap(width, 10000.0);
+        return Box::new(item);
+    }
+
     // Check if this is an inline root (contains text layout)
     if node.flags.is_inline_root()
         && let Some(paragraph) = extract_paragraph(doc, node)
@@ -69,29 +115,6 @@ fn convert_node(doc: &blitz_dom::BaseDocument, node_id: usize) -> Box<dyn Pageab
             return Box::new(block);
         }
         return Box::new(paragraph);
-    }
-
-    // Check if this is a list item with an outside marker
-    if let Some(elem_data) = node.element_data()
-        && elem_data.list_item_data.is_some()
-    {
-        let (marker_lines, marker_width) = extract_marker_lines(doc, node);
-        let children: &[usize] = &node.children;
-        let positioned_children = collect_positioned_children(doc, children);
-        let style = extract_block_style(node);
-        let mut body = BlockPageable::with_positioned_children(positioned_children).with_style(style);
-        body.wrap(width, 10000.0);
-
-        let mut item = ListItemPageable {
-            marker_lines,
-            marker_width,
-            body: Box::new(body),
-            style: BlockStyle::default(),
-            width,
-            height: 0.0,
-        };
-        item.wrap(width, 10000.0);
-        return Box::new(item);
     }
 
     let children: &[usize] = &node.children;
