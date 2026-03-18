@@ -1,6 +1,6 @@
 //! Convert a Blitz DOM (after style resolution + layout) into a Pageable tree.
 
-use crate::pageable::{BlockPageable, BlockStyle, Pageable, PositionedChild, SpacerPageable};
+use crate::pageable::{BlockPageable, BlockStyle, ListItemPageable, Pageable, PositionedChild, SpacerPageable};
 use crate::paragraph::{ParagraphPageable, ShapedGlyph, ShapedGlyphRun, ShapedLine};
 use blitz_dom::{Node, NodeData};
 use blitz_html::HtmlDocument;
@@ -69,6 +69,29 @@ fn convert_node(doc: &blitz_dom::BaseDocument, node_id: usize) -> Box<dyn Pageab
             return Box::new(block);
         }
         return Box::new(paragraph);
+    }
+
+    // Check if this is a list item with an outside marker
+    if let Some(elem_data) = node.element_data()
+        && elem_data.list_item_data.is_some()
+    {
+        let (marker_lines, marker_width) = extract_marker_lines(doc, node);
+        let children: &[usize] = &node.children;
+        let positioned_children = collect_positioned_children(doc, children);
+        let style = extract_block_style(node);
+        let mut body = BlockPageable::with_positioned_children(positioned_children).with_style(style);
+        body.wrap(width, 10000.0);
+
+        let mut item = ListItemPageable {
+            marker_lines,
+            marker_width,
+            body: Box::new(body),
+            style: BlockStyle::default(),
+            width,
+            height: 0.0,
+        };
+        item.wrap(width, 10000.0);
+        return Box::new(item);
     }
 
     let children: &[usize] = &node.children;
