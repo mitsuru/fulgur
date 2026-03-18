@@ -2,6 +2,9 @@
 name = "fulgur-cli"
 version = "0.1.0"
 edition = "2024"
+license = "MIT OR Apache-2.0"
+description = "HTML/CSS to PDF conversion CLI"
+repository = "https://github.com/mitsuru/fulgur"
 
 [[bin]]
 name = "fulgur"
