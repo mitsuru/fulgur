@@ -65,7 +65,8 @@ impl Engine {
             self.config.content_height(),
             fonts,
         );
-        let root = crate::convert::dom_to_pageable(&doc);
+        let mut running_store = crate::gcpm::running::RunningElementStore::new();
+        let root = crate::convert::dom_to_pageable(&doc, None, &mut running_store);
         self.render_pageable(root)
     }
 
