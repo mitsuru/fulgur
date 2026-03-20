@@ -91,6 +91,10 @@ pub fn render_to_pdf_with_gcpm(
 
     let running_pairs = running_store.to_pairs();
 
+    // Build margin-box CSS: strip display:none rules that the parser
+    // injected for running elements (they need to be visible in margin boxes).
+    let margin_css = strip_display_none(&gcpm.cleaned_css);
+
     // Layout cache: resolved_html -> pageable tree
     let mut layout_cache: HashMap<String, Box<dyn Pageable>> = HashMap::new();
 
@@ -108,17 +112,39 @@ pub fn render_to_pdf_with_gcpm(
             surface: &mut surface,
         };
 
-        // Draw margin boxes first (behind body content)
+        // Resolve margin boxes: for each position, pick the most specific
+        // matching rule. Pseudo-class selectors (:first, :left, :right) override
+        // the default @page rule for the same position.
+        use crate::gcpm::margin_box::MarginBoxPosition;
+        let mut effective_boxes: HashMap<MarginBoxPosition, &crate::gcpm::MarginBoxRule> =
+            HashMap::new();
         for margin_box in &gcpm.margin_boxes {
-            // Filter by page selector
-            if let Some(ref sel) = margin_box.page_selector {
-                match sel.as_str() {
-                    ":first" if page_num != 1 => continue,
-                    ":left" if page_num % 2 != 0 => continue,
-                    ":right" if page_num % 2 == 0 => continue,
-                    _ => {}
-                }
+            let matches = match &margin_box.page_selector {
+                None => true,
+                Some(sel) => match sel.as_str() {
+                    ":first" => page_num == 1,
+                    ":left" => page_num % 2 == 0,
+                    ":right" => page_num % 2 != 0,
+                    _ => true,
+                },
+            };
+            if !matches {
+                continue;
             }
+            // More specific selector (Some) overrides less specific (None)
+            let should_replace = effective_boxes
+                .get(&margin_box.position)
+                .map(|existing| {
+                    existing.page_selector.is_none() && margin_box.page_selector.is_some()
+                })
+                .unwrap_or(true);
+            if should_replace {
+                effective_boxes.insert(margin_box.position, margin_box);
+            }
+        }
+
+        // Draw effective margin boxes
+        for margin_box in effective_boxes.values() {
             let resolved_html = resolve_content_to_html(
                 &margin_box.content,
                 &running_pairs,
@@ -126,6 +152,7 @@ pub fn render_to_pdf_with_gcpm(
                 total_pages,
             );
 
+            // Empty content means suppress this margin box
             if resolved_html.is_empty() {
                 continue;
             }
@@ -135,8 +162,8 @@ pub fn render_to_pdf_with_gcpm(
             // Populate cache if needed
             if !layout_cache.contains_key(&resolved_html) {
                 let margin_html = format!(
-                    "<html><body style=\"margin:0;padding:0;\">{}</body></html>",
-                    resolved_html
+                    "<html><head><style>{}</style></head><body style=\"margin:0;padding:0;\">{}</body></html>",
+                    margin_css, resolved_html
                 );
                 let margin_doc = crate::blitz_adapter::parse_and_layout(
                     &margin_html,
@@ -185,4 +212,11 @@ pub fn render_to_pdf_with_gcpm(
         .finish()
         .map_err(|e| Error::PdfGeneration(format!("{e:?}")))?;
     Ok(pdf_bytes)
+}
+
+/// Strip `display: none` declarations from CSS.
+/// Used to build margin-box CSS where running elements need to be visible.
+fn strip_display_none(css: &str) -> String {
+    css.replace("display: none", "")
+        .replace("display:none", "")
 }
