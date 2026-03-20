@@ -306,41 +306,76 @@ pub fn compute_edge_layout(
 
             let (l_w, c_w, r_w) = distribute_widths(left_max, center_max, right_max, content_width);
 
-            let mut x = margin.left;
-            if let Some(w) = l_w {
-                result.insert(
-                    left_pos,
-                    MarginBoxRect {
-                        x,
-                        y,
-                        width: w,
-                        height,
-                    },
-                );
-                x += w;
-            }
-            if let Some(w) = c_w {
+            // Compute x positions. When center is defined, left and right
+            // slots are always equal width (half_ac), even if one is undefined.
+            // This keeps center visually centered on the content area.
+            if let Some(cw) = c_w {
+                // Center-based layout: left_slot | center | right_slot
+                let left_slot = l_w.unwrap_or_else(|| {
+                    // Left undefined: reserve same space as right slot
+                    r_w.unwrap_or(0.0)
+                });
+                let x_left = margin.left;
+                let x_center = x_left + left_slot;
+                let x_right = x_center + cw;
+
+                if let Some(w) = l_w {
+                    result.insert(
+                        left_pos,
+                        MarginBoxRect {
+                            x: x_left,
+                            y,
+                            width: w,
+                            height,
+                        },
+                    );
+                }
                 result.insert(
                     center_pos,
                     MarginBoxRect {
-                        x,
+                        x: x_center,
                         y,
-                        width: w,
+                        width: cw,
                         height,
                     },
                 );
-                x += w;
-            }
-            if let Some(w) = r_w {
-                result.insert(
-                    right_pos,
-                    MarginBoxRect {
-                        x,
-                        y,
-                        width: w,
-                        height,
-                    },
-                );
+                if let Some(w) = r_w {
+                    result.insert(
+                        right_pos,
+                        MarginBoxRect {
+                            x: x_right,
+                            y,
+                            width: w,
+                            height,
+                        },
+                    );
+                }
+            } else {
+                // No center: sequential layout
+                let mut x = margin.left;
+                if let Some(w) = l_w {
+                    result.insert(
+                        left_pos,
+                        MarginBoxRect {
+                            x,
+                            y,
+                            width: w,
+                            height,
+                        },
+                    );
+                    x += w;
+                }
+                if let Some(w) = r_w {
+                    result.insert(
+                        right_pos,
+                        MarginBoxRect {
+                            x,
+                            y,
+                            width: w,
+                            height,
+                        },
+                    );
+                }
             }
         }
         Edge::Left | Edge::Right => {
@@ -555,5 +590,31 @@ mod tests {
         assert!((c.x - (l.x + l.width)).abs() < 0.01);
         // Right starts after center
         assert!((r.x - (c.x + c.width)).abs() < 0.01);
+    }
+
+    #[test]
+    fn test_compute_edge_layout_center_right_no_left() {
+        let page = PageSize::A4;
+        let margin = Margin::uniform(72.0);
+        let content_width = page.width - margin.left - margin.right;
+
+        let mut defined = HashMap::new();
+        defined.insert(MarginBoxPosition::TopCenter, 200.0);
+        defined.insert(MarginBoxPosition::TopRight, 50.0);
+
+        let result = compute_edge_layout(Edge::Top, &defined, page, margin);
+        assert_eq!(result.len(), 2);
+
+        let c = result[&MarginBoxPosition::TopCenter];
+        let r = result[&MarginBoxPosition::TopRight];
+
+        // Widths sum to content_width (center + right + left_slot)
+        // Center should NOT start at margin.left — it should be offset
+        // by the right slot width to stay centered.
+        assert!(c.x > margin.left);
+        // Right starts after center
+        assert!((r.x - (c.x + c.width)).abs() < 0.01);
+        // Right ends at content edge
+        assert!((r.x + r.width - (margin.left + content_width)).abs() < 0.01);
     }
 }
