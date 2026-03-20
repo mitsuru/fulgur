@@ -79,13 +79,7 @@ impl Engine {
         if gcpm.is_empty() {
             self.render_pageable(root)
         } else {
-            crate::render::render_to_pdf_with_gcpm(
-                root,
-                &self.config,
-                &gcpm,
-                &running_store,
-                fonts,
-            )
+            crate::render::render_to_pdf_with_gcpm(root, &self.config, &gcpm, &running_store, fonts)
         }
     }
 

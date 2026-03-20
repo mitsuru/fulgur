@@ -148,7 +148,13 @@ mod tests {
         pairs.sort_by(|a, b| a.0.cmp(&b.0));
 
         assert_eq!(pairs.len(), 2);
-        assert_eq!(pairs[0], ("footer".to_string(), "<footer>F</footer>".to_string()));
-        assert_eq!(pairs[1], ("header".to_string(), "<h1>Title</h1>".to_string()));
+        assert_eq!(
+            pairs[0],
+            ("footer".to_string(), "<footer>F</footer>".to_string())
+        );
+        assert_eq!(
+            pairs[1],
+            ("header".to_string(), "<h1>Title</h1>".to_string())
+        );
     }
 }

@@ -91,7 +91,8 @@ fn convert_node(
             }
         } else {
             let children: &[usize] = &node.children;
-            let positioned_children = collect_positioned_children(doc, children, gcpm, running_store);
+            let positioned_children =
+                collect_positioned_children(doc, children, gcpm, running_store);
             let mut block =
                 BlockPageable::with_positioned_children(positioned_children).with_style(style);
             block.wrap(width, 10000.0);
@@ -197,7 +198,8 @@ fn collect_positioned_children(
             && child_layout.size.width == 0.0
             && !child_node.children.is_empty()
         {
-            let nested = collect_positioned_children(doc, &child_node.children, gcpm, running_store);
+            let nested =
+                collect_positioned_children(doc, &child_node.children, gcpm, running_store);
             result.extend(nested);
             continue;
         }

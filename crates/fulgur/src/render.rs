@@ -1,8 +1,8 @@
 use crate::config::Config;
 use crate::error::{Error, Result};
+use crate::gcpm::GcpmContext;
 use crate::gcpm::counter::resolve_content_to_html;
 use crate::gcpm::running::RunningElementStore;
-use crate::gcpm::GcpmContext;
 use crate::pageable::{Canvas, Pageable};
 use crate::paginate::paginate;
 use std::collections::HashMap;
@@ -145,12 +145,8 @@ pub fn render_to_pdf_with_gcpm(
 
         // Draw effective margin boxes
         for margin_box in effective_boxes.values() {
-            let resolved_html = resolve_content_to_html(
-                &margin_box.content,
-                &running_pairs,
-                page_num,
-                total_pages,
-            );
+            let resolved_html =
+                resolve_content_to_html(&margin_box.content, &running_pairs, page_num, total_pages);
 
             // Empty content means suppress this margin box
             if resolved_html.is_empty() {
@@ -172,19 +168,12 @@ pub fn render_to_pdf_with_gcpm(
                     font_data,
                 );
                 let mut dummy_store = RunningElementStore::new();
-                let pageable =
-                    crate::convert::dom_to_pageable(&margin_doc, None, &mut dummy_store);
+                let pageable = crate::convert::dom_to_pageable(&margin_doc, None, &mut dummy_store);
                 layout_cache.insert(resolved_html.clone(), pageable);
             }
 
             if let Some(margin_pageable) = layout_cache.get(&resolved_html) {
-                margin_pageable.draw(
-                    &mut canvas,
-                    rect.x,
-                    rect.y,
-                    rect.width,
-                    rect.height,
-                );
+                margin_pageable.draw(&mut canvas, rect.x, rect.y, rect.width, rect.height);
             }
         }
 
@@ -217,6 +206,5 @@ pub fn render_to_pdf_with_gcpm(
 /// Strip `display: none` declarations from CSS.
 /// Used to build margin-box CSS where running elements need to be visible.
 fn strip_display_none(css: &str) -> String {
-    css.replace("display: none", "")
-        .replace("display:none", "")
+    css.replace("display: none", "").replace("display:none", "")
 }

@@ -67,9 +67,7 @@ pub fn parse_gcpm(css: &str) -> GcpmContext {
                     if after_page >= len
                         || matches!(after_page_ch, Some(c) if c.is_ascii_whitespace() || c == '{' || c == ':')
                     {
-                        if let Some((consumed, page_sel, boxes)) =
-                            parse_page_rule(&css[i..])
-                        {
+                        if let Some((consumed, page_sel, boxes)) = parse_page_rule(&css[i..]) {
                             margin_boxes.extend(boxes);
                             // Skip the entire @page block (don't add to cleaned_css)
                             // but preserve a newline to avoid merging adjacent rules
@@ -396,7 +394,9 @@ fn parse_content_value(value: &str) -> Vec<ContentItem> {
         // Function-like: element(...) or counter(...)
         if bytes[i].is_ascii_alphabetic() {
             let fn_start = i;
-            while i < bytes.len() && (bytes[i].is_ascii_alphanumeric() || bytes[i] == b'-' || bytes[i] == b'_') {
+            while i < bytes.len()
+                && (bytes[i].is_ascii_alphanumeric() || bytes[i] == b'-' || bytes[i] == b'_')
+            {
                 i += 1;
             }
             let fn_name = &value[fn_start..i];
@@ -477,14 +477,18 @@ mod tests {
         let mb = &ctx.margin_boxes[0];
         assert_eq!(mb.position, MarginBoxPosition::TopCenter);
         assert_eq!(mb.page_selector, None);
-        assert_eq!(mb.content, vec![ContentItem::Element("pageHeader".to_string())]);
+        assert_eq!(
+            mb.content,
+            vec![ContentItem::Element("pageHeader".to_string())]
+        );
         // @page block should be removed from cleaned_css
         assert!(!ctx.cleaned_css.contains("@page"));
     }
 
     #[test]
     fn test_extract_counter() {
-        let css = r#"@page { @bottom-center { content: "Page " counter(page) " of " counter(pages); } }"#;
+        let css =
+            r#"@page { @bottom-center { content: "Page " counter(page) " of " counter(pages); } }"#;
         let ctx = parse_gcpm(css);
         assert_eq!(ctx.margin_boxes.len(), 1);
         let mb = &ctx.margin_boxes[0];
@@ -526,8 +530,7 @@ mod tests {
 
     #[test]
     fn test_ignores_gcpm_in_comments() {
-        let css =
-            "/* @page { @top-center { content: element(x); } } */ body { color: red; }";
+        let css = "/* @page { @top-center { content: element(x); } } */ body { color: red; }";
         let ctx = parse_gcpm(css);
         assert!(ctx.margin_boxes.is_empty());
         assert!(ctx.cleaned_css.contains("body { color: red; }"));
