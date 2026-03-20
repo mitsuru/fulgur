@@ -1,0 +1,71 @@
+/* ── Running elements ─────────────────────────── */
+
+.pageHeader { position: running(pageHeader); }
+.pageFooter { position: running(pageFooter); }
+
+/* ── Page margin boxes (GCPM) ────────────────── */
+/* Header: title on left, page number on right (flex distributed) */
+
+@page {
+  @top-left {
+    content: element(pageHeader);
+  }
+  @top-right {
+    content: "Page " counter(page) " / " counter(pages);
+    font-size: 8px;
+    color: #999;
+    margin-top: 12px;
+  }
+  @bottom-center {
+    content: element(pageFooter);
+  }
+}
+
+/* No header on the first page */
+@page :first {
+  @top-left {
+    content: "";
+  }
+  @top-right {
+    content: "";
+  }
+}
+
+/* ── Typography ──────────────────────────────── */
+
+body {
+  font-family: sans-serif;
+  font-size: 11px;
+  line-height: 1.8;
+  color: #333;
+}
+
+.pageHeader {
+  font-size: 8px;
+  color: #999;
+  margin-top: 12px;
+}
+
+.pageFooter {
+  font-size: 8px;
+  color: #999;
+}
+
+h1 {
+  font-size: 22px;
+  margin-bottom: 20px;
+  color: #111;
+}
+
+h2 {
+  font-size: 15px;
+  margin-top: 24px;
+  margin-bottom: 10px;
+  color: #222;
+  border-bottom: 1px solid #ddd;
+  padding-bottom: 4px;
+}
+
+p {
+  margin-bottom: 8px;
+}

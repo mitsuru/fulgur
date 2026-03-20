@@ -179,12 +179,21 @@ pub fn render_to_pdf_with_gcpm(
             }
         }
 
-        // Collect resolved HTML for each effective box
+        // Collect resolved HTML for each effective box, wrapping in a div
+        // with the margin box's own declarations (font-size, color, margin, etc.)
         let mut resolved_htmls: HashMap<MarginBoxPosition, String> = HashMap::new();
         for (&pos, rule) in &effective_boxes {
-            let html =
+            let content_html =
                 resolve_content_to_html(&rule.content, &running_pairs, page_num, total_pages);
-            if !html.is_empty() {
+            if !content_html.is_empty() {
+                let html = if rule.declarations.is_empty() {
+                    content_html
+                } else {
+                    format!(
+                        "<div style=\"{}\">{}</div>",
+                        rule.declarations, content_html
+                    )
+                };
                 resolved_htmls.insert(pos, html);
             }
         }
