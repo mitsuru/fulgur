@@ -547,20 +547,27 @@ fn draw_border_line(
             let nx = -dy / len * half;
             let ny = dx / len * half;
             let half_w = width / 2.0;
+            // +normal points outward for top/left, inward for bottom/right.
+            // Swap direction for bottom/right so outer_color is always on the outside.
+            let (out_sign, in_sign) = if is_top_or_left {
+                (1.0, -1.0)
+            } else {
+                (-1.0, 1.0)
+            };
             stroke_line(
                 canvas,
-                x1 + nx,
-                y1 + ny,
-                x2 + nx,
-                y2 + ny,
+                x1 + nx * out_sign,
+                y1 + ny * out_sign,
+                x2 + nx * out_sign,
+                y2 + ny * out_sign,
                 colored_stroke(&outer_color, half_w, opacity),
             );
             stroke_line(
                 canvas,
-                x1 - nx,
-                y1 - ny,
-                x2 - nx,
-                y2 - ny,
+                x1 + nx * in_sign,
+                y1 + ny * in_sign,
+                x2 + nx * in_sign,
+                y2 + ny * in_sign,
                 colored_stroke(&inner_color, half_w, opacity),
             );
         }
