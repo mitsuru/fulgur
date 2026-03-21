@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 use crate::config::{Margin, PageSize};
 
@@ -21,7 +21,7 @@ pub struct MarginBoxRect {
 }
 
 /// The 16 CSS page margin box positions.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum MarginBoxPosition {
     TopLeftCorner,
     TopLeft,
@@ -284,7 +284,7 @@ fn distribute_widths(
 /// Corner rects are NOT included — compute those separately with `bounding_rect`.
 pub fn compute_edge_layout(
     edge: Edge,
-    defined: &HashMap<MarginBoxPosition, f32>,
+    defined: &BTreeMap<MarginBoxPosition, f32>,
     page_size: PageSize,
     margin: Margin,
 ) -> HashMap<MarginBoxPosition, MarginBoxRect> {
@@ -528,7 +528,7 @@ mod tests {
         let margin = Margin::uniform(72.0);
         let content_width = page.width - margin.left - margin.right;
 
-        let mut defined = HashMap::new();
+        let mut defined = BTreeMap::new();
         defined.insert(MarginBoxPosition::TopCenter, 100.0);
 
         let result = compute_edge_layout(Edge::Top, &defined, page, margin);
@@ -546,7 +546,7 @@ mod tests {
         let margin = Margin::uniform(72.0);
         let content_width = page.width - margin.left - margin.right;
 
-        let mut defined = HashMap::new();
+        let mut defined = BTreeMap::new();
         defined.insert(MarginBoxPosition::TopLeft, 100.0);
         defined.insert(MarginBoxPosition::TopRight, 200.0);
 
@@ -570,7 +570,7 @@ mod tests {
         let margin = Margin::uniform(72.0);
         let content_width = page.width - margin.left - margin.right;
 
-        let mut defined = HashMap::new();
+        let mut defined = BTreeMap::new();
         defined.insert(MarginBoxPosition::TopLeft, 50.0);
         defined.insert(MarginBoxPosition::TopCenter, 200.0);
         defined.insert(MarginBoxPosition::TopRight, 50.0);
@@ -598,7 +598,7 @@ mod tests {
         let margin = Margin::uniform(72.0);
         let content_width = page.width - margin.left - margin.right;
 
-        let mut defined = HashMap::new();
+        let mut defined = BTreeMap::new();
         defined.insert(MarginBoxPosition::TopCenter, 200.0);
         defined.insert(MarginBoxPosition::TopRight, 50.0);
 

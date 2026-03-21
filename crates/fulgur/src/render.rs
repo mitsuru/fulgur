@@ -6,7 +6,7 @@ use crate::gcpm::margin_box::{Edge, MarginBoxPosition, compute_edge_layout};
 use crate::gcpm::running::RunningElementStore;
 use crate::pageable::{Canvas, Pageable};
 use crate::paginate::paginate;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 
 /// Render a Pageable tree to PDF bytes.
@@ -152,8 +152,8 @@ pub fn render_to_pdf_with_gcpm(
         // Resolve margin boxes: for each position, pick the most specific
         // matching rule. Pseudo-class selectors (:first, :left, :right) override
         // the default @page rule for the same position.
-        let mut effective_boxes: HashMap<MarginBoxPosition, &crate::gcpm::MarginBoxRule> =
-            HashMap::new();
+        let mut effective_boxes: BTreeMap<MarginBoxPosition, &crate::gcpm::MarginBoxRule> =
+            BTreeMap::new();
         for margin_box in &gcpm.margin_boxes {
             let matches = match &margin_box.page_selector {
                 None => true,
@@ -181,7 +181,7 @@ pub fn render_to_pdf_with_gcpm(
 
         // Collect resolved HTML for each effective box, wrapping in a div
         // with the margin box's own declarations (font-size, color, margin, etc.)
-        let mut resolved_htmls: HashMap<MarginBoxPosition, String> = HashMap::new();
+        let mut resolved_htmls: BTreeMap<MarginBoxPosition, String> = BTreeMap::new();
         for (&pos, rule) in &effective_boxes {
             let content_html =
                 resolve_content_to_html(&rule.content, &running_pairs, page_num, total_pages);
@@ -242,8 +242,8 @@ pub fn render_to_pdf_with_gcpm(
         }
 
         // Stage 2: Group by edge and compute layout
-        let mut top_defined: HashMap<MarginBoxPosition, f32> = HashMap::new();
-        let mut bottom_defined: HashMap<MarginBoxPosition, f32> = HashMap::new();
+        let mut top_defined: BTreeMap<MarginBoxPosition, f32> = BTreeMap::new();
+        let mut bottom_defined: BTreeMap<MarginBoxPosition, f32> = BTreeMap::new();
 
         for (&pos, html) in &resolved_htmls {
             if let Some(layout) = layout_cache.get(html) {
