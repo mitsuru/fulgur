@@ -718,6 +718,184 @@ impl Pageable for ListItemPageable {
     }
 }
 
+// ─── TablePageable ─────────────────────────────────────
+
+/// A table with repeating header on page breaks.
+#[derive(Clone)]
+pub struct TablePageable {
+    /// Cells belonging to thead (repeated on each page)
+    pub header_cells: Vec<PositionedChild>,
+    /// Cells belonging to tbody (split across pages)
+    pub body_cells: Vec<PositionedChild>,
+    /// Height of the header row(s)
+    pub header_height: Pt,
+    /// Visual style (background, borders, border-radii)
+    pub style: BlockStyle,
+    /// Taffy-computed layout size
+    pub layout_size: Option<Size>,
+    /// Cached height from wrap()
+    pub cached_height: Pt,
+}
+
+impl Pageable for TablePageable {
+    fn wrap(&mut self, avail_width: Pt, _avail_height: Pt) -> Size {
+        if let Some(ls) = self.layout_size {
+            self.cached_height = ls.height;
+            return ls;
+        }
+        let max_h = self
+            .header_cells
+            .iter()
+            .chain(self.body_cells.iter())
+            .fold(0.0f32, |acc, pc| acc.max(pc.y + pc.child.height()));
+        self.cached_height = max_h;
+        Size {
+            width: avail_width,
+            height: max_h,
+        }
+    }
+
+    fn split(
+        &self,
+        _avail_width: Pt,
+        avail_height: Pt,
+    ) -> Option<(Box<dyn Pageable>, Box<dyn Pageable>)> {
+        // Find the first body cell that overflows the available height
+        let split_index = self
+            .body_cells
+            .iter()
+            .position(|pc| pc.y + pc.child.height() > avail_height);
+
+        let split_index = match split_index {
+            Some(0) | None => return None,
+            Some(i) => i,
+        };
+
+        let split_y = self.body_cells[split_index].y;
+
+        let first_header: Vec<PositionedChild> = self
+            .header_cells
+            .iter()
+            .map(|pc| PositionedChild {
+                child: pc.child.clone_box(),
+                x: pc.x,
+                y: pc.y,
+            })
+            .collect();
+        let first_body: Vec<PositionedChild> = self.body_cells[..split_index]
+            .iter()
+            .map(|pc| PositionedChild {
+                child: pc.child.clone_box(),
+                x: pc.x,
+                y: pc.y,
+            })
+            .collect();
+
+        let second_header: Vec<PositionedChild> = self
+            .header_cells
+            .iter()
+            .map(|pc| PositionedChild {
+                child: pc.child.clone_box(),
+                x: pc.x,
+                y: pc.y,
+            })
+            .collect();
+        let second_body: Vec<PositionedChild> = self.body_cells[split_index..]
+            .iter()
+            .map(|pc| PositionedChild {
+                child: pc.child.clone_box(),
+                x: pc.x,
+                y: self.header_height + (pc.y - split_y),
+            })
+            .collect();
+
+        Some((
+            Box::new(TablePageable {
+                header_cells: first_header,
+                body_cells: first_body,
+                header_height: self.header_height,
+                style: self.style.clone(),
+                layout_size: None,
+                cached_height: 0.0,
+            }),
+            Box::new(TablePageable {
+                header_cells: second_header,
+                body_cells: second_body,
+                header_height: self.header_height,
+                style: self.style.clone(),
+                layout_size: None,
+                cached_height: 0.0,
+            }),
+        ))
+    }
+
+    fn draw(&self, canvas: &mut Canvas<'_, '_>, x: Pt, y: Pt, avail_width: Pt, avail_height: Pt) {
+        let total_width = self.layout_size.map(|s| s.width).unwrap_or(avail_width);
+        let total_height = self.layout_size.map(|s| s.height).unwrap_or(avail_height);
+
+        // Draw table background
+        if let Some(bg) = &self.style.background_color {
+            let has_radius = self
+                .style
+                .border_radii
+                .iter()
+                .any(|r| r[0] > 0.0 || r[1] > 0.0);
+            let path = if has_radius {
+                build_rounded_rect_path(x, y, total_width, total_height, &self.style.border_radii)
+            } else if let Some(rect) =
+                krilla::geom::Rect::from_xywh(x, y, total_width, total_height)
+            {
+                let mut pb = krilla::geom::PathBuilder::new();
+                pb.push_rect(rect);
+                pb.finish()
+            } else {
+                None
+            };
+
+            if let Some(path) = path {
+                canvas.surface.set_fill(Some(krilla::paint::Fill {
+                    paint: krilla::color::rgb::Color::new(bg[0], bg[1], bg[2]).into(),
+                    opacity: krilla::num::NormalizedF32::new(bg[3] as f32 / 255.0)
+                        .unwrap_or(krilla::num::NormalizedF32::ONE),
+                    rule: Default::default(),
+                }));
+                canvas.surface.set_stroke(None);
+                canvas.surface.draw_path(&path);
+            }
+        }
+
+        // Draw header cells
+        for pc in &self.header_cells {
+            pc.child
+                .draw(canvas, x + pc.x, y + pc.y, avail_width, pc.child.height());
+        }
+
+        // Draw body cells
+        for pc in &self.body_cells {
+            pc.child
+                .draw(canvas, x + pc.x, y + pc.y, avail_width, pc.child.height());
+        }
+    }
+
+    fn pagination(&self) -> Pagination {
+        Pagination::default()
+    }
+
+    fn clone_box(&self) -> Box<dyn Pageable> {
+        Box::new(self.clone())
+    }
+
+    fn height(&self) -> Pt {
+        self.layout_size
+            .map(|s| s.height)
+            .unwrap_or(self.cached_height)
+    }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
