@@ -75,7 +75,7 @@ pub enum Edge { Top, Bottom, Left, Right }
 
 pub fn compute_edge_layout(
     edge: Edge,
-    defined: &HashMap<MarginBoxPosition, f32>,  // position → max-content width
+    defined: &BTreeMap<MarginBoxPosition, f32>,  // position → max-content width
     page_size: PageSize,
     margin: Margin,
 ) -> HashMap<MarginBoxPosition, MarginBoxRect>

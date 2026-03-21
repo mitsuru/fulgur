@@ -13,9 +13,10 @@ Fulgur is an HTML/CSS to PDF conversion library and CLI tool written in Rust. It
 cargo build
 cargo build --release
 
-# Test (unit tests are in paginate.rs)
+# Test
 cargo test --lib
 cargo test -p fulgur
+cargo test -p fulgur --test gcpm_integration -- --test-threads=1
 
 # Lint
 cargo clippy

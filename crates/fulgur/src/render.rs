@@ -64,10 +64,14 @@ pub fn render_to_pdf(root: Box<dyn Pageable>, config: &Config) -> Result<Vec<u8>
     Ok(pdf_bytes)
 }
 
-/// A cached margin box layout: the pageable tree and its max-content width.
-struct MarginBoxLayout {
-    pageable: Box<dyn Pageable>,
-    max_content_width: f32,
+/// Cached max-content width and render Pageable for margin boxes.
+/// Measure cache: html → max-content width (measured once at content_width).
+/// Render cache: (html, final_width as bits) → Pageable (laid out at confirmed width).
+type MeasureCache = HashMap<String, f32>;
+type RenderCache = HashMap<(String, u32), Box<dyn Pageable>>;
+
+fn width_key(w: f32) -> u32 {
+    w.to_bits()
 }
 
 /// Get the width of the first non-zero-width child of `<body>` in a Blitz document.
@@ -132,8 +136,9 @@ pub fn render_to_pdf_with_gcpm(
     // injected for running elements (they need to be visible in margin boxes).
     let margin_css = strip_display_none(&gcpm.cleaned_css);
 
-    // Layout cache: resolved_html -> MarginBoxLayout
-    let mut layout_cache: HashMap<String, MarginBoxLayout> = HashMap::new();
+    // Caches: measure (html → max-content width), render (html+width → Pageable)
+    let mut measure_cache: MeasureCache = HashMap::new();
+    let mut render_cache: RenderCache = HashMap::new();
 
     let mut document = krilla::Document::new();
 
@@ -199,13 +204,10 @@ pub fn render_to_pdf_with_gcpm(
             }
         }
 
-        // Stage 1: Layout all at content_width, populate cache.
-        // We do two Blitz passes per unique HTML:
-        //   1. Measure: wrap content in inline-block to get shrink-to-fit (max-content) width
-        //   2. Render: normal block layout for drawing
+        // Stage 1: Measure max-content width for each unique HTML.
+        // Uses inline-block wrapper so Blitz computes shrink-to-fit width.
         for html in resolved_htmls.values() {
-            if !layout_cache.contains_key(html) {
-                // Measure pass: inline-block wrapper for max-content width
+            if !measure_cache.contains_key(html) {
                 let measure_html = format!(
                     "<html><head><style>{}</style></head><body style=\"margin:0;padding:0;\"><div style=\"display:inline-block\">{}</div></body></html>",
                     margin_css, html
@@ -217,27 +219,7 @@ pub fn render_to_pdf_with_gcpm(
                     font_data,
                 );
                 let max_content_width = get_body_child_width(&measure_doc);
-
-                // Render pass: normal block layout for drawing
-                let margin_html = format!(
-                    "<html><head><style>{}</style></head><body style=\"margin:0;padding:0;\">{}</body></html>",
-                    margin_css, html
-                );
-                let margin_doc = crate::blitz_adapter::parse_and_layout(
-                    &margin_html,
-                    content_width,
-                    page_size.height,
-                    font_data,
-                );
-                let mut dummy_store = RunningElementStore::new();
-                let pageable = crate::convert::dom_to_pageable(&margin_doc, None, &mut dummy_store);
-                layout_cache.insert(
-                    html.clone(),
-                    MarginBoxLayout {
-                        pageable,
-                        max_content_width,
-                    },
-                );
+                measure_cache.insert(html.clone(), max_content_width);
             }
         }
 
@@ -246,17 +228,17 @@ pub fn render_to_pdf_with_gcpm(
         let mut bottom_defined: BTreeMap<MarginBoxPosition, f32> = BTreeMap::new();
 
         for (&pos, html) in &resolved_htmls {
-            if let Some(layout) = layout_cache.get(html) {
+            if let Some(&mcw) = measure_cache.get(html) {
                 match pos {
                     MarginBoxPosition::TopLeft
                     | MarginBoxPosition::TopCenter
                     | MarginBoxPosition::TopRight => {
-                        top_defined.insert(pos, layout.max_content_width);
+                        top_defined.insert(pos, mcw);
                     }
                     MarginBoxPosition::BottomLeft
                     | MarginBoxPosition::BottomCenter
                     | MarginBoxPosition::BottomRight => {
-                        bottom_defined.insert(pos, layout.max_content_width);
+                        bottom_defined.insert(pos, mcw);
                     }
                     _ => {} // corners and left/right edges handled separately
                 }
@@ -267,21 +249,36 @@ pub fn render_to_pdf_with_gcpm(
         let bottom_rects =
             compute_edge_layout(Edge::Bottom, &bottom_defined, page_size, config.margin);
 
-        // Stage 3: Draw
+        // Stage 3: Render at confirmed width and draw.
+        // Pageable is created (or fetched from cache) at the final rect width.
         for (&pos, html) in &resolved_htmls {
             let rect = if let Some(r) = top_rects.get(&pos) {
                 *r
             } else if let Some(r) = bottom_rects.get(&pos) {
                 *r
             } else {
-                // Corner or left/right edge: use bounding_rect
                 pos.bounding_rect(page_size, config.margin)
             };
 
-            if let Some(layout) = layout_cache.get(html) {
-                layout
-                    .pageable
-                    .draw(&mut canvas, rect.x, rect.y, rect.width, rect.height);
+            let cache_key = (html.clone(), width_key(rect.width));
+            if !render_cache.contains_key(&cache_key) {
+                let render_html = format!(
+                    "<html><head><style>{}</style></head><body style=\"margin:0;padding:0;\">{}</body></html>",
+                    margin_css, html
+                );
+                let render_doc = crate::blitz_adapter::parse_and_layout(
+                    &render_html,
+                    rect.width,
+                    rect.height,
+                    font_data,
+                );
+                let mut dummy_store = RunningElementStore::new();
+                let pageable = crate::convert::dom_to_pageable(&render_doc, None, &mut dummy_store);
+                render_cache.insert(cache_key.clone(), pageable);
+            }
+
+            if let Some(pageable) = render_cache.get(&cache_key) {
+                pageable.draw(&mut canvas, rect.x, rect.y, rect.width, rect.height);
             }
         }
 
