@@ -106,6 +106,28 @@ pub struct BlockStyle {
     pub border_radii: [[f32; 2]; 4],
 }
 
+impl BlockStyle {
+    /// Whether any border radius is non-zero.
+    pub fn has_radius(&self) -> bool {
+        self.border_radii.iter().any(|r| r[0] > 0.0 || r[1] > 0.0)
+    }
+
+    /// Whether this style has any visual properties (background, border, or padding).
+    pub fn has_visual_style(&self) -> bool {
+        self.background_color.is_some()
+            || self.border_widths.iter().any(|&w| w > 0.0)
+            || self.padding.iter().any(|&p| p > 0.0)
+    }
+
+    /// Returns (left_inset, top_inset) for content positioning inside border+padding.
+    pub fn content_inset(&self) -> (f32, f32) {
+        (
+            self.border_widths[3] + self.padding[3],
+            self.border_widths[0] + self.padding[0],
+        )
+    }
+}
+
 // ─── PositionedChild ─────────────────────────────────────
 
 /// A child element with its Taffy-computed position.
@@ -115,6 +137,8 @@ pub struct PositionedChild {
     pub x: Pt,
     pub y: Pt,
 }
+
+type SplitPair = (Box<dyn Pageable>, Box<dyn Pageable>);
 
 // ─── BlockPageable ───────────────────────────────────────
 
@@ -271,6 +295,54 @@ fn build_rounded_rect_path(
     pb.finish()
 }
 
+/// Clone a slice of PositionedChild, optionally shifting y coordinates.
+/// When `y_offset` is 0.0, children are cloned as-is.
+/// A negative `y_offset` shifts children upward (subtracts from y).
+fn clone_children(children: &[PositionedChild], y_offset: f32) -> Vec<PositionedChild> {
+    children
+        .iter()
+        .map(|pc| PositionedChild {
+            child: pc.child.clone_box(),
+            x: pc.x,
+            y: pc.y - y_offset,
+        })
+        .collect()
+}
+
+/// Draw the background fill for a block or table element.
+fn draw_block_background(
+    canvas: &mut Canvas<'_, '_>,
+    style: &BlockStyle,
+    x: f32,
+    y: f32,
+    w: f32,
+    h: f32,
+) {
+    let Some(bg) = &style.background_color else {
+        return;
+    };
+    let path = if style.has_radius() {
+        build_rounded_rect_path(x, y, w, h, &style.border_radii)
+    } else if let Some(rect) = krilla::geom::Rect::from_xywh(x, y, w, h) {
+        let mut pb = krilla::geom::PathBuilder::new();
+        pb.push_rect(rect);
+        pb.finish()
+    } else {
+        None
+    };
+
+    if let Some(path) = path {
+        canvas.surface.set_fill(Some(krilla::paint::Fill {
+            paint: krilla::color::rgb::Color::new(bg[0], bg[1], bg[2]).into(),
+            opacity: krilla::num::NormalizedF32::new(bg[3] as f32 / 255.0)
+                .unwrap_or(krilla::num::NormalizedF32::ONE),
+            rule: Default::default(),
+        }));
+        canvas.surface.set_stroke(None);
+        canvas.surface.draw_path(&path);
+    }
+}
+
 impl Pageable for BlockPageable {
     fn wrap(&mut self, avail_width: Pt, _avail_height: Pt) -> Size {
         // Ensure children have been wrapped (split() creates unwrapped children)
@@ -312,9 +384,9 @@ impl Pageable for BlockPageable {
             return None;
         }
 
-        // Split based on children's y positions
         let mut split_index = self.children.len();
-        let mut overflow_child_index: Option<usize> = None;
+
+        let mut split_result: Option<(usize, SplitPair)> = None;
 
         for (i, pc) in self.children.iter().enumerate() {
             if pc.child.pagination().break_before == BreakBefore::Page && i > 0 && pc.y > 0.0 {
@@ -323,12 +395,14 @@ impl Pageable for BlockPageable {
             }
 
             if pc.y + pc.child.height() > avail_height {
-                // Try to split this child recursively first
                 let child_avail = avail_height - pc.y;
-                if child_avail > 0.0 && pc.child.split(0.0, child_avail).is_some() {
-                    overflow_child_index = Some(i);
+                if let Some(parts) = child_avail
+                    .is_sign_positive()
+                    .then(|| pc.child.split(0.0, child_avail))
+                    .flatten()
+                {
+                    split_result = Some((i, parts));
                 } else if i == 0 {
-                    // First child can't be split — nothing fits on this page
                     return None;
                 } else {
                     split_index = i;
@@ -342,57 +416,34 @@ impl Pageable for BlockPageable {
             }
         }
 
-        // Handle the case where a child overflows: split it recursively
-        if let Some(idx) = overflow_child_index {
+        if let Some((idx, (first_part, second_part))) = split_result {
             let pc = &self.children[idx];
-            let child_avail = avail_height - pc.y;
-            if child_avail > 0.0
-                && let Some((first_part, second_part)) = pc.child.split(0.0, child_avail)
-            {
-                // First page: all children before idx + first part of split child
-                let mut first: Vec<PositionedChild> = self.children[..idx]
-                    .iter()
-                    .map(|c| PositionedChild {
-                        child: c.child.clone_box(),
-                        x: c.x,
-                        y: c.y,
-                    })
-                    .collect();
-                first.push(PositionedChild {
-                    child: first_part,
-                    x: pc.x,
-                    y: pc.y,
-                });
+            let mut first = clone_children(&self.children[..idx], 0.0);
+            first.push(PositionedChild {
+                child: first_part,
+                x: pc.x,
+                y: pc.y,
+            });
 
-                // Second page: second part of split child + remaining children
-                let mut second = vec![PositionedChild {
-                    child: second_part,
-                    x: pc.x,
-                    y: 0.0,
-                }];
-                let split_y = pc.y;
-                for c in &self.children[idx + 1..] {
-                    second.push(PositionedChild {
-                        child: c.child.clone_box(),
-                        x: c.x,
-                        y: c.y - split_y,
-                    });
-                }
+            let mut second = vec![PositionedChild {
+                child: second_part,
+                x: pc.x,
+                y: 0.0,
+            }];
+            second.extend(clone_children(&self.children[idx + 1..], pc.y));
 
-                return Some((
-                    Box::new(
-                        BlockPageable::with_positioned_children(first)
-                            .with_pagination(self.pagination)
-                            .with_style(self.style.clone()),
-                    ),
-                    Box::new(
-                        BlockPageable::with_positioned_children(second)
-                            .with_pagination(self.pagination)
-                            .with_style(self.style.clone()),
-                    ),
-                ));
-            }
-            return None;
+            return Some((
+                Box::new(
+                    BlockPageable::with_positioned_children(first)
+                        .with_pagination(self.pagination)
+                        .with_style(self.style.clone()),
+                ),
+                Box::new(
+                    BlockPageable::with_positioned_children(second)
+                        .with_pagination(self.pagination)
+                        .with_style(self.style.clone()),
+                ),
+            ));
         }
 
         if split_index == 0 || split_index >= self.children.len() {
@@ -401,22 +452,8 @@ impl Pageable for BlockPageable {
 
         let split_y = self.children[split_index].y;
 
-        let first: Vec<PositionedChild> = self.children[..split_index]
-            .iter()
-            .map(|pc| PositionedChild {
-                child: pc.child.clone_box(),
-                x: pc.x,
-                y: pc.y,
-            })
-            .collect();
-        let second: Vec<PositionedChild> = self.children[split_index..]
-            .iter()
-            .map(|pc| PositionedChild {
-                child: pc.child.clone_box(),
-                x: pc.x,
-                y: pc.y - split_y,
-            })
-            .collect();
+        let first = clone_children(&self.children[..split_index], 0.0);
+        let second = clone_children(&self.children[split_index..], split_y);
 
         Some((
             Box::new(
@@ -445,70 +482,20 @@ impl Pageable for BlockPageable {
             .map(|s| s.height)
             .unwrap_or(avail_height);
 
-        // Draw background
-        if let Some(bg) = &self.style.background_color {
-            let has_radius = self
-                .style
-                .border_radii
-                .iter()
-                .any(|r| r[0] > 0.0 || r[1] > 0.0);
-            let path = if has_radius {
-                build_rounded_rect_path(x, y, total_width, total_height, &self.style.border_radii)
-            } else if let Some(rect) =
-                krilla::geom::Rect::from_xywh(x, y, total_width, total_height)
-            {
-                let mut pb = krilla::geom::PathBuilder::new();
-                pb.push_rect(rect);
-                pb.finish()
-            } else {
-                None
-            };
-
-            if let Some(path) = path {
-                canvas.surface.set_fill(Some(krilla::paint::Fill {
-                    paint: krilla::color::rgb::Color::new(bg[0], bg[1], bg[2]).into(),
-                    opacity: krilla::num::NormalizedF32::new(bg[3] as f32 / 255.0)
-                        .unwrap_or(krilla::num::NormalizedF32::ONE),
-                    rule: Default::default(),
-                }));
-                canvas.surface.set_stroke(None);
-                canvas.surface.draw_path(&path);
-            }
-        }
+        draw_block_background(canvas, &self.style, x, y, total_width, total_height);
 
         // Draw borders
         let [bt, br, bb, bl] = self.style.border_widths;
         if bt > 0.0 || br > 0.0 || bb > 0.0 || bl > 0.0 {
             let bc = &self.style.border_color;
-            let has_radius = self
-                .style
-                .border_radii
-                .iter()
-                .any(|r| r[0] > 0.0 || r[1] > 0.0);
 
             let uniform_width = bt == br && br == bb && bb == bl;
-            if has_radius && uniform_width {
-                // For rounded borders with uniform width, use a single stroke path
-                let avg_width = bt;
-                let inset = avg_width / 2.0;
-                let inset_radii: [[f32; 2]; 4] = [
-                    [
-                        (self.style.border_radii[0][0] - inset).max(0.0),
-                        (self.style.border_radii[0][1] - inset).max(0.0),
-                    ],
-                    [
-                        (self.style.border_radii[1][0] - inset).max(0.0),
-                        (self.style.border_radii[1][1] - inset).max(0.0),
-                    ],
-                    [
-                        (self.style.border_radii[2][0] - inset).max(0.0),
-                        (self.style.border_radii[2][1] - inset).max(0.0),
-                    ],
-                    [
-                        (self.style.border_radii[3][0] - inset).max(0.0),
-                        (self.style.border_radii[3][1] - inset).max(0.0),
-                    ],
-                ];
+            if self.style.has_radius() && uniform_width {
+                let inset = bt / 2.0;
+                let inset_radii = self
+                    .style
+                    .border_radii
+                    .map(|[rx, ry]| [(rx - inset).max(0.0), (ry - inset).max(0.0)]);
                 if let Some(path) = build_rounded_rect_path(
                     x + inset,
                     y + inset,
@@ -519,7 +506,7 @@ impl Pageable for BlockPageable {
                     canvas.surface.set_fill(None);
                     canvas.surface.set_stroke(Some(krilla::paint::Stroke {
                         paint: krilla::color::rgb::Color::new(bc[0], bc[1], bc[2]).into(),
-                        width: avg_width,
+                        width: bt,
                         opacity: krilla::num::NormalizedF32::new(bc[3] as f32 / 255.0)
                             .unwrap_or(krilla::num::NormalizedF32::ONE),
                         ..Default::default()
@@ -590,7 +577,6 @@ impl Pageable for BlockPageable {
             }
         }
 
-        // Draw children at their Taffy-computed positions
         for pc in &self.children {
             pc.child
                 .draw(canvas, x + pc.x, y + pc.y, avail_width, pc.child.height());
@@ -803,33 +789,10 @@ impl Pageable for TablePageable {
 
         let split_y = self.body_cells[split_index].y;
 
-        let first_header: Vec<PositionedChild> = self
-            .header_cells
-            .iter()
-            .map(|pc| PositionedChild {
-                child: pc.child.clone_box(),
-                x: pc.x,
-                y: pc.y,
-            })
-            .collect();
-        let first_body: Vec<PositionedChild> = self.body_cells[..split_index]
-            .iter()
-            .map(|pc| PositionedChild {
-                child: pc.child.clone_box(),
-                x: pc.x,
-                y: pc.y,
-            })
-            .collect();
+        let first_header = clone_children(&self.header_cells, 0.0);
+        let first_body = clone_children(&self.body_cells[..split_index], 0.0);
 
-        let second_header: Vec<PositionedChild> = self
-            .header_cells
-            .iter()
-            .map(|pc| PositionedChild {
-                child: pc.child.clone_box(),
-                x: pc.x,
-                y: pc.y,
-            })
-            .collect();
+        let second_header = clone_children(&self.header_cells, 0.0);
         let second_body: Vec<PositionedChild> = self.body_cells[split_index..]
             .iter()
             .map(|pc| PositionedChild {
@@ -863,45 +826,9 @@ impl Pageable for TablePageable {
         let total_width = self.layout_size.map(|s| s.width).unwrap_or(avail_width);
         let total_height = self.layout_size.map(|s| s.height).unwrap_or(avail_height);
 
-        // Draw table background
-        if let Some(bg) = &self.style.background_color {
-            let has_radius = self
-                .style
-                .border_radii
-                .iter()
-                .any(|r| r[0] > 0.0 || r[1] > 0.0);
-            let path = if has_radius {
-                build_rounded_rect_path(x, y, total_width, total_height, &self.style.border_radii)
-            } else if let Some(rect) =
-                krilla::geom::Rect::from_xywh(x, y, total_width, total_height)
-            {
-                let mut pb = krilla::geom::PathBuilder::new();
-                pb.push_rect(rect);
-                pb.finish()
-            } else {
-                None
-            };
+        draw_block_background(canvas, &self.style, x, y, total_width, total_height);
 
-            if let Some(path) = path {
-                canvas.surface.set_fill(Some(krilla::paint::Fill {
-                    paint: krilla::color::rgb::Color::new(bg[0], bg[1], bg[2]).into(),
-                    opacity: krilla::num::NormalizedF32::new(bg[3] as f32 / 255.0)
-                        .unwrap_or(krilla::num::NormalizedF32::ONE),
-                    rule: Default::default(),
-                }));
-                canvas.surface.set_stroke(None);
-                canvas.surface.draw_path(&path);
-            }
-        }
-
-        // Draw header cells
-        for pc in &self.header_cells {
-            pc.child
-                .draw(canvas, x + pc.x, y + pc.y, avail_width, pc.child.height());
-        }
-
-        // Draw body cells
-        for pc in &self.body_cells {
+        for pc in self.header_cells.iter().chain(self.body_cells.iter()) {
             pc.child
                 .draw(canvas, x + pc.x, y + pc.y, avail_width, pc.child.height());
         }

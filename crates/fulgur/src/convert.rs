@@ -77,12 +77,8 @@ fn convert_node(
         let body: Box<dyn Pageable> = if node.flags.is_inline_root()
             && let Some(paragraph) = extract_paragraph(doc, node)
         {
-            let has_style = style.background_color.is_some()
-                || style.border_widths.iter().any(|&w| w > 0.0)
-                || style.padding.iter().any(|&p| p > 0.0);
-            if has_style {
-                let child_x = style.border_widths[3] + style.padding[3];
-                let child_y = style.border_widths[0] + style.padding[0];
+            if style.has_visual_style() {
+                let (child_x, child_y) = style.content_inset();
                 let child = PositionedChild {
                     child: Box::new(paragraph),
                     x: child_x,
@@ -130,14 +126,9 @@ fn convert_node(
     if node.flags.is_inline_root()
         && let Some(paragraph) = extract_paragraph(doc, node)
     {
-        // Wrap in a BlockPageable to apply background/border/padding styles
         let style = extract_block_style(node);
-        let has_style = style.background_color.is_some()
-            || style.border_widths.iter().any(|&w| w > 0.0)
-            || style.padding.iter().any(|&p| p > 0.0);
-        if has_style {
-            let child_x = style.border_widths[3] + style.padding[3]; // left border + left padding
-            let child_y = style.border_widths[0] + style.padding[0]; // top border + top padding
+        if style.has_visual_style() {
+            let (child_x, child_y) = style.content_inset();
             let child = PositionedChild {
                 child: Box::new(paragraph),
                 x: child_x,
@@ -155,12 +146,8 @@ fn convert_node(
     let children: &[usize] = &node.children;
 
     if children.is_empty() {
-        // Leaf node with style (background/border/radius) — use BlockPageable to draw visuals
         let style = extract_block_style(node);
-        let has_style = style.background_color.is_some()
-            || style.border_widths.iter().any(|&w| w > 0.0)
-            || style.border_radii.iter().any(|r| r[0] > 0.0 || r[1] > 0.0);
-        if has_style {
+        if style.has_visual_style() || style.has_radius() {
             let mut block = BlockPageable::with_positioned_children(vec![]).with_style(style);
             block.wrap(width, height);
             block.layout_size = Some(Size { width, height });
@@ -322,7 +309,7 @@ fn convert_table(
         .iter()
         .fold(0.0f32, |max_h, pc| max_h.max(pc.y + pc.child.height()));
 
-    let mut table = TablePageable {
+    let table = TablePageable {
         header_cells,
         body_cells,
         header_height,
@@ -330,7 +317,6 @@ fn convert_table(
         layout_size: Some(Size { width, height }),
         cached_height: height,
     };
-    table.wrap(width, height);
     Box::new(table)
 }
 
