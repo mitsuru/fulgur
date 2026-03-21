@@ -184,14 +184,26 @@ fn build_rounded_rect_path(
     // Bézier approximation constant for quarter circle
     const KAPPA: f32 = 0.552_284_8;
 
-    // Clamp radii so they don't exceed half the dimension
-    let max_rx = w / 2.0;
-    let max_ry = h / 2.0;
+    // CSS spec: if adjacent radii sum exceeds an edge, scale all radii proportionally.
+    // Compute the minimum scale factor across all four edges.
+    let scale = |a: f32, b: f32, edge: f32| -> f32 {
+        let sum = a + b;
+        if sum > edge && sum > 0.0 {
+            edge / sum
+        } else {
+            1.0
+        }
+    };
+    let f = scale(radii[0][0], radii[1][0], w) // top edge (rx)
+        .min(scale(radii[1][1], radii[2][1], h)) // right edge (ry)
+        .min(scale(radii[2][0], radii[3][0], w)) // bottom edge (rx)
+        .min(scale(radii[3][1], radii[0][1], h)); // left edge (ry)
+
     let r: [[f32; 2]; 4] = [
-        [radii[0][0].min(max_rx), radii[0][1].min(max_ry)],
-        [radii[1][0].min(max_rx), radii[1][1].min(max_ry)],
-        [radii[2][0].min(max_rx), radii[2][1].min(max_ry)],
-        [radii[3][0].min(max_rx), radii[3][1].min(max_ry)],
+        [radii[0][0] * f, radii[0][1] * f],
+        [radii[1][0] * f, radii[1][1] * f],
+        [radii[2][0] * f, radii[2][1] * f],
+        [radii[3][0] * f, radii[3][1] * f],
     ];
 
     let mut pb = krilla::geom::PathBuilder::new();

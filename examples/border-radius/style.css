@@ -23,8 +23,8 @@ h2 { font-size: 14px; margin-top: 20px; margin-bottom: 8px; color: #222; border-
 .corner-tl { border-top-left-radius: 15px; }
 .corner-diag { border-top-left-radius: 15px; border-bottom-right-radius: 15px; }
 
-.bg-blue { background-color: #3498db; color: white; border: none; }
-.bg-green { background-color: #27ae60; color: white; border: none; }
+.bg-blue { background-color: #1a6faa; color: white; border: none; }
+.bg-green { background-color: #1e8449; color: white; border: none; }
 
 .elliptical { border-radius: 30px / 15px; }
 
