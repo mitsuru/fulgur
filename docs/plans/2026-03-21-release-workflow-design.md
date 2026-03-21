@@ -27,12 +27,14 @@
 **ジョブ:**
 
 #### publish
+
 1. ブランチ名からバージョン抽出 (env 経由でインジェクション防止)
 2. タグ `v$VERSION` 作成 + プッシュ
 3. `cargo publish -p fulgur`
 4. `cargo publish -p fulgur-cli` (リトライ付き、最大8回バックオフ)
 
 #### build-binaries (publish 完了後)
+
 5ターゲット matrix 並列ビルド:
 
 | target | os | archive |
@@ -46,6 +48,7 @@
 アーカイブ名: `fulgur-v$VERSION-$TARGET.{tar.gz,zip}`
 
 #### release (build-binaries 完了後)
+
 - Draft Release にバイナリアップロード
 - Draft → Published に変更
 

@@ -33,17 +33,19 @@ jobs:
 
       - name: Determine version
         id: version
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
         run: |
           CURRENT=$(grep '^version = ' crates/fulgur/Cargo.toml | head -1 | sed 's/version = "\(.*\)"/\1/')
           echo "current=$CURRENT"
 
-          if [ -z "${{ inputs.version }}" ]; then
+          if [ -z "$INPUT_VERSION" ]; then
             # Auto-bump patch: 0.1.0 → 0.1.1
             IFS='.' read -r MAJOR MINOR PATCH <<< "$CURRENT"
             PATCH=$((PATCH + 1))
             VERSION="$MAJOR.$MINOR.$PATCH"
           else
-            VERSION="${{ inputs.version }}"
+            VERSION="$INPUT_VERSION"
             # Strip leading 'v' if present
             VERSION="${VERSION#v}"
             # Validate semver format
@@ -57,19 +59,24 @@ jobs:
           echo "Releasing: $VERSION (was $CURRENT)"
 
       - name: Update version in Cargo.toml
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
         run: |
-          VERSION="${{ steps.version.outputs.version }}"
           sed -i "s/^version = \".*\"/version = \"$VERSION\"/" crates/fulgur/Cargo.toml
           sed -i "s/^version = \".*\"/version = \"$VERSION\"/" crates/fulgur-cli/Cargo.toml
           sed -i "s/fulgur = { version = \"[^\"]*\", path/fulgur = { version = \"$VERSION\", path/" crates/fulgur-cli/Cargo.toml
           cargo check --workspace
 
       - name: Generate changelog
-        run: git-cliff --tag "v${{ steps.version.outputs.version }}" -o CHANGELOG.md
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: git-cliff --tag "v$VERSION" -o CHANGELOG.md
 
       - name: Create release branch and PR
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.version.outputs.version }}
         run: |
-          VERSION="${{ steps.version.outputs.version }}"
           BRANCH="release/v$VERSION"
 
           git config user.name "github-actions[bot]"
@@ -99,17 +106,17 @@ jobs:
           )" \
             --base main \
             --head "$BRANCH"
-        env:
-          GH_TOKEN: ${{ github.token }}
 
       - name: Generate release notes for draft
-        run: git-cliff --tag "v${{ steps.version.outputs.version }}" --latest --strip header -o RELEASE_NOTES.md
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: git-cliff --tag "v$VERSION" --latest --strip header -o RELEASE_NOTES.md
 
       - name: Create draft GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.version.outputs.version }}
         run: |
-          VERSION="${{ steps.version.outputs.version }}"
           # Delete existing draft release if re-running
           gh release delete "v$VERSION" --yes 2>/dev/null || true
           gh release create "v$VERSION" \
