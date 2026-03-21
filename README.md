@@ -57,7 +57,7 @@ use fulgur::engine::Engine;
 use fulgur::config::{PageSize, Margin};
 
 // Convert with default settings
-let engine = fulgur::engine::Engine::builder().build();
+let engine = Engine::builder().build();
 let pdf = engine.render_html("<h1>Hello</h1>")?;
 
 // Custom configuration
