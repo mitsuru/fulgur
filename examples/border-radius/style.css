@@ -11,7 +11,9 @@ h2 { font-size: 14px; margin-top: 20px; margin-bottom: 8px; color: #222; border-
 .box {
   border: 2px solid #333;
   padding: 12px;
-  margin-bottom: 8px;
+  margin-bottom: 12px;
+  margin-left: 8px;
+  margin-right: 8px;
 }
 
 .rounded-sm { border-radius: 5px; }
@@ -31,7 +33,8 @@ h2 { font-size: 14px; margin-top: 20px; margin-bottom: 8px; color: #222; border-
   height: 60px;
   border-radius: 50%;
   background-color: #e74c3c;
-  margin-bottom: 8px;
+  margin-bottom: 12px;
+  margin-left: 8px;
 }
 
 .pill {
@@ -39,5 +42,7 @@ h2 { font-size: 14px; margin-top: 20px; margin-bottom: 8px; color: #222; border-
   background-color: #9b59b6;
   color: white;
   padding: 8px;
+  margin-left: 8px;
+  margin-right: 8px;
   border: none;
 }
