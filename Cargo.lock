@@ -666,6 +666,8 @@ dependencies = [
  "krilla",
  "libc",
  "parley",
+ "skrifa",
+ "stylo",
  "thiserror",
 ]
 
