@@ -1,0 +1,154 @@
+name: Release
+
+on:
+  pull_request:
+    types: [closed]
+    branches: [main]
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  publish:
+    name: Publish to crates.io
+    if: github.event.pull_request.merged == true && startsWith(github.event.pull_request.head.ref, 'release/')
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Extract version from branch name
+        id: version
+        env:
+          BRANCH: ${{ github.event.pull_request.head.ref }}
+        run: |
+          VERSION="${BRANCH#release/v}"
+          # Validate semver format
+          if ! echo "$VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$'; then
+            echo "::error::Invalid version from branch name: $VERSION"
+            exit 1
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Publishing version: $VERSION"
+
+      - name: Tag release
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag "v$VERSION" || true
+          git push origin "v$VERSION" --force
+
+      - name: Publish fulgur (lib)
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: cargo publish -p fulgur
+
+      - name: Publish fulgur-cli (with retry)
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: |
+          for i in 1 2 3 4 5 6 7 8; do
+            echo "Attempt $i: publishing fulgur-cli..."
+            if cargo publish -p fulgur-cli 2>&1; then
+              echo "Published successfully."
+              exit 0
+            fi
+            WAIT=$((15 * i))
+            echo "Failed. Waiting ${WAIT}s for crates.io index..."
+            sleep "$WAIT"
+          done
+          echo "::error::Failed to publish fulgur-cli after 8 attempts"
+          exit 1
+
+  build-binaries:
+    name: Build ${{ matrix.target }}
+    needs: publish
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-latest
+            archive: tar.gz
+          - target: x86_64-unknown-linux-musl
+            os: ubuntu-latest
+            archive: tar.gz
+          - target: aarch64-unknown-linux-gnu
+            os: ubuntu-24.04-arm
+            archive: tar.gz
+          - target: aarch64-apple-darwin
+            os: macos-latest
+            archive: tar.gz
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
+            archive: zip
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: "v${{ needs.publish.outputs.version }}"
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Install musl-tools
+        if: matrix.target == 'x86_64-unknown-linux-musl'
+        run: sudo apt-get update && sudo apt-get install -y musl-tools
+
+      - name: Build
+        run: cargo build --release --bin fulgur -p fulgur-cli --target ${{ matrix.target }}
+
+      - name: Package (unix)
+        if: matrix.archive == 'tar.gz'
+        run: |
+          cd target/${{ matrix.target }}/release
+          tar czf ../../../fulgur-v${{ needs.publish.outputs.version }}-${{ matrix.target }}.tar.gz fulgur
+          cd ../../..
+
+      - name: Package (windows)
+        if: matrix.archive == 'zip'
+        shell: pwsh
+        run: |
+          Compress-Archive -Path "target/${{ matrix.target }}/release/fulgur.exe" -DestinationPath "fulgur-v${{ needs.publish.outputs.version }}-${{ matrix.target }}.zip"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: fulgur-${{ matrix.target }}
+          path: fulgur-v${{ needs.publish.outputs.version }}-${{ matrix.target }}.*
+
+  release:
+    name: Publish GitHub Release
+    needs: [publish, build-binaries]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: Upload binaries and publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          VERSION="${{ needs.publish.outputs.version }}"
+          REPO="${{ github.repository }}"
+          # Create release if draft doesn't exist (fallback)
+          if ! gh release view "v$VERSION" --repo "$REPO" &>/dev/null; then
+            gh release create "v$VERSION" \
+              --title "v$VERSION" \
+              --notes "Release v$VERSION" \
+              --draft \
+              --repo "$REPO"
+          fi
+          # Upload binaries and publish
+          gh release upload "v$VERSION" artifacts/* --repo "$REPO"
+          gh release edit "v$VERSION" --draft=false --repo "$REPO"
