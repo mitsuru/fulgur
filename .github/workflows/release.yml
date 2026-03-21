@@ -31,6 +31,11 @@ jobs:
           BRANCH: ${{ github.event.pull_request.head.ref }}
         run: |
           VERSION="${BRANCH#release/v}"
+          # Validate semver format
+          if ! echo "$VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$'; then
+            echo "::error::Invalid version from branch name: $VERSION"
+            exit 1
+          fi
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "Publishing version: $VERSION"
 
