@@ -371,6 +371,41 @@ fn extract_block_style(node: &Node) -> BlockStyle {
             (bc_abs.components.2.clamp(0.0, 1.0) * 255.0) as u8,
             (bc_abs.alpha.clamp(0.0, 1.0) * 255.0) as u8,
         ];
+
+        // Border radii
+        let width = layout.size.width;
+        let height = layout.size.height;
+        let resolve_radius =
+            |r: &style::values::computed::length_percentage::NonNegativeLengthPercentage,
+             basis: f32|
+             -> f32 {
+                r.0.resolve(style::values::computed::Length::new(basis))
+                    .px()
+            };
+
+        let tl = styles.clone_border_top_left_radius();
+        let tr = styles.clone_border_top_right_radius();
+        let br = styles.clone_border_bottom_right_radius();
+        let bl = styles.clone_border_bottom_left_radius();
+
+        style.border_radii = [
+            [
+                resolve_radius(&tl.0.width, width),
+                resolve_radius(&tl.0.height, height),
+            ],
+            [
+                resolve_radius(&tr.0.width, width),
+                resolve_radius(&tr.0.height, height),
+            ],
+            [
+                resolve_radius(&br.0.width, width),
+                resolve_radius(&br.0.height, height),
+            ],
+            [
+                resolve_radius(&bl.0.width, width),
+                resolve_radius(&bl.0.height, height),
+            ],
+        ];
     }
 
     style

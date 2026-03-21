@@ -102,6 +102,8 @@ pub struct BlockStyle {
     pub border_widths: [f32; 4],
     /// Padding: top, right, bottom, left
     pub padding: [f32; 4],
+    /// Border radii: [top-left, top-right, bottom-right, bottom-left] × [rx, ry]
+    pub border_radii: [[f32; 2]; 4],
 }
 
 // ─── PositionedChild ─────────────────────────────────────
