@@ -354,6 +354,17 @@ fn collect_table_cells(
             continue;
         }
 
+        // GCPM: skip running elements and store their HTML
+        if let Some(ctx) = gcpm {
+            if is_running_element(child_node, ctx) {
+                let html = serialize_node(doc, child_id);
+                if let Some(name) = get_running_name(child_node, ctx) {
+                    running_store.register(name, html);
+                }
+                continue;
+            }
+        }
+
         let child_layout = child_node.final_layout;
 
         // Zero-size container (tr, thead, tbody) — recurse into children
