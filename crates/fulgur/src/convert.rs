@@ -5,7 +5,10 @@ use crate::gcpm::running::{RunningElementStore, serialize_node};
 use crate::pageable::{
     BlockPageable, BlockStyle, ListItemPageable, Pageable, PositionedChild, SpacerPageable,
 };
-use crate::paragraph::{ParagraphPageable, ShapedGlyph, ShapedGlyphRun, ShapedLine};
+use crate::paragraph::{
+    ParagraphPageable, ShapedGlyph, ShapedGlyphRun, ShapedLine, TextDecoration, TextDecorationLine,
+    TextDecorationStyle,
+};
 use blitz_dom::{Node, NodeData};
 use blitz_html::HtmlDocument;
 use std::ops::Deref;
@@ -279,6 +282,7 @@ fn extract_paragraph(doc: &blitz_dom::BaseDocument, node: &Node) -> Option<Parag
                 // Get text color from the brush (node ID) → computed styles
                 let brush = &glyph_run.style().brush;
                 let color = get_text_color(doc, brush.id);
+                let decoration = get_text_decoration(doc, brush.id);
 
                 // Extract raw glyphs (relative offsets, not absolute positions)
                 let text_len = text.len();
@@ -301,7 +305,7 @@ fn extract_paragraph(doc: &blitz_dom::BaseDocument, node: &Node) -> Option<Parag
                         font_index,
                         font_size,
                         color,
-                        decoration: Default::default(),
+                        decoration,
                         glyphs,
                         text: run_text,
                         x_offset: glyph_run.offset(),
@@ -479,4 +483,50 @@ fn get_text_color(doc: &blitz_dom::BaseDocument, node_id: usize) -> [u8; 4] {
         return [r, g, b, a];
     }
     [0, 0, 0, 255] // Default: black
+}
+
+/// Get text-decoration properties from a DOM node's computed styles.
+fn get_text_decoration(doc: &blitz_dom::BaseDocument, node_id: usize) -> TextDecoration {
+    if let Some(node) = doc.get_node(node_id)
+        && let Some(styles) = node.primary_styles()
+    {
+        let current_color = styles.clone_color();
+
+        // text-decoration-line (bitflags)
+        let stylo_line = styles.clone_text_decoration_line();
+        let mut line = TextDecorationLine::NONE;
+        if stylo_line.contains(style::values::specified::TextDecorationLine::UNDERLINE) {
+            line = line | TextDecorationLine::UNDERLINE;
+        }
+        if stylo_line.contains(style::values::specified::TextDecorationLine::OVERLINE) {
+            line = line | TextDecorationLine::OVERLINE;
+        }
+        if stylo_line.contains(style::values::specified::TextDecorationLine::LINE_THROUGH) {
+            line = line | TextDecorationLine::LINE_THROUGH;
+        }
+
+        // text-decoration-style
+        use style::properties::longhands::text_decoration_style::computed_value::T as StyloTDS;
+        let style = match styles.clone_text_decoration_style() {
+            StyloTDS::Solid => TextDecorationStyle::Solid,
+            StyloTDS::Dashed => TextDecorationStyle::Dashed,
+            StyloTDS::Dotted => TextDecorationStyle::Dotted,
+            StyloTDS::Double => TextDecorationStyle::Double,
+            StyloTDS::Wavy => TextDecorationStyle::Wavy,
+            _ => TextDecorationStyle::Solid,
+        };
+
+        // text-decoration-color (resolve currentcolor)
+        let deco_color = styles.clone_text_decoration_color();
+        let resolved = deco_color.resolve_to_absolute(&current_color);
+        let color = [
+            (resolved.components.0.clamp(0.0, 1.0) * 255.0) as u8,
+            (resolved.components.1.clamp(0.0, 1.0) * 255.0) as u8,
+            (resolved.components.2.clamp(0.0, 1.0) * 255.0) as u8,
+            (resolved.alpha.clamp(0.0, 1.0) * 255.0) as u8,
+        ];
+
+        return TextDecoration { line, style, color };
+    }
+    TextDecoration::default()
 }
