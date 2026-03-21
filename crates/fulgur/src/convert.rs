@@ -3,7 +3,7 @@
 use crate::gcpm::GcpmContext;
 use crate::gcpm::running::{RunningElementStore, serialize_node};
 use crate::pageable::{
-    BlockPageable, BlockStyle, ListItemPageable, Pageable, PositionedChild, SpacerPageable,
+    BlockPageable, BlockStyle, ListItemPageable, Pageable, PositionedChild, Size, SpacerPageable,
 };
 use crate::paragraph::{
     ParagraphPageable, ShapedGlyph, ShapedGlyphRun, ShapedLine, TextDecoration, TextDecorationLine,
@@ -80,14 +80,17 @@ fn convert_node(
                 || style.border_widths.iter().any(|&w| w > 0.0)
                 || style.padding.iter().any(|&p| p > 0.0);
             if has_style {
+                let child_x = style.border_widths[3] + style.padding[3];
+                let child_y = style.border_widths[0] + style.padding[0];
                 let child = PositionedChild {
                     child: Box::new(paragraph),
-                    x: 0.0,
-                    y: 0.0,
+                    x: child_x,
+                    y: child_y,
                 };
                 let mut block =
                     BlockPageable::with_positioned_children(vec![child]).with_style(style);
                 block.wrap(width, height);
+                block.cached_size = Some(Size { width, height });
                 Box::new(block)
             } else {
                 Box::new(paragraph)
@@ -124,13 +127,17 @@ fn convert_node(
             || style.border_widths.iter().any(|&w| w > 0.0)
             || style.padding.iter().any(|&p| p > 0.0);
         if has_style {
+            let child_x = style.border_widths[3] + style.padding[3]; // left border + left padding
+            let child_y = style.border_widths[0] + style.padding[0]; // top border + top padding
             let child = PositionedChild {
                 child: Box::new(paragraph),
-                x: 0.0,
-                y: 0.0,
+                x: child_x,
+                y: child_y,
             };
             let mut block = BlockPageable::with_positioned_children(vec![child]).with_style(style);
             block.wrap(width, height);
+            // Use Taffy's computed height (includes padding + border) instead of children-only height
+            block.cached_size = Some(Size { width, height });
             return Box::new(block);
         }
         return Box::new(paragraph);
