@@ -4,6 +4,7 @@ use crate::gcpm::GcpmContext;
 use crate::gcpm::running::{RunningElementStore, serialize_node};
 use crate::pageable::{
     BlockPageable, BlockStyle, ListItemPageable, Pageable, PositionedChild, Size, SpacerPageable,
+    TablePageable,
 };
 use crate::paragraph::{
     ParagraphPageable, ShapedGlyph, ShapedGlyphRun, ShapedLine, TextDecoration, TextDecorationLine,
@@ -76,12 +77,8 @@ fn convert_node(
         let body: Box<dyn Pageable> = if node.flags.is_inline_root()
             && let Some(paragraph) = extract_paragraph(doc, node)
         {
-            let has_style = style.background_color.is_some()
-                || style.border_widths.iter().any(|&w| w > 0.0)
-                || style.padding.iter().any(|&p| p > 0.0);
-            if has_style {
-                let child_x = style.border_widths[3] + style.padding[3];
-                let child_y = style.border_widths[0] + style.padding[0];
+            if style.has_visual_style() {
+                let (child_x, child_y) = style.content_inset();
                 let child = PositionedChild {
                     child: Box::new(paragraph),
                     x: child_x,
@@ -117,18 +114,21 @@ fn convert_node(
         return Box::new(item);
     }
 
+    // Check if this is a table element
+    if let Some(elem_data) = node.element_data() {
+        let tag = elem_data.name.local.as_ref();
+        if tag == "table" {
+            return convert_table(doc, node, gcpm, running_store);
+        }
+    }
+
     // Check if this is an inline root (contains text layout)
     if node.flags.is_inline_root()
         && let Some(paragraph) = extract_paragraph(doc, node)
     {
-        // Wrap in a BlockPageable to apply background/border/padding styles
         let style = extract_block_style(node);
-        let has_style = style.background_color.is_some()
-            || style.border_widths.iter().any(|&w| w > 0.0)
-            || style.padding.iter().any(|&p| p > 0.0);
-        if has_style {
-            let child_x = style.border_widths[3] + style.padding[3]; // left border + left padding
-            let child_y = style.border_widths[0] + style.padding[0]; // top border + top padding
+        if style.has_visual_style() {
+            let (child_x, child_y) = style.content_inset();
             let child = PositionedChild {
                 child: Box::new(paragraph),
                 x: child_x,
@@ -146,12 +146,8 @@ fn convert_node(
     let children: &[usize] = &node.children;
 
     if children.is_empty() {
-        // Leaf node with style (background/border/radius) — use BlockPageable to draw visuals
         let style = extract_block_style(node);
-        let has_style = style.background_color.is_some()
-            || style.border_widths.iter().any(|&w| w > 0.0)
-            || style.border_radii.iter().any(|r| r[0] > 0.0 || r[1] > 0.0);
-        if has_style {
+        if style.has_visual_style() || style.has_radius() {
             let mut block = BlockPageable::with_positioned_children(vec![]).with_style(style);
             block.wrap(width, height);
             block.layout_size = Some(Size { width, height });
@@ -273,6 +269,142 @@ fn get_running_name(node: &Node, ctx: &GcpmContext) -> Option<String> {
         .split_whitespace()
         .find(|cls| ctx.running_names.contains(*cls))
         .map(|s| s.to_string())
+}
+
+/// Convert a table element into a TablePageable with header/body cell groups.
+fn convert_table(
+    doc: &blitz_dom::BaseDocument,
+    node: &Node,
+    gcpm: Option<&GcpmContext>,
+    running_store: &mut RunningElementStore,
+) -> Box<dyn Pageable> {
+    let layout = node.final_layout;
+    let width = layout.size.width;
+    let height = layout.size.height;
+    let style = extract_block_style(node);
+
+    let mut header_cells: Vec<PositionedChild> = Vec::new();
+    let mut body_cells: Vec<PositionedChild> = Vec::new();
+
+    // Walk table children to separate thead from tbody
+    for &child_id in &node.children {
+        let Some(child_node) = doc.get_node(child_id) else {
+            continue;
+        };
+        let is_thead = is_table_section(child_node, "thead");
+
+        collect_table_cells(
+            doc,
+            child_id,
+            is_thead,
+            &mut header_cells,
+            &mut body_cells,
+            gcpm,
+            running_store,
+        );
+    }
+
+    // Calculate header height from header cells
+    let header_height = header_cells
+        .iter()
+        .fold(0.0f32, |max_h, pc| max_h.max(pc.y + pc.child.height()));
+
+    let table = TablePageable {
+        header_cells,
+        body_cells,
+        header_height,
+        style,
+        layout_size: Some(Size { width, height }),
+        width,
+        cached_height: height,
+    };
+    Box::new(table)
+}
+
+/// Check if a node is a specific table section element.
+fn is_table_section(node: &Node, section_name: &str) -> bool {
+    if let Some(elem) = node.element_data() {
+        elem.name.local.as_ref() == section_name
+    } else {
+        false
+    }
+}
+
+/// Recursively collect table cells (td/th) from a table subtree.
+fn collect_table_cells(
+    doc: &blitz_dom::BaseDocument,
+    node_id: usize,
+    is_header: bool,
+    header_cells: &mut Vec<PositionedChild>,
+    body_cells: &mut Vec<PositionedChild>,
+    gcpm: Option<&GcpmContext>,
+    running_store: &mut RunningElementStore,
+) {
+    let Some(node) = doc.get_node(node_id) else {
+        return;
+    };
+
+    for &child_id in &node.children {
+        let Some(child_node) = doc.get_node(child_id) else {
+            continue;
+        };
+        if matches!(&child_node.data, NodeData::Comment) {
+            continue;
+        }
+        if is_non_visual_element(child_node) {
+            continue;
+        }
+
+        // GCPM: skip running elements and store their HTML
+        if let Some(ctx) = gcpm {
+            if is_running_element(child_node, ctx) {
+                let html = serialize_node(doc, child_id);
+                if let Some(name) = get_running_name(child_node, ctx) {
+                    running_store.register(name, html);
+                }
+                continue;
+            }
+        }
+
+        let child_layout = child_node.final_layout;
+
+        // Zero-size container (tr, thead, tbody) — recurse into children
+        if child_layout.size.height == 0.0
+            && child_layout.size.width == 0.0
+            && !child_node.children.is_empty()
+        {
+            let child_is_header = is_header || is_table_section(child_node, "thead");
+            collect_table_cells(
+                doc,
+                child_id,
+                child_is_header,
+                header_cells,
+                body_cells,
+                gcpm,
+                running_store,
+            );
+            continue;
+        }
+
+        // Skip zero-size leaves
+        if child_layout.size.height == 0.0 && child_layout.size.width == 0.0 {
+            continue;
+        }
+
+        // Actual cell (td/th) — convert and add to appropriate group
+        let cell_pageable = convert_node(doc, child_id, gcpm, running_store);
+        let positioned = PositionedChild {
+            child: cell_pageable,
+            x: child_layout.location.x,
+            y: child_layout.location.y,
+        };
+
+        if is_header {
+            header_cells.push(positioned);
+        } else {
+            body_cells.push(positioned);
+        }
+    }
 }
 
 /// Extract a ParagraphPageable from an inline root node.
