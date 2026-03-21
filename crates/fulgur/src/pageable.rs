@@ -501,7 +501,8 @@ fn colored_stroke(
 
 /// Draw a single border line with style, handling double and 3D effects.
 /// `base_color` is the original RGBA border color (needed for 3D color computation).
-/// `is_top_or_left` determines the light/dark side for 3D styles.
+/// `is_top_or_left` determines the light/dark color assignment for 3D styles.
+/// `outward_sign` is +1.0 if the computed normal (-dy,dx) points outward, -1.0 if inward.
 #[allow(clippy::too_many_arguments)]
 fn draw_border_line(
     canvas: &mut Canvas<'_, '_>,
@@ -514,6 +515,7 @@ fn draw_border_line(
     base_color: &[u8; 4],
     opacity: krilla::num::NormalizedF32,
     is_top_or_left: bool,
+    outward_sign: f32,
 ) {
     if width <= 0.0 || style == BorderStyleValue::None {
         return;
@@ -547,27 +549,21 @@ fn draw_border_line(
             let nx = -dy / len * half;
             let ny = dx / len * half;
             let half_w = width / 2.0;
-            // +normal points outward for top/left, inward for bottom/right.
-            // Swap direction for bottom/right so outer_color is always on the outside.
-            let (out_sign, in_sign) = if is_top_or_left {
-                (1.0, -1.0)
-            } else {
-                (-1.0, 1.0)
-            };
+            let inward_sign = -outward_sign;
             stroke_line(
                 canvas,
-                x1 + nx * out_sign,
-                y1 + ny * out_sign,
-                x2 + nx * out_sign,
-                y2 + ny * out_sign,
+                x1 + nx * outward_sign,
+                y1 + ny * outward_sign,
+                x2 + nx * outward_sign,
+                y2 + ny * outward_sign,
                 colored_stroke(&outer_color, half_w, opacity),
             );
             stroke_line(
                 canvas,
-                x1 + nx * in_sign,
-                y1 + ny * in_sign,
-                x2 + nx * in_sign,
-                y2 + ny * in_sign,
+                x1 + nx * inward_sign,
+                y1 + ny * inward_sign,
+                x2 + nx * inward_sign,
+                y2 + ny * inward_sign,
                 colored_stroke(&inner_color, half_w, opacity),
             );
         }
@@ -639,7 +635,7 @@ fn draw_block_border(
             .unwrap_or(krilla::num::NormalizedF32::ONE);
         canvas.surface.set_fill(None);
 
-        // top (top_or_left = true)
+        // top: normal=(0,+half) points down=inward, so outward_sign=-1
         draw_border_line(
             canvas,
             x,
@@ -651,6 +647,7 @@ fn draw_block_border(
             bc,
             opacity,
             true,
+            -1.0,
         );
         // bottom (top_or_left = false)
         draw_border_line(
@@ -664,8 +661,9 @@ fn draw_block_border(
             bc,
             opacity,
             false,
+            1.0, // bottom: normal=(0,+half) points down=outward
         );
-        // left (top_or_left = true)
+        // left: normal=(-half,0) points left=outward, so outward_sign=+1
         draw_border_line(
             canvas,
             x + bl / 2.0,
@@ -677,8 +675,9 @@ fn draw_block_border(
             bc,
             opacity,
             true,
+            1.0,
         );
-        // right (top_or_left = false)
+        // right: normal=(-half,0) points left=inward, so outward_sign=-1
         draw_border_line(
             canvas,
             x + w - br / 2.0,
@@ -690,6 +689,7 @@ fn draw_block_border(
             bc,
             opacity,
             false,
+            -1.0, // right: outward_sign=-1
         );
 
         canvas.surface.set_stroke(None);
