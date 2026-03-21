@@ -4,6 +4,7 @@ use crate::gcpm::GcpmContext;
 use crate::gcpm::running::{RunningElementStore, serialize_node};
 use crate::pageable::{
     BlockPageable, BlockStyle, ListItemPageable, Pageable, PositionedChild, Size, SpacerPageable,
+    TablePageable,
 };
 use crate::paragraph::{
     ParagraphPageable, ShapedGlyph, ShapedGlyphRun, ShapedLine, TextDecoration, TextDecorationLine,
@@ -115,6 +116,14 @@ fn convert_node(
         };
         item.wrap(width, 10000.0);
         return Box::new(item);
+    }
+
+    // Check if this is a table element
+    if let Some(elem_data) = node.element_data() {
+        let tag = elem_data.name.local.as_ref();
+        if tag == "table" {
+            return convert_table(doc, node, gcpm, running_store);
+        }
     }
 
     // Check if this is an inline root (contains text layout)
@@ -273,6 +282,131 @@ fn get_running_name(node: &Node, ctx: &GcpmContext) -> Option<String> {
         .split_whitespace()
         .find(|cls| ctx.running_names.contains(*cls))
         .map(|s| s.to_string())
+}
+
+/// Convert a table element into a TablePageable with header/body cell groups.
+fn convert_table(
+    doc: &blitz_dom::BaseDocument,
+    node: &Node,
+    gcpm: Option<&GcpmContext>,
+    running_store: &mut RunningElementStore,
+) -> Box<dyn Pageable> {
+    let layout = node.final_layout;
+    let width = layout.size.width;
+    let height = layout.size.height;
+    let style = extract_block_style(node);
+
+    let mut header_cells: Vec<PositionedChild> = Vec::new();
+    let mut body_cells: Vec<PositionedChild> = Vec::new();
+
+    // Walk table children to separate thead from tbody
+    for &child_id in &node.children {
+        let Some(child_node) = doc.get_node(child_id) else {
+            continue;
+        };
+        let is_thead = is_table_section(child_node, "thead");
+
+        collect_table_cells(
+            doc,
+            child_id,
+            is_thead,
+            &mut header_cells,
+            &mut body_cells,
+            gcpm,
+            running_store,
+        );
+    }
+
+    // Calculate header height from header cells
+    let header_height = header_cells
+        .iter()
+        .fold(0.0f32, |max_h, pc| max_h.max(pc.y + pc.child.height()));
+
+    let mut table = TablePageable {
+        header_cells,
+        body_cells,
+        header_height,
+        style,
+        layout_size: Some(Size { width, height }),
+        cached_height: height,
+    };
+    table.wrap(width, height);
+    Box::new(table)
+}
+
+/// Check if a node is a specific table section element.
+fn is_table_section(node: &Node, section_name: &str) -> bool {
+    if let Some(elem) = node.element_data() {
+        elem.name.local.as_ref() == section_name
+    } else {
+        false
+    }
+}
+
+/// Recursively collect table cells (td/th) from a table subtree.
+fn collect_table_cells(
+    doc: &blitz_dom::BaseDocument,
+    node_id: usize,
+    is_header: bool,
+    header_cells: &mut Vec<PositionedChild>,
+    body_cells: &mut Vec<PositionedChild>,
+    gcpm: Option<&GcpmContext>,
+    running_store: &mut RunningElementStore,
+) {
+    let Some(node) = doc.get_node(node_id) else {
+        return;
+    };
+
+    for &child_id in &node.children {
+        let Some(child_node) = doc.get_node(child_id) else {
+            continue;
+        };
+        if matches!(&child_node.data, NodeData::Comment) {
+            continue;
+        }
+        if is_non_visual_element(child_node) {
+            continue;
+        }
+
+        let child_layout = child_node.final_layout;
+
+        // Zero-size container (tr, thead, tbody) — recurse into children
+        if child_layout.size.height == 0.0
+            && child_layout.size.width == 0.0
+            && !child_node.children.is_empty()
+        {
+            let child_is_header = is_header || is_table_section(child_node, "thead");
+            collect_table_cells(
+                doc,
+                child_id,
+                child_is_header,
+                header_cells,
+                body_cells,
+                gcpm,
+                running_store,
+            );
+            continue;
+        }
+
+        // Skip zero-size leaves
+        if child_layout.size.height == 0.0 && child_layout.size.width == 0.0 {
+            continue;
+        }
+
+        // Actual cell (td/th) — convert and add to appropriate group
+        let cell_pageable = convert_node(doc, child_id, gcpm, running_store);
+        let positioned = PositionedChild {
+            child: cell_pageable,
+            x: child_layout.location.x,
+            y: child_layout.location.y,
+        };
+
+        if is_header {
+            header_cells.push(positioned);
+        } else {
+            body_cells.push(positioned);
+        }
+    }
 }
 
 /// Extract a ParagraphPageable from an inline root node.
