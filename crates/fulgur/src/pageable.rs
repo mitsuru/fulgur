@@ -387,6 +387,7 @@ impl Pageable for BlockPageable {
     }
 
     fn draw(&self, canvas: &mut Canvas<'_, '_>, x: Pt, y: Pt, avail_width: Pt, avail_height: Pt) {
+        let total_width = self.cached_size.map(|s| s.width).unwrap_or(avail_width);
         let total_height = self.cached_size.map(|s| s.height).unwrap_or(avail_height);
 
         // Draw background
@@ -397,9 +398,9 @@ impl Pageable for BlockPageable {
                 .iter()
                 .any(|r| r[0] > 0.0 || r[1] > 0.0);
             let path = if has_radius {
-                build_rounded_rect_path(x, y, avail_width, total_height, &self.style.border_radii)
+                build_rounded_rect_path(x, y, total_width, total_height, &self.style.border_radii)
             } else if let Some(rect) =
-                krilla::geom::Rect::from_xywh(x, y, avail_width, total_height)
+                krilla::geom::Rect::from_xywh(x, y, total_width, total_height)
             {
                 let mut pb = krilla::geom::PathBuilder::new();
                 pb.push_rect(rect);
@@ -455,7 +456,7 @@ impl Pageable for BlockPageable {
                 if let Some(path) = build_rounded_rect_path(
                     x + inset,
                     y + inset,
-                    avail_width - inset * 2.0,
+                    total_width - inset * 2.0,
                     total_height - inset * 2.0,
                     &inset_radii,
                 ) {
@@ -488,7 +489,7 @@ impl Pageable for BlockPageable {
                     }));
                     let mut pb = krilla::geom::PathBuilder::new();
                     pb.move_to(x, y + bt / 2.0);
-                    pb.line_to(x + avail_width, y + bt / 2.0);
+                    pb.line_to(x + total_width, y + bt / 2.0);
                     if let Some(path) = pb.finish() {
                         canvas.surface.draw_path(&path);
                     }
@@ -500,7 +501,7 @@ impl Pageable for BlockPageable {
                     }));
                     let mut pb = krilla::geom::PathBuilder::new();
                     pb.move_to(x, y + total_height - bb / 2.0);
-                    pb.line_to(x + avail_width, y + total_height - bb / 2.0);
+                    pb.line_to(x + total_width, y + total_height - bb / 2.0);
                     if let Some(path) = pb.finish() {
                         canvas.surface.draw_path(&path);
                     }
@@ -523,8 +524,8 @@ impl Pageable for BlockPageable {
                         ..stroke
                     }));
                     let mut pb = krilla::geom::PathBuilder::new();
-                    pb.move_to(x + avail_width - br / 2.0, y);
-                    pb.line_to(x + avail_width - br / 2.0, y + total_height);
+                    pb.move_to(x + total_width - br / 2.0, y);
+                    pb.line_to(x + total_width - br / 2.0, y + total_height);
                     if let Some(path) = pb.finish() {
                         canvas.surface.draw_path(&path);
                     }

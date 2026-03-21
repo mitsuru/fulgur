@@ -146,7 +146,18 @@ fn convert_node(
     let children: &[usize] = &node.children;
 
     if children.is_empty() {
-        // Leaf node — create a spacer with the computed height
+        // Leaf node with style (background/border/radius) — use BlockPageable to draw visuals
+        let style = extract_block_style(node);
+        let has_style = style.background_color.is_some()
+            || style.border_widths.iter().any(|&w| w > 0.0)
+            || style.border_radii.iter().any(|r| r[0] > 0.0 || r[1] > 0.0);
+        if has_style {
+            let mut block = BlockPageable::with_positioned_children(vec![]).with_style(style);
+            block.wrap(width, height);
+            block.cached_size = Some(Size { width, height });
+            return Box::new(block);
+        }
+        // Plain leaf node — create a spacer with the computed height
         let mut spacer = SpacerPageable::new(height);
         spacer.wrap(width, height);
         return Box::new(spacer);
