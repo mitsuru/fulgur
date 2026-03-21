@@ -125,6 +125,8 @@ pub struct BlockPageable {
     pub children: Vec<PositionedChild>,
     pub pagination: Pagination,
     pub cached_size: Option<Size>,
+    /// Taffy-computed layout size (preserved across wrap() calls for drawing).
+    pub layout_size: Option<Size>,
     pub style: BlockStyle,
 }
 
@@ -148,6 +150,7 @@ impl BlockPageable {
             children: positioned,
             pagination: Pagination::default(),
             cached_size: None,
+            layout_size: None,
             style: BlockStyle::default(),
         }
     }
@@ -157,6 +160,7 @@ impl BlockPageable {
             children,
             pagination: Pagination::default(),
             cached_size: None,
+            layout_size: None,
             style: BlockStyle::default(),
         }
     }
@@ -399,8 +403,17 @@ impl Pageable for BlockPageable {
     }
 
     fn draw(&self, canvas: &mut Canvas<'_, '_>, x: Pt, y: Pt, avail_width: Pt, avail_height: Pt) {
-        let total_width = self.cached_size.map(|s| s.width).unwrap_or(avail_width);
-        let total_height = self.cached_size.map(|s| s.height).unwrap_or(avail_height);
+        // Prefer layout_size (Taffy-computed, stable) over cached_size (may be children-only)
+        let total_width = self
+            .layout_size
+            .or(self.cached_size)
+            .map(|s| s.width)
+            .unwrap_or(avail_width);
+        let total_height = self
+            .layout_size
+            .or(self.cached_size)
+            .map(|s| s.height)
+            .unwrap_or(avail_height);
 
         // Draw background
         if let Some(bg) = &self.style.background_color {
@@ -443,9 +456,10 @@ impl Pageable for BlockPageable {
                 .iter()
                 .any(|r| r[0] > 0.0 || r[1] > 0.0);
 
-            if has_radius {
-                // For rounded borders, use a single stroke path inset by half the border width
-                let avg_width = (bt + br + bb + bl) / 4.0;
+            let uniform_width = bt == br && br == bb && bb == bl;
+            if has_radius && uniform_width {
+                // For rounded borders with uniform width, use a single stroke path
+                let avg_width = bt;
                 let inset = avg_width / 2.0;
                 let inset_radii: [[f32; 2]; 4] = [
                     [

@@ -90,7 +90,7 @@ fn convert_node(
                 let mut block =
                     BlockPageable::with_positioned_children(vec![child]).with_style(style);
                 block.wrap(width, height);
-                block.cached_size = Some(Size { width, height });
+                block.layout_size = Some(Size { width, height });
                 Box::new(block)
             } else {
                 Box::new(paragraph)
@@ -137,7 +137,7 @@ fn convert_node(
             let mut block = BlockPageable::with_positioned_children(vec![child]).with_style(style);
             block.wrap(width, height);
             // Use Taffy's computed height (includes padding + border) instead of children-only height
-            block.cached_size = Some(Size { width, height });
+            block.layout_size = Some(Size { width, height });
             return Box::new(block);
         }
         return Box::new(paragraph);
@@ -154,7 +154,7 @@ fn convert_node(
         if has_style {
             let mut block = BlockPageable::with_positioned_children(vec![]).with_style(style);
             block.wrap(width, height);
-            block.cached_size = Some(Size { width, height });
+            block.layout_size = Some(Size { width, height });
             return Box::new(block);
         }
         // Plain leaf node — create a spacer with the computed height
