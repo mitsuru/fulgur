@@ -196,7 +196,7 @@ pub fn render_to_pdf_with_gcpm(
                 } else {
                     format!(
                         "<div style=\"{}\">{}</div>",
-                        rule.declarations.replace('"', "&quot;"),
+                        escape_attr(&rule.declarations),
                         content_html
                     )
                 };
@@ -306,6 +306,14 @@ pub fn render_to_pdf_with_gcpm(
         .finish()
         .map_err(|e| Error::PdfGeneration(format!("{e:?}")))?;
     Ok(pdf_bytes)
+}
+
+/// Escape a string for use in an HTML attribute value.
+fn escape_attr(s: &str) -> String {
+    s.replace('&', "&amp;")
+        .replace('"', "&quot;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
 }
 
 /// Strip `display: none` declarations from CSS.
