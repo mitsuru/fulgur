@@ -1,0 +1,36 @@
+body {
+  font-family: sans-serif;
+  font-size: 12px;
+  line-height: 1.6;
+  color: #333;
+}
+
+h1 { font-size: 20px; margin-bottom: 16px; color: #111; }
+h2 { font-size: 14px; margin-top: 20px; margin-bottom: 8px; color: #222; border-bottom: 1px solid #ddd; padding-bottom: 3px; }
+
+img {
+  display: block;
+  margin-bottom: 8px;
+}
+
+.bordered {
+  display: block;
+  border: 3px solid #1a6faa;
+  padding: 8px;
+  margin-bottom: 12px;
+}
+
+.row {
+  display: flex;
+  gap: 16px;
+  margin-bottom: 12px;
+}
+
+.card {
+  border: 1px solid #ddd;
+  padding: 8px;
+}
+
+.card img {
+  margin-bottom: 4px;
+}
