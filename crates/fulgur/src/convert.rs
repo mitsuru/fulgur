@@ -173,8 +173,12 @@ fn convert_node(
     let positioned_children = collect_positioned_children(doc, children, ctx);
 
     let style = extract_block_style(node);
+    let has_style = style.has_visual_style() || style.has_radius();
     let mut block = BlockPageable::with_positioned_children(positioned_children).with_style(style);
     block.wrap(width, 10000.0);
+    if has_style {
+        block.layout_size = Some(Size { width, height });
+    }
     Box::new(block)
 }
 
