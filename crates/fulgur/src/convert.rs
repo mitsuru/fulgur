@@ -128,7 +128,7 @@ fn convert_node(
             if let Some(img) = convert_image(node, ctx.assets) {
                 return img;
             }
-            return Box::new(SpacerPageable::new(0.0));
+            // Fall through to generic handling below to preserve Taffy-computed dimensions
         }
     }
 
@@ -297,11 +297,15 @@ fn convert_image(node: &Node, assets: Option<&AssetBundle>) -> Option<Box<dyn Pa
     let width = layout.size.width;
     let height = layout.size.height;
 
-    let img = ImagePageable::new(Arc::clone(data), format, width, height);
-
     let style = extract_block_style(node);
     if style.has_visual_style() {
         let (cx, cy) = style.content_inset();
+        // content_inset returns (left, top); compute right/bottom insets for content-box
+        let right_inset = style.border_widths[1] + style.padding[1];
+        let bottom_inset = style.border_widths[2] + style.padding[2];
+        let content_width = (width - cx - right_inset).max(0.0);
+        let content_height = (height - cy - bottom_inset).max(0.0);
+        let img = ImagePageable::new(Arc::clone(data), format, content_width, content_height);
         let child = PositionedChild {
             child: Box::new(img),
             x: cx,
@@ -311,6 +315,7 @@ fn convert_image(node: &Node, assets: Option<&AssetBundle>) -> Option<Box<dyn Pa
         block.layout_size = Some(Size { width, height });
         Some(Box::new(block))
     } else {
+        let img = ImagePageable::new(Arc::clone(data), format, width, height);
         Some(Box::new(img))
     }
 }
