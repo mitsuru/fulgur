@@ -89,26 +89,34 @@ fn build_metadata(config: &Config) -> krilla::metadata::Metadata {
 
 /// Parse an ISO 8601 date string into a krilla DateTime.
 /// Supports: "YYYY", "YYYY-MM", "YYYY-MM-DD", "YYYY-MM-DDThh:mm:ss".
+/// Returns None if any component fails to parse.
 fn parse_datetime(s: &str) -> Option<krilla::metadata::DateTime> {
     let parts: Vec<&str> = s.splitn(2, 'T').collect();
-    let date_parts: Vec<u16> = parts[0].split('-').filter_map(|p| p.parse().ok()).collect();
-    let year = *date_parts.first()?;
+    let date_tokens: Vec<&str> = parts[0].split('-').collect();
+    let year: u16 = date_tokens.first()?.parse().ok()?;
     let mut dt = krilla::metadata::DateTime::new(year);
-    if let Some(&month) = date_parts.get(1) {
-        dt = dt.month(month as u8);
+    if let Some(month_str) = date_tokens.get(1) {
+        let month: u8 = month_str.parse().ok()?;
+        dt = dt.month(month);
     }
-    if let Some(&day) = date_parts.get(2) {
-        dt = dt.day(day as u8);
+    if let Some(day_str) = date_tokens.get(2) {
+        let day: u8 = day_str.parse().ok()?;
+        dt = dt.day(day);
     }
     if let Some(time_str) = parts.get(1) {
-        let time_parts: Vec<u8> = time_str.split(':').filter_map(|p| p.parse().ok()).collect();
-        if let Some(&hour) = time_parts.first() {
+        // Strip trailing 'Z' for UTC
+        let time_str = time_str.trim_end_matches('Z');
+        let time_tokens: Vec<&str> = time_str.split(':').collect();
+        if let Some(hour_str) = time_tokens.first() {
+            let hour: u8 = hour_str.parse().ok()?;
             dt = dt.hour(hour);
         }
-        if let Some(&minute) = time_parts.get(1) {
+        if let Some(minute_str) = time_tokens.get(1) {
+            let minute: u8 = minute_str.parse().ok()?;
             dt = dt.minute(minute);
         }
-        if let Some(&second) = time_parts.get(2) {
+        if let Some(second_str) = time_tokens.get(2) {
+            let second: u8 = second_str.parse().ok()?;
             dt = dt.second(second);
         }
     }
