@@ -2,6 +2,49 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.3.1] - 2026-03-22
+
+### Bug Fixes
+
+- wire --language to EngineBuilder, validate margin tokens
+- strict parsing in parse_datetime, reject invalid components
+- address code review feedback on markdownlint setup
+- address code review feedback
+- preserve Taffy-computed height for styled container nodes
+- address second round of code review feedback
+
+### Documentation
+
+- add CLI expansion implementation plan
+- update README with image support and deterministic output
+
+### Features
+
+- add metadata fields to Config (description, keywords, creator, producer, creation_date)
+- add metadata setters to EngineBuilder
+- add --margin, metadata flags, and stdout output to CLI
+- implement creation_date parsing for PDF metadata
+- add image key normalization to AssetBundle
+- detect <img> elements and create ImagePageable from AssetBundle
+- add --image CLI flag and image rendering example
+
+### Miscellaneous
+
+- disable markdownlint for docs/plans/ in CodeRabbit
+- add Claude Code settings with worktree sparse-checkout hook
+- add markdownlint-cli2 with CI integration
+- add Claude Code rule for markdownlint
+
+### Refactor
+
+- extract build_metadata helper, add new metadata fields to PDF output
+- introduce ConvertContext to bundle conversion state
+- extract get_attr helper, simplify image key normalization
+
+### Testing
+
+- add integration tests for <img> rendering
+
 ## [0.3.0] - 2026-03-22
 
 ### Bug Fixes
@@ -41,6 +84,10 @@ All notable changes to this project will be documented in this file.
 
 - add edge case tests for cssparser-based GCPM parser
 - add integration tests for ID and tag selector running elements
+
+### Release
+
+- v0.3.0
 
 ## [0.2.0] - 2026-03-21
 
@@ -192,3 +239,5 @@ All notable changes to this project will be documented in this file.
 ### Release
 
 - v0.1.1
+
+
