@@ -47,21 +47,40 @@ pub fn render_to_pdf(root: Box<dyn Pageable>, config: &Config) -> Result<Vec<u8>
         // Surface::finish is handled by Drop
     }
 
-    // Set metadata
-    let mut metadata = krilla::metadata::Metadata::new();
-    if let Some(ref title) = config.title {
-        metadata = metadata.title(title.clone());
-    }
-    if let Some(ref author) = config.author {
-        metadata = metadata.authors(vec![author.clone()]);
-    }
-
-    document.set_metadata(metadata);
+    document.set_metadata(build_metadata(config));
 
     let pdf_bytes = document
         .finish()
         .map_err(|e| Error::PdfGeneration(format!("{e:?}")))?;
     Ok(pdf_bytes)
+}
+
+/// Build krilla Metadata from Config.
+fn build_metadata(config: &Config) -> krilla::metadata::Metadata {
+    let mut metadata = krilla::metadata::Metadata::new();
+    if let Some(ref title) = config.title {
+        metadata = metadata.title(title.clone());
+    }
+    if !config.authors.is_empty() {
+        metadata = metadata.authors(config.authors.clone());
+    }
+    if let Some(ref description) = config.description {
+        metadata = metadata.description(description.clone());
+    }
+    if !config.keywords.is_empty() {
+        metadata = metadata.keywords(config.keywords.clone());
+    }
+    if let Some(ref lang) = config.lang {
+        metadata = metadata.language(lang.clone());
+    }
+    if let Some(ref creator) = config.creator {
+        metadata = metadata.creator(creator.clone());
+    }
+    if let Some(ref producer) = config.producer {
+        metadata = metadata.producer(producer.clone());
+    }
+    // TODO: creation_date requires parsing ISO 8601 string into krilla::metadata::DateTime
+    metadata
 }
 
 /// Cached max-content width and render Pageable for margin boxes.
@@ -292,15 +311,7 @@ pub fn render_to_pdf_with_gcpm(
         );
     }
 
-    // Set metadata (same as render_to_pdf)
-    let mut metadata = krilla::metadata::Metadata::new();
-    if let Some(ref title) = config.title {
-        metadata = metadata.title(title.clone());
-    }
-    if let Some(ref author) = config.author {
-        metadata = metadata.authors(vec![author.clone()]);
-    }
-    document.set_metadata(metadata);
+    document.set_metadata(build_metadata(config));
 
     let pdf_bytes = document
         .finish()
