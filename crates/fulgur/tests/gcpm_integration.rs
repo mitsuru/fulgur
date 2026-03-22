@@ -176,6 +176,7 @@ fn test_gcpm_id_selector_running_element() {
         .render_html(html)
         .expect("should render with ID selector running element");
     assert!(!pdf.is_empty());
+    assert!(pdf.starts_with(b"%PDF-"));
 }
 
 #[test]
@@ -198,4 +199,5 @@ fn test_gcpm_tag_selector_running_element() {
         .render_html(html)
         .expect("should render with tag selector running element");
     assert!(!pdf.is_empty());
+    assert!(pdf.starts_with(b"%PDF-"));
 }

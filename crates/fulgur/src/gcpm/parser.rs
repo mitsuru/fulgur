@@ -101,18 +101,35 @@ impl<'i, 'a> QualifiedRuleParser<'i> for GcpmSheetParser<'a> {
         &mut self,
         input: &mut Parser<'i, 't>,
     ) -> Result<Self::Prelude, ParseError<'i, ()>> {
-        let selector = match input.next_including_whitespace()?.clone() {
+        // Skip leading whitespace
+        let first = loop {
+            match input.next_including_whitespace()?.clone() {
+                Token::WhiteSpace(_) => continue,
+                tok => break tok,
+            }
+        };
+
+        let selector = match first {
             Token::Delim('.') => {
                 let name = input.expect_ident()?.clone();
-                Some(ParsedSelector::Class(name.to_string()))
+                ParsedSelector::Class(name.to_string())
             }
-            Token::IDHash(ref name) => Some(ParsedSelector::Id(name.to_string())),
-            Token::Ident(ref name) => Some(ParsedSelector::Tag(name.to_string())),
-            _ => None,
+            Token::IDHash(ref name) => ParsedSelector::Id(name.to_string()),
+            Token::Ident(ref name) => ParsedSelector::Tag(name.to_string()),
+            _ => {
+                while input.next_including_whitespace().is_ok() {}
+                return Ok(None);
+            }
         };
-        // Consume remaining prelude tokens
-        while input.next_including_whitespace().is_ok() {}
-        Ok(selector)
+        // Reject compound/group selectors — only simple selectors are supported.
+        // If any non-whitespace tokens remain, this is not a simple selector.
+        while let Ok(tok) = input.next_including_whitespace() {
+            match tok {
+                Token::WhiteSpace(_) => {}
+                _ => return Ok(None),
+            }
+        }
+        Ok(Some(selector))
     }
 
     fn parse_block<'t>(
@@ -746,5 +763,21 @@ mod tests {
             ParsedSelector::Tag("header".to_string())
         );
         assert_eq!(ctx.running_mappings[0].running_name, "pageHeader");
+    }
+
+    #[test]
+    fn test_compound_selector_not_matched() {
+        // Compound selectors like `.a .b` should not create a mapping
+        let css = ".a .b { position: running(hdr); }";
+        let ctx = parse_gcpm(css);
+        assert!(ctx.running_mappings.is_empty());
+    }
+
+    #[test]
+    fn test_group_selector_not_matched() {
+        // Group selectors like `.a, .b` should not create a mapping
+        let css = ".a, .b { position: running(hdr); }";
+        let ctx = parse_gcpm(css);
+        assert!(ctx.running_mappings.is_empty());
     }
 }
