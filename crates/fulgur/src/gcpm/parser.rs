@@ -138,6 +138,14 @@ impl<'i, 'a> QualifiedRuleParser<'i> for GcpmSheetParser<'a> {
         _start: &cssparser::ParserState,
         input: &mut Parser<'i, 't>,
     ) -> Result<Self::QualifiedRule, ParseError<'i, ()>> {
+        // Only scan for `position: running(...)` if the selector is supported.
+        // Otherwise, skip the block to avoid replacing declarations with
+        // `display: none` for elements that won't be registered as running.
+        let Some(selector) = prelude else {
+            while input.next().is_ok() {}
+            return Ok(TopLevelItem::StyleRule);
+        };
+
         let mut running_name: Option<String> = None;
 
         let mut parser = StyleRuleParser {
@@ -150,12 +158,10 @@ impl<'i, 'a> QualifiedRuleParser<'i> for GcpmSheetParser<'a> {
         }
 
         if let Some(running_name) = running_name {
-            if let Some(selector) = prelude {
-                self.running_mappings.push(RunningMapping {
-                    parsed: selector,
-                    running_name,
-                });
-            }
+            self.running_mappings.push(RunningMapping {
+                parsed: selector,
+                running_name,
+            });
         }
 
         Ok(TopLevelItem::StyleRule)
