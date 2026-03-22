@@ -15,14 +15,12 @@ Follow markdownlint-cli2 rules when creating or editing Markdown files.
 
 ## Project Configuration (.markdownlint-cli2.yaml)
 
-The following rules are disabled:
+The following rules are customized or disabled:
 
-- MD001: Heading increment
-- MD013: Line length
-- MD024: Duplicate headings (siblings_only)
-- MD033: Inline HTML
-- MD036: Emphasis as heading
-- MD060: Table column style
+- MD013: Line length (disabled)
+- MD024: Duplicate headings (enabled, siblings_only — same-level duplicates allowed)
+- MD033: Inline HTML (disabled)
+- MD060: Table column style (disabled)
 
 ## Verification
 
