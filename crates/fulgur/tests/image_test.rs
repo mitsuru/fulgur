@@ -11,28 +11,32 @@ const MINIMAL_PNG: &[u8] = &[
     0x44, 0xAE, 0x42, 0x60, 0x82,
 ];
 
-#[test]
-fn test_img_renders_to_pdf() {
+fn build_engine_with_image(name: &str) -> Engine {
     let mut assets = AssetBundle::new();
-    assets.add_image("logo.png", MINIMAL_PNG.to_vec());
-
-    let engine = Engine::builder()
+    assets.add_image(name, MINIMAL_PNG.to_vec());
+    Engine::builder()
         .page_size(PageSize::A4)
         .margin(Margin::uniform(72.0))
         .assets(assets)
-        .build();
+        .build()
+}
 
+fn build_engine_no_assets() -> Engine {
+    Engine::builder()
+        .page_size(PageSize::A4)
+        .margin(Margin::uniform(72.0))
+        .build()
+}
+
+#[test]
+fn test_img_renders_to_pdf() {
+    let engine = build_engine_with_image("logo.png");
     let html = r#"<html><body><div><img src="logo.png" style="display:block;width:100px;height:100px"></div></body></html>"#;
     let pdf = engine.render_html(html).unwrap();
     assert!(pdf.starts_with(b"%PDF"));
-    assert!(pdf.len() > 200);
 
     // Verify image data is embedded: PDF with image should be larger than without
-    let engine_no_img = Engine::builder()
-        .page_size(PageSize::A4)
-        .margin(Margin::uniform(72.0))
-        .build();
-    let pdf_no_img = engine_no_img.render_html(html).unwrap();
+    let pdf_no_img = build_engine_no_assets().render_html(html).unwrap();
     assert!(
         pdf.len() > pdf_no_img.len(),
         "PDF with image ({} bytes) should be larger than without ({} bytes)",
@@ -43,25 +47,29 @@ fn test_img_renders_to_pdf() {
 
 #[test]
 fn test_img_with_dot_slash_prefix() {
-    let mut assets = AssetBundle::new();
-    assets.add_image("logo.png", MINIMAL_PNG.to_vec());
-
-    let engine = Engine::builder()
-        .page_size(PageSize::A4)
-        .margin(Margin::uniform(72.0))
-        .assets(assets)
-        .build();
-
+    let engine = build_engine_with_image("logo.png");
     let html = r#"<html><body><div><img src="./logo.png" style="display:block;width:50px;height:50px"></div></body></html>"#;
     let pdf = engine.render_html(html).unwrap();
-    assert!(pdf.starts_with(b"%PDF"));
+
+    // Verify ./logo.png resolves to same image as logo.png
+    let pdf_no_img = build_engine_no_assets().render_html(html).unwrap();
+    assert!(
+        pdf.len() > pdf_no_img.len(),
+        "PDF with ./logo.png ({} bytes) should be larger than without ({} bytes)",
+        pdf.len(),
+        pdf_no_img.len()
+    );
 }
 
 #[test]
 fn test_img_missing_image_no_error() {
+    // AssetBundle exists but image not registered — tests get_image returning None
+    let mut assets = AssetBundle::new();
+    assets.add_image("other.png", MINIMAL_PNG.to_vec());
     let engine = Engine::builder()
         .page_size(PageSize::A4)
         .margin(Margin::uniform(72.0))
+        .assets(assets)
         .build();
 
     let html =
@@ -72,11 +80,7 @@ fn test_img_missing_image_no_error() {
 
 #[test]
 fn test_img_no_assets_no_error() {
-    let engine = Engine::builder()
-        .page_size(PageSize::A4)
-        .margin(Margin::uniform(72.0))
-        .build();
-
+    let engine = build_engine_no_assets();
     let html = r#"<html><body><img src="logo.png" style="width:50px;height:50px"></body></html>"#;
     let pdf = engine.render_html(html).unwrap();
     assert!(pdf.starts_with(b"%PDF"));

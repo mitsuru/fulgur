@@ -316,6 +316,7 @@ fn convert_image(node: &Node, assets: Option<&AssetBundle>) -> Option<Box<dyn Pa
             y: cy,
         };
         let mut block = BlockPageable::with_positioned_children(vec![child]).with_style(style);
+        block.wrap(width, height);
         block.layout_size = Some(Size { width, height });
         Some(Box::new(block))
     } else {
