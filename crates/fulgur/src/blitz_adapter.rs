@@ -89,6 +89,10 @@ pub fn parse_and_layout(
     let config = DocumentConfig {
         viewport: Some(viewport),
         font_ctx,
+        // Set a base URL so Blitz can resolve relative <img src> paths
+        // without panicking. We use file:/// as a harmless placeholder
+        // since Fulgur resolves images through AssetBundle, not the network.
+        base_url: Some("file:///".to_string()),
         ..DocumentConfig::default()
     };
 
