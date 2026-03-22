@@ -612,4 +612,64 @@ mod tests {
         let ctx = parse_gcpm(css);
         assert!(ctx.running_names.is_empty());
     }
+
+    #[test]
+    fn test_running_name_case_insensitive_property() {
+        // POSITION: Running(name) — プロパティ名の大文字小文字
+        let css = ".header { POSITION: running(pageHeader); }";
+        let ctx = parse_gcpm(css);
+        assert!(ctx.running_names.contains("pageHeader"));
+        assert!(ctx.cleaned_css.contains("display: none"));
+    }
+
+    #[test]
+    fn test_multiple_running_names() {
+        let css = ".h { position: running(hdr); } .f { position: running(ftr); }";
+        let ctx = parse_gcpm(css);
+        assert!(ctx.running_names.contains("hdr"));
+        assert!(ctx.running_names.contains("ftr"));
+    }
+
+    #[test]
+    fn test_running_with_other_declarations() {
+        // running() 以外の宣言が cleaned_css に残ること
+        let css = ".header { color: red; position: running(hdr); font-size: 14px; }";
+        let ctx = parse_gcpm(css);
+        assert!(ctx.running_names.contains("hdr"));
+        assert!(ctx.cleaned_css.contains("color: red"));
+        assert!(ctx.cleaned_css.contains("font-size: 14px"));
+    }
+
+    #[test]
+    fn test_page_with_multiple_margin_boxes() {
+        let css = "@page { @top-left { content: \"Left\"; } @top-center { content: element(hdr); } @top-right { content: counter(page); } }";
+        let ctx = parse_gcpm(css);
+        assert_eq!(ctx.margin_boxes.len(), 3);
+    }
+
+    #[test]
+    fn test_margin_box_with_extra_declarations() {
+        let css = "@page { @top-center { content: element(hdr); font-size: 10pt; color: gray; } }";
+        let ctx = parse_gcpm(css);
+        assert_eq!(ctx.margin_boxes.len(), 1);
+        let mb = &ctx.margin_boxes[0];
+        assert_eq!(mb.content, vec![ContentItem::Element("hdr".to_string())]);
+        assert!(mb.declarations.contains("font-size"));
+        assert!(mb.declarations.contains("color"));
+    }
+
+    #[test]
+    fn test_page_left_right_selectors() {
+        let css = r#"
+        @page :left { @bottom-left { content: counter(page); } }
+        @page :right { @bottom-right { content: counter(page); } }
+    "#;
+        let ctx = parse_gcpm(css);
+        assert_eq!(ctx.margin_boxes.len(), 2);
+        assert_eq!(ctx.margin_boxes[0].page_selector, Some(":left".to_string()));
+        assert_eq!(
+            ctx.margin_boxes[1].page_selector,
+            Some(":right".to_string())
+        );
+    }
 }
