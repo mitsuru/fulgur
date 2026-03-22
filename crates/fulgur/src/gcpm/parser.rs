@@ -95,7 +95,7 @@ impl<'i, 'a> AtRuleParser<'i> for GcpmSheetParser<'a> {
 }
 
 impl<'i, 'a> QualifiedRuleParser<'i> for GcpmSheetParser<'a> {
-    type Prelude = usize; // byte offset of rule start (before selector)
+    type Prelude = ();
     type QualifiedRule = TopLevelItem;
     type Error = ();
 
@@ -103,10 +103,9 @@ impl<'i, 'a> QualifiedRuleParser<'i> for GcpmSheetParser<'a> {
         &mut self,
         input: &mut Parser<'i, 't>,
     ) -> Result<Self::Prelude, ParseError<'i, ()>> {
-        let rule_start = input.position().byte_index();
         // Consume the prelude (selector) — we don't need it
         while input.next_including_whitespace().is_ok() {}
-        Ok(rule_start)
+        Ok(())
     }
 
     fn parse_block<'t>(
@@ -168,7 +167,6 @@ impl<'i, 'a> AtRuleParser<'i> for PageRuleParser<'a> {
         name: CowRcStr<'i>,
         input: &mut Parser<'i, 't>,
     ) -> Result<Self::Prelude, ParseError<'i, ()>> {
-        let _ = input;
         MarginBoxPosition::from_at_keyword(&name)
             .ok_or_else(|| input.new_error(BasicParseErrorKind::AtRuleInvalid(name)))
     }
