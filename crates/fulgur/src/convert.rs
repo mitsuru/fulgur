@@ -4,6 +4,7 @@ use crate::asset::AssetBundle;
 use crate::gcpm::GcpmContext;
 use crate::gcpm::ParsedSelector;
 use crate::gcpm::running::{RunningElementStore, serialize_node};
+use crate::image::ImagePageable;
 use crate::pageable::{
     BlockPageable, BlockStyle, BorderStyleValue, ListItemPageable, Pageable, PositionedChild, Size,
     SpacerPageable, TablePageable,
@@ -25,10 +26,7 @@ pub struct ConvertContext<'a> {
 }
 
 /// Convert a resolved Blitz document into a Pageable tree.
-pub fn dom_to_pageable(
-    doc: &HtmlDocument,
-    ctx: &mut ConvertContext<'_>,
-) -> Box<dyn Pageable> {
+pub fn dom_to_pageable(doc: &HtmlDocument, ctx: &mut ConvertContext<'_>) -> Box<dyn Pageable> {
     let root = doc.root_element();
     // Debug: print layout tree structure
     if std::env::var("FULGUR_DEBUG").is_ok() {
@@ -101,8 +99,7 @@ fn convert_node(
             }
         } else {
             let children: &[usize] = &node.children;
-            let positioned_children =
-                collect_positioned_children(doc, children, ctx);
+            let positioned_children = collect_positioned_children(doc, children, ctx);
             let mut block =
                 BlockPageable::with_positioned_children(positioned_children).with_style(style);
             block.wrap(width, 10000.0);
@@ -126,6 +123,12 @@ fn convert_node(
         let tag = elem_data.name.local.as_ref();
         if tag == "table" {
             return convert_table(doc, node, ctx);
+        }
+        if tag == "img" {
+            if let Some(img) = convert_image(node, ctx.assets) {
+                return img;
+            }
+            return Box::new(SpacerPageable::new(0.0));
         }
     }
 
@@ -221,8 +224,7 @@ fn collect_positioned_children(
             && child_layout.size.width == 0.0
             && !child_node.children.is_empty()
         {
-            let nested =
-                collect_positioned_children(doc, &child_node.children, ctx);
+            let nested = collect_positioned_children(doc, &child_node.children, ctx);
             result.extend(nested);
             continue;
         }
@@ -287,6 +289,41 @@ fn get_running_name(node: &Node, ctx: &GcpmContext) -> Option<String> {
         .iter()
         .find(|m| matches_selector(&m.parsed, elem))
         .map(|m| m.running_name.clone())
+}
+
+/// Convert an <img> element into an ImagePageable, wrapped in BlockPageable if styled.
+fn convert_image(node: &Node, assets: Option<&AssetBundle>) -> Option<Box<dyn Pageable>> {
+    let elem = node.element_data()?;
+    let src = elem
+        .attrs()
+        .iter()
+        .find(|a| a.name.local.as_ref() == "src")
+        .map(|a| a.value.as_ref())?;
+
+    let assets = assets?;
+    let data = assets.get_image(src)?;
+    let format = ImagePageable::detect_format(data)?;
+
+    let layout = node.final_layout;
+    let width = layout.size.width;
+    let height = layout.size.height;
+
+    let img = ImagePageable::new(Arc::clone(data), format, width, height);
+
+    let style = extract_block_style(node);
+    if style.has_visual_style() {
+        let (cx, cy) = style.content_inset();
+        let child = PositionedChild {
+            child: Box::new(img),
+            x: cx,
+            y: cy,
+        };
+        let mut block = BlockPageable::with_positioned_children(vec![child]).with_style(style);
+        block.layout_size = Some(Size { width, height });
+        Some(Box::new(block))
+    } else {
+        Some(Box::new(img))
+    }
 }
 
 /// Convert a table element into a TablePageable with header/body cell groups.
