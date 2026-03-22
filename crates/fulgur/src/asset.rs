@@ -38,13 +38,15 @@ impl AssetBundle {
     }
 
     /// Normalize an image key by stripping a leading `./` prefix.
-    pub fn normalize_image_key(key: &str) -> &str {
-        key.strip_prefix("./").unwrap_or(key)
+    fn normalize_key(key: &mut String) {
+        if key.starts_with("./") {
+            key.drain(..2);
+        }
     }
 
     pub fn add_image(&mut self, name: impl Into<String>, data: Vec<u8>) {
-        let key = name.into();
-        let key = Self::normalize_image_key(&key).to_string();
+        let mut key = name.into();
+        Self::normalize_key(&mut key);
         self.images.insert(key, Arc::new(data));
     }
 
@@ -54,14 +56,15 @@ impl AssetBundle {
         path: impl AsRef<Path>,
     ) -> Result<()> {
         let data = std::fs::read(path)?;
-        let key = name.into();
-        let key = Self::normalize_image_key(&key).to_string();
+        let mut key = name.into();
+        Self::normalize_key(&mut key);
         self.images.insert(key, Arc::new(data));
         Ok(())
     }
 
     pub fn get_image(&self, name: &str) -> Option<&Arc<Vec<u8>>> {
-        self.images.get(Self::normalize_image_key(name))
+        let key = name.strip_prefix("./").unwrap_or(name);
+        self.images.get(key)
     }
 
     /// Build combined CSS from all added stylesheets.
@@ -81,25 +84,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_normalize_image_key_strips_dot_slash() {
-        assert_eq!(AssetBundle::normalize_image_key("./logo.png"), "logo.png");
-    }
-
-    #[test]
-    fn test_normalize_image_key_preserves_plain() {
-        assert_eq!(AssetBundle::normalize_image_key("logo.png"), "logo.png");
-    }
-
-    #[test]
-    fn test_normalize_image_key_preserves_nested_dot_slash() {
-        assert_eq!(
-            AssetBundle::normalize_image_key("images/./logo.png"),
-            "images/./logo.png"
-        );
-    }
-
-    #[test]
-    fn test_get_image_normalizes_key() {
+    fn test_get_image_normalizes_dot_slash() {
         let mut bundle = AssetBundle::new();
         bundle.add_image("logo.png", vec![1, 2, 3]);
         assert!(bundle.get_image("./logo.png").is_some());
@@ -107,9 +92,17 @@ mod tests {
     }
 
     #[test]
-    fn test_add_image_normalizes_key() {
+    fn test_add_image_normalizes_dot_slash() {
         let mut bundle = AssetBundle::new();
         bundle.add_image("./logo.png", vec![1, 2, 3]);
         assert!(bundle.get_image("logo.png").is_some());
+    }
+
+    #[test]
+    fn test_nested_dot_slash_preserved() {
+        let mut bundle = AssetBundle::new();
+        bundle.add_image("images/./logo.png", vec![1, 2, 3]);
+        assert!(bundle.get_image("images/./logo.png").is_some());
+        assert!(bundle.get_image("logo.png").is_none());
     }
 }

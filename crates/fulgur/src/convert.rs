@@ -255,17 +255,10 @@ fn is_running_element(node: &Node, ctx: &GcpmContext) -> bool {
         .any(|m| matches_selector(&m.parsed, elem))
 }
 
-fn get_class_attr(elem: &blitz_dom::node::ElementData) -> Option<&str> {
+fn get_attr<'a>(elem: &'a blitz_dom::node::ElementData, name: &str) -> Option<&'a str> {
     elem.attrs()
         .iter()
-        .find(|a| a.name.local.as_ref() == "class")
-        .map(|a| a.value.as_ref())
-}
-
-fn get_id_attr(elem: &blitz_dom::node::ElementData) -> Option<&str> {
-    elem.attrs()
-        .iter()
-        .find(|a| a.name.local.as_ref() == "id")
+        .find(|a| a.name.local.as_ref() == name)
         .map(|a| a.value.as_ref())
 }
 
@@ -275,10 +268,10 @@ fn get_tag_name(elem: &blitz_dom::node::ElementData) -> &str {
 
 fn matches_selector(selector: &ParsedSelector, elem: &blitz_dom::node::ElementData) -> bool {
     match selector {
-        ParsedSelector::Class(name) => get_class_attr(elem)
+        ParsedSelector::Class(name) => get_attr(elem, "class")
             .map(|cls| cls.split_whitespace().any(|c| c == name))
             .unwrap_or(false),
-        ParsedSelector::Id(name) => get_id_attr(elem).map(|id| id == name).unwrap_or(false),
+        ParsedSelector::Id(name) => get_attr(elem, "id").map(|id| id == name).unwrap_or(false),
         ParsedSelector::Tag(name) => get_tag_name(elem).eq_ignore_ascii_case(name),
     }
 }
@@ -294,11 +287,7 @@ fn get_running_name(node: &Node, ctx: &GcpmContext) -> Option<String> {
 /// Convert an <img> element into an ImagePageable, wrapped in BlockPageable if styled.
 fn convert_image(node: &Node, assets: Option<&AssetBundle>) -> Option<Box<dyn Pageable>> {
     let elem = node.element_data()?;
-    let src = elem
-        .attrs()
-        .iter()
-        .find(|a| a.name.local.as_ref() == "src")
-        .map(|a| a.value.as_ref())?;
+    let src = get_attr(elem, "src")?;
 
     let assets = assets?;
     let data = assets.get_image(src)?;
