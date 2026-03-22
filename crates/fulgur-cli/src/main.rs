@@ -78,6 +78,11 @@ enum Commands {
         /// CSS files to include (can be specified multiple times)
         #[arg(long = "css")]
         css_files: Vec<PathBuf>,
+
+        /// Image files to bundle (name=path, can be specified multiple times)
+        /// Example: --image logo.png=assets/logo.png
+        #[arg(long = "image", short = 'i')]
+        images: Vec<String>,
     },
 }
 
@@ -147,6 +152,7 @@ fn main() {
             creation_date,
             fonts,
             css_files,
+            images,
         } => {
             let html = if stdin {
                 let mut buf = String::new();
@@ -163,8 +169,8 @@ fn main() {
                 std::process::exit(1);
             };
 
-            // Build assets if fonts or CSS provided
-            let assets = if !fonts.is_empty() || !css_files.is_empty() {
+            // Build assets if fonts, CSS, or images provided
+            let assets = if !fonts.is_empty() || !css_files.is_empty() || !images.is_empty() {
                 let mut bundle = AssetBundle::new();
                 for font_path in &fonts {
                     bundle.add_font_file(font_path).unwrap_or_else(|e| {
@@ -175,6 +181,23 @@ fn main() {
                     bundle.add_css_file(css_path).unwrap_or_else(|e| {
                         eprintln!("Warning: failed to load CSS {}: {e}", css_path.display());
                     });
+                }
+                for image_spec in &images {
+                    if let Some((name, path)) = image_spec.split_once('=') {
+                        bundle.add_image_file(name, path).unwrap_or_else(|e| {
+                            eprintln!("Warning: failed to load image {}: {e}", path);
+                        });
+                    } else {
+                        // Use filename as the image name
+                        let path = std::path::Path::new(image_spec);
+                        let name = path
+                            .file_name()
+                            .and_then(|n| n.to_str())
+                            .unwrap_or(image_spec);
+                        bundle.add_image_file(name, path).unwrap_or_else(|e| {
+                            eprintln!("Warning: failed to load image {}: {e}", image_spec);
+                        });
+                    }
                 }
                 Some(bundle)
             } else {
