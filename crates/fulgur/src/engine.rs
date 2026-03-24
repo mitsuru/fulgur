@@ -48,39 +48,40 @@ impl Engine {
         let gcpm = crate::gcpm::parser::parse_gcpm(&combined_css);
         let css_to_inject = &gcpm.cleaned_css;
 
-        let final_html = if css_to_inject.is_empty() {
-            html.to_string()
-        } else {
-            let style_block = format!("<style>{}</style>", css_to_inject);
-            if let Some(pos) = html.find("</head>") {
-                format!("{}{}{}", &html[..pos], style_block, &html[pos..])
-            } else if let Some(pos) = html.find("<body") {
-                format!("{}{}{}", &html[..pos], style_block, &html[pos..])
-            } else {
-                format!("{}{}", style_block, html)
-            }
-        };
-
+        // --- Pipeline: parse → DomPass → resolve ---
         let fonts = self
             .assets
             .as_ref()
             .map(|a| a.fonts.as_slice())
             .unwrap_or(&[]);
-        let doc = crate::blitz_adapter::parse_and_layout(
-            &final_html,
-            self.config.content_width(),
-            self.config.content_height(),
-            fonts,
-        );
 
+        let mut doc = crate::blitz_adapter::parse(html, self.config.content_width(), fonts);
+
+        // Build and apply DOM passes
+        let mut passes: Vec<Box<dyn crate::blitz_adapter::DomPass>> = Vec::new();
+        if !css_to_inject.is_empty() {
+            passes.push(Box::new(crate::blitz_adapter::InjectCssPass {
+                css: css_to_inject.clone(),
+            }));
+        }
+
+        let ctx = crate::blitz_adapter::PassContext {
+            viewport_width: self.config.content_width(),
+            viewport_height: self.config.content_height(),
+            font_data: fonts,
+        };
+        crate::blitz_adapter::apply_passes(&mut doc, &passes, &ctx);
+        crate::blitz_adapter::resolve(&mut doc);
+
+        // --- Convert DOM to Pageable and render ---
         let gcpm_opt = if gcpm.is_empty() { None } else { Some(&gcpm) };
         let mut running_store = crate::gcpm::running::RunningElementStore::new();
-        let mut ctx = ConvertContext {
+        let mut convert_ctx = ConvertContext {
             gcpm: gcpm_opt,
             running_store: &mut running_store,
             assets: self.assets.as_ref(),
         };
-        let root = crate::convert::dom_to_pageable(&doc, &mut ctx);
+        let root = crate::convert::dom_to_pageable(&doc, &mut convert_ctx);
 
         if gcpm.is_empty() {
             self.render_pageable(root)
