@@ -154,6 +154,74 @@ pub fn resolve(doc: &mut HtmlDocument) {
     doc.resolve(0.0);
 }
 
+/// Walk the DOM tree to find the first element with the given tag name.
+/// Returns the node id if found.
+fn find_element_by_tag(doc: &HtmlDocument, tag: &str) -> Option<usize> {
+    let root = doc.root_element();
+    find_element_by_tag_recursive(doc, root.id, tag)
+}
+
+fn find_element_by_tag_recursive(doc: &HtmlDocument, node_id: usize, tag: &str) -> Option<usize> {
+    let node = doc.get_node(node_id)?;
+    if let Some(el) = node.element_data() {
+        if el.name.local.as_ref() == tag {
+            return Some(node_id);
+        }
+    }
+    for &child_id in &node.children {
+        if let Some(found) = find_element_by_tag_recursive(doc, child_id, tag) {
+            return Some(found);
+        }
+    }
+    None
+}
+
+fn make_qual_name(local: &str) -> blitz_dom::QualName {
+    blitz_dom::QualName::new(
+        None,
+        blitz_dom::ns!(html),
+        blitz_dom::LocalName::from(local),
+    )
+}
+
+/// Injects CSS text as a `<style>` element into the document's `<head>`.
+pub struct InjectCssPass {
+    pub css: String,
+}
+
+impl DomPass for InjectCssPass {
+    fn apply(&self, doc: &mut HtmlDocument, _ctx: &PassContext<'_>) {
+        if self.css.is_empty() {
+            return;
+        }
+
+        // Find or create <head>
+        let head_id = match find_element_by_tag(doc, "head") {
+            Some(id) => id,
+            None => {
+                // Create <head> as first child of <html>
+                let html_id = doc.root_element().id;
+                let mut mutator = doc.mutate();
+                let head_id = mutator.create_element(make_qual_name("head"), vec![]);
+                let children = mutator.child_ids(html_id);
+                if let Some(&first_child) = children.first() {
+                    mutator.insert_nodes_before(first_child, &[head_id]);
+                } else {
+                    mutator.append_children(html_id, &[head_id]);
+                }
+                drop(mutator);
+                head_id
+            }
+        };
+
+        // Create <style> element, append to <head>, set innerHTML
+        let mut mutator = doc.mutate();
+        let style_id = mutator.create_element(make_qual_name("style"), vec![]);
+        mutator.append_children(head_id, &[style_id]);
+        mutator.set_inner_html(style_id, &self.css);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -184,5 +252,43 @@ mod tests {
         let doc = parse_and_layout(html, 400.0, 600.0, &[]);
         let root = doc.root_element();
         assert!(!root.children.is_empty());
+    }
+
+    #[test]
+    fn test_inject_css_pass_adds_style() {
+        let html = "<html><head></head><body><p>Hello</p></body></html>";
+        let mut doc = parse(html, 400.0, &[]);
+        let pass = InjectCssPass {
+            css: "p { color: red; }".to_string(),
+        };
+        let ctx = PassContext {
+            viewport_width: 400.0,
+            viewport_height: 10000.0,
+            font_data: &[],
+        };
+        apply_passes(&mut doc, &[Box::new(pass)], &ctx);
+        resolve(&mut doc);
+        assert!(
+            find_element_by_tag(&doc, "style").is_some(),
+            "Expected a <style> element to be injected into the DOM"
+        );
+    }
+
+    #[test]
+    fn test_inject_css_pass_empty_css_is_noop() {
+        let html = "<html><body><p>Hello</p></body></html>";
+        let mut doc = parse(html, 400.0, &[]);
+        let pass = InjectCssPass { css: String::new() };
+        let ctx = PassContext {
+            viewport_width: 400.0,
+            viewport_height: 10000.0,
+            font_data: &[],
+        };
+        apply_passes(&mut doc, &[Box::new(pass)], &ctx);
+        resolve(&mut doc);
+        assert!(
+            find_element_by_tag(&doc, "style").is_none(),
+            "Expected no <style> element when CSS is empty"
+        );
     }
 }
