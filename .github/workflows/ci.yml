@@ -51,12 +51,18 @@ jobs:
       - name: Install cargo-llvm-cov
         if: matrix.coverage
         uses: taiki-e/install-action@88ada01c46e65c47040a0ae865537cc76fcd0e1c # cargo-llvm-cov
-      - name: Run tests with coverage
+      - name: Build tests
+        if: ${{ !matrix.coverage }}
+        run: cargo test --no-run
+      - name: Build tests with coverage
         if: matrix.coverage
-        run: cargo llvm-cov --lcov --output-path lcov.info
+        run: cargo llvm-cov --no-report --no-cfg-coverage
       - name: Run tests
         if: ${{ !matrix.coverage }}
         run: cargo test
+      - name: Run tests with coverage
+        if: matrix.coverage
+        run: cargo llvm-cov --no-clean --lcov --output-path lcov.info
       - name: Upload coverage artifact
         if: matrix.coverage
         uses: actions/upload-artifact@v4
