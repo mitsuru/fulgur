@@ -80,6 +80,7 @@ impl Engine {
             gcpm: gcpm_opt,
             running_store: &mut running_store,
             assets: self.assets.as_ref(),
+            font_cache: std::collections::HashMap::new(),
         };
         let root = crate::convert::dom_to_pageable(&doc, &mut convert_ctx);
 
