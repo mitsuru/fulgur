@@ -33,15 +33,47 @@ jobs:
         include:
           - os: ubuntu-latest
             arch: amd64
+            coverage: true
           - os: ubuntu-24.04-arm
             arch: arm64
+            coverage: false
           - os: macos-latest
             arch: arm64
+            coverage: false
           - os: windows-latest
             arch: amd64
+            coverage: false
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      - run: cargo test
+      - name: Install cargo-llvm-cov
+        if: matrix.coverage
+        uses: taiki-e/install-action@cargo-llvm-cov
+      - name: Run tests with coverage
+        if: matrix.coverage
+        run: cargo llvm-cov --lcov --output-path lcov.info
+      - name: Run tests
+        if: ${{ !matrix.coverage }}
+        run: cargo test
+      - name: Upload coverage artifact
+        if: matrix.coverage
+        uses: actions/upload-artifact@v4
+        with:
+          name: lcov
+          path: lcov.info
+
+  octocov:
+    needs: test
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: lcov
+      - uses: k1LoW/octocov-action@v1
