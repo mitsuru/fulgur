@@ -67,41 +67,8 @@ pub fn parse_and_layout(
     _viewport_height: f32,
     font_data: &[Arc<Vec<u8>>],
 ) -> HtmlDocument {
-    let viewport = Viewport::new(
-        viewport_width as u32,
-        10000, // Large height — let Taffy lay out everything, we paginate later
-        1.0,
-        ColorScheme::Light,
-    );
-
-    // Build FontContext with bundled fonts
-    let font_ctx = if font_data.is_empty() {
-        None
-    } else {
-        let mut ctx = FontContext::new();
-        for data in font_data {
-            let blob: parley::fontique::Blob<u8> = (**data).clone().into();
-            ctx.collection.register_fonts(blob, None);
-        }
-        Some(ctx)
-    };
-
-    let config = DocumentConfig {
-        viewport: Some(viewport),
-        font_ctx,
-        // Set a base URL so Blitz can resolve relative <img src> paths
-        // without panicking. We use file:/// as a harmless placeholder
-        // since Fulgur resolves images through AssetBundle, not the network.
-        base_url: Some("file:///".to_string()),
-        ..DocumentConfig::default()
-    };
-
-    // Suppress Blitz's noisy "ERROR: Unexpected token" println output
-    let mut doc = suppress_stdout(|| HtmlDocument::from_html(html, config));
-
-    // Resolve styles (Stylo) and layout (Taffy)
-    doc.resolve(0.0);
-
+    let mut doc = parse(html, viewport_width, font_data);
+    resolve(&mut doc);
     doc
 }
 
