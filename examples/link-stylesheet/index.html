@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Link Stylesheet Example</title>
+  <link rel="stylesheet" href="theme.css">
+</head>
+<body>
+
+<h1>Link Stylesheet Example</h1>
+
+<p>This example demonstrates loading CSS via <code>&lt;link rel="stylesheet" href="theme.css"&gt;</code> instead of the <code>--css</code> CLI flag.</p>
+
+<h2>How It Works</h2>
+
+<div class="card">
+  <div class="card-title">Automatic Base Path</div>
+  <p>When you pass an HTML file to the CLI, fulgur automatically sets the base path to the file's directory. Relative <code>href</code> values in <code>&lt;link&gt;</code> tags are resolved from there.</p>
+</div>
+
+<div class="card">
+  <div class="card-title">Local Files Only</div>
+  <p>Following fulgur's offline-first design, only local file paths are resolved. URLs starting with <code>http://</code> or <code>https://</code> are ignored.</p>
+</div>
+
+<div class="card">
+  <div class="card-title">Multiple Stylesheets</div>
+  <p>You can include multiple <code>&lt;link&gt;</code> tags. Each referenced CSS file is loaded and applied in order.</p>
+</div>
+
+</body>
+</html>

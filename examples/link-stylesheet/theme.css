@@ -1,0 +1,44 @@
+body {
+  font-family: sans-serif;
+  font-size: 12px;
+  line-height: 1.8;
+  color: #333;
+}
+
+h1 {
+  font-size: 20px;
+  margin-bottom: 16px;
+  color: #1a5276;
+  border-bottom: 2px solid #1a5276;
+  padding-bottom: 4px;
+}
+
+h2 {
+  font-size: 14px;
+  margin-top: 20px;
+  margin-bottom: 8px;
+  color: #2c3e50;
+}
+
+p {
+  margin-bottom: 8px;
+}
+
+.card {
+  background-color: #eaf2f8;
+  padding: 12px;
+  margin-bottom: 12px;
+}
+
+.card-title {
+  font-size: 13px;
+  font-weight: bold;
+  color: #1a5276;
+  margin-bottom: 4px;
+}
+
+code {
+  font-family: monospace;
+  background-color: #f0f0f0;
+  padding: 1px 4px;
+}
