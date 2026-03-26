@@ -5,6 +5,7 @@ use blitz_dom::DocumentConfig;
 use blitz_html::HtmlDocument;
 use blitz_traits::shell::{ColorScheme, Viewport};
 use parley::FontContext;
+use std::path::PathBuf;
 use std::sync::Arc;
 
 /// Suppress stdout during a closure. Blitz's HTML parser unconditionally prints
@@ -143,12 +144,47 @@ fn find_element_by_tag_recursive(doc: &HtmlDocument, node_id: usize, tag: &str) 
     None
 }
 
+/// Get the value of an attribute by name from an element.
+pub fn get_attr<'a>(elem: &'a blitz_dom::node::ElementData, name: &str) -> Option<&'a str> {
+    elem.attrs()
+        .iter()
+        .find(|a| a.name.local.as_ref() == name)
+        .map(|a| a.value.as_ref())
+}
+
 fn make_qual_name(local: &str) -> blitz_dom::QualName {
     blitz_dom::QualName::new(
         None,
         blitz_dom::ns!(html),
         blitz_dom::LocalName::from(local),
     )
+}
+
+/// Create a `<style>` element with the given CSS text, attach it to the DOM,
+/// and register it with Stylo. Returns the style node id.
+///
+/// If `insert_before` is `Some(sibling_id)`, the style element is inserted before
+/// that sibling. Otherwise it is appended to `parent_id`.
+fn inject_style_node(
+    doc: &mut HtmlDocument,
+    parent_id: usize,
+    css: &str,
+    insert_before: Option<usize>,
+) -> usize {
+    let style_id = {
+        let mut mutator = doc.mutate();
+        let style_id = mutator.create_element(make_qual_name("style"), vec![]);
+        let text_id = mutator.create_text_node(css);
+        if let Some(sibling) = insert_before {
+            mutator.insert_nodes_before(sibling, &[style_id]);
+        } else {
+            mutator.append_children(parent_id, &[style_id]);
+        }
+        mutator.append_children(style_id, &[text_id]);
+        style_id
+    };
+    doc.upsert_stylesheet_for_node(style_id);
+    style_id
 }
 
 /// Injects CSS text as a `<style>` element into the document's `<head>`.
@@ -181,17 +217,84 @@ impl DomPass for InjectCssPass {
             }
         };
 
-        // Create <style> element with a text node child, then register with Stylo.
-        // Note: set_inner_html doesn't work because Blitz uses DummyHtmlParserProvider.
-        let style_id = {
-            let mut mutator = doc.mutate();
-            let style_id = mutator.create_element(make_qual_name("style"), vec![]);
-            let text_id = mutator.create_text_node(&self.css);
-            mutator.append_children(head_id, &[style_id]);
-            mutator.append_children(style_id, &[text_id]);
-            style_id
+        inject_style_node(doc, head_id, &self.css, None);
+    }
+}
+
+/// Resolves `<link rel="stylesheet" href="...">` tags by reading local CSS files
+/// and injecting them as `<style>` elements.
+pub struct LinkStylesheetPass {
+    pub base_path: PathBuf,
+}
+
+impl DomPass for LinkStylesheetPass {
+    fn apply(&self, doc: &mut HtmlDocument, _ctx: &PassContext<'_>) {
+        // Phase 1: Collect link elements and their CSS content
+        let head_id = match find_element_by_tag(doc, "head") {
+            Some(id) => id,
+            None => return,
         };
-        doc.upsert_stylesheet_for_node(style_id);
+
+        let mut css_entries: Vec<(usize, String)> = Vec::new(); // (link_node_id, css_content)
+
+        let head_children: Vec<usize> = doc
+            .get_node(head_id)
+            .map(|n| n.children.clone())
+            .unwrap_or_default();
+
+        for &child_id in &head_children {
+            let Some(node) = doc.get_node(child_id) else {
+                continue;
+            };
+            let Some(elem) = node.element_data() else {
+                continue;
+            };
+            if elem.name.local.as_ref() != "link" {
+                continue;
+            }
+
+            let is_stylesheet = get_attr(elem, "rel").is_some_and(|rel| {
+                rel.split_ascii_whitespace()
+                    .any(|t| t.eq_ignore_ascii_case("stylesheet"))
+            });
+            if !is_stylesheet {
+                continue;
+            }
+
+            let Some(href) = get_attr(elem, "href") else {
+                continue;
+            };
+            let href = href.to_string();
+
+            // Skip http/https URLs (offline-first design)
+            if href.starts_with("http://") || href.starts_with("https://") {
+                continue;
+            }
+
+            // Resolve path
+            let path = if std::path::Path::new(&href).is_absolute() {
+                PathBuf::from(&href)
+            } else {
+                self.base_path.join(&href)
+            };
+
+            // Read file (skip with warning if missing)
+            if let Ok(css) = std::fs::read_to_string(&path) {
+                css_entries.push((child_id, css));
+            } else {
+                eprintln!(
+                    "Warning: could not read stylesheet '{}' (resolved to '{}')",
+                    href,
+                    path.display()
+                );
+            }
+        }
+
+        // Phase 2: Replace each <link> with a <style> element
+        for (link_id, css) in css_entries {
+            inject_style_node(doc, head_id, &css, Some(link_id));
+            doc.mutate().remove_node(link_id);
+        }
     }
 }
 
@@ -270,22 +373,9 @@ impl RunningElementPass {
         elem: &blitz_dom::node::ElementData,
     ) -> bool {
         match selector {
-            ParsedSelector::Class(name) => elem
-                .attrs()
-                .iter()
-                .find(|a| a.name.local.as_ref() == "class")
-                .is_some_and(|a| {
-                    let cls: &str = &a.value;
-                    cls.split_whitespace().any(|c| c == name.as_str())
-                }),
-            ParsedSelector::Id(name) => elem
-                .attrs()
-                .iter()
-                .find(|a| a.name.local.as_ref() == "id")
-                .is_some_and(|a| {
-                    let id: &str = &a.value;
-                    id == name.as_str()
-                }),
+            ParsedSelector::Class(name) => get_attr(elem, "class")
+                .is_some_and(|cls| cls.split_whitespace().any(|c| c == name.as_str())),
+            ParsedSelector::Id(name) => get_attr(elem, "id") == Some(name.as_str()),
             ParsedSelector::Tag(name) => elem.name.local.as_ref().eq_ignore_ascii_case(name),
         }
     }
@@ -479,6 +569,155 @@ mod tests {
         assert!(
             store.get("shouldNotMatch").is_none(),
             "Elements inside <head> (like <style>) should not be matched as running elements"
+        );
+    }
+
+    #[test]
+    fn test_link_stylesheet_pass_resolves_local_css() {
+        let dir = tempfile::tempdir().unwrap();
+        let css_path = dir.path().join("style.css");
+        std::fs::write(&css_path, "p { color: red; }").unwrap();
+
+        let html = r#"<html><head><link rel="stylesheet" href="style.css"></head><body><p>Hello</p></body></html>"#;
+        let mut doc = parse(html, 400.0, &[]);
+        let pass = LinkStylesheetPass {
+            base_path: dir.path().to_path_buf(),
+        };
+        let ctx = PassContext {
+            viewport_width: 400.0,
+            viewport_height: 10000.0,
+            font_data: &[],
+        };
+        apply_passes(&mut doc, &[Box::new(pass)], &ctx);
+        resolve(&mut doc);
+        assert!(
+            find_element_by_tag(&doc, "style").is_some(),
+            "Expected a <style> element to be injected from <link> stylesheet"
+        );
+    }
+
+    #[test]
+    fn test_link_stylesheet_pass_ignores_https() {
+        let html = r#"<html><head><link rel="stylesheet" href="https://example.com/style.css"></head><body><p>Hello</p></body></html>"#;
+        let mut doc = parse(html, 400.0, &[]);
+        let pass = LinkStylesheetPass {
+            base_path: PathBuf::from("/tmp"),
+        };
+        let ctx = PassContext {
+            viewport_width: 400.0,
+            viewport_height: 10000.0,
+            font_data: &[],
+        };
+        apply_passes(&mut doc, &[Box::new(pass)], &ctx);
+        resolve(&mut doc);
+        assert!(
+            find_element_by_tag(&doc, "style").is_none(),
+            "Expected no <style> element for https:// link"
+        );
+    }
+
+    #[test]
+    fn test_link_stylesheet_pass_ignores_http() {
+        let html = r#"<html><head><link rel="stylesheet" href="http://example.com/style.css"></head><body><p>Hello</p></body></html>"#;
+        let mut doc = parse(html, 400.0, &[]);
+        let pass = LinkStylesheetPass {
+            base_path: PathBuf::from("/tmp"),
+        };
+        let ctx = PassContext {
+            viewport_width: 400.0,
+            viewport_height: 10000.0,
+            font_data: &[],
+        };
+        apply_passes(&mut doc, &[Box::new(pass)], &ctx);
+        resolve(&mut doc);
+        assert!(
+            find_element_by_tag(&doc, "style").is_none(),
+            "Expected no <style> element for http:// link"
+        );
+    }
+
+    #[test]
+    fn test_link_stylesheet_pass_ignores_missing_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let html = r#"<html><head><link rel="stylesheet" href="nonexistent.css"></head><body><p>Hello</p></body></html>"#;
+        let mut doc = parse(html, 400.0, &[]);
+        let pass = LinkStylesheetPass {
+            base_path: dir.path().to_path_buf(),
+        };
+        let ctx = PassContext {
+            viewport_width: 400.0,
+            viewport_height: 10000.0,
+            font_data: &[],
+        };
+        apply_passes(&mut doc, &[Box::new(pass)], &ctx);
+        resolve(&mut doc);
+        assert!(
+            find_element_by_tag(&doc, "style").is_none(),
+            "Expected no <style> element for missing file"
+        );
+    }
+
+    #[test]
+    fn test_link_stylesheet_pass_multiple_links() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("a.css"), "p { color: red; }").unwrap();
+        std::fs::write(dir.path().join("b.css"), "h1 { font-size: 2em; }").unwrap();
+
+        let html = r#"<html><head><link rel="stylesheet" href="a.css"><link rel="stylesheet" href="b.css"></head><body><p>Hello</p></body></html>"#;
+        let mut doc = parse(html, 400.0, &[]);
+        let pass = LinkStylesheetPass {
+            base_path: dir.path().to_path_buf(),
+        };
+        let ctx = PassContext {
+            viewport_width: 400.0,
+            viewport_height: 10000.0,
+            font_data: &[],
+        };
+        apply_passes(&mut doc, &[Box::new(pass)], &ctx);
+        resolve(&mut doc);
+
+        // Count <style> elements by walking head children
+        let head_id = find_element_by_tag(&doc, "head").unwrap();
+        let head_node = doc.get_node(head_id).unwrap();
+        let style_count = head_node
+            .children
+            .iter()
+            .filter(|&&cid| {
+                doc.get_node(cid)
+                    .and_then(|n| n.element_data())
+                    .is_some_and(|e| e.name.local.as_ref() == "style")
+            })
+            .count();
+        assert_eq!(
+            style_count, 2,
+            "Expected 2 <style> elements for 2 CSS files"
+        );
+    }
+
+    #[test]
+    fn test_link_stylesheet_pass_absolute_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let css_path = dir.path().join("abs.css");
+        std::fs::write(&css_path, "body { margin: 0; }").unwrap();
+
+        let html = format!(
+            r#"<html><head><link rel="stylesheet" href="{}"></head><body><p>Hello</p></body></html>"#,
+            css_path.display()
+        );
+        let mut doc = parse(&html, 400.0, &[]);
+        let pass = LinkStylesheetPass {
+            base_path: PathBuf::from("/nonexistent"),
+        };
+        let ctx = PassContext {
+            viewport_width: 400.0,
+            viewport_height: 10000.0,
+            font_data: &[],
+        };
+        apply_passes(&mut doc, &[Box::new(pass)], &ctx);
+        resolve(&mut doc);
+        assert!(
+            find_element_by_tag(&doc, "style").is_some(),
+            "Expected a <style> element when using absolute path in href"
         );
     }
 }

@@ -6,12 +6,13 @@ use crate::error::Result;
 use crate::pageable::Pageable;
 use crate::render::render_to_pdf;
 use std::collections::HashMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 /// Reusable PDF generation engine.
 pub struct Engine {
     config: Config,
     assets: Option<AssetBundle>,
+    base_path: Option<PathBuf>,
 }
 
 impl Engine {
@@ -19,11 +20,16 @@ impl Engine {
         EngineBuilder {
             config_builder: Config::builder(),
             assets: None,
+            base_path: None,
         }
     }
 
     pub fn config(&self) -> &Config {
         &self.config
+    }
+
+    pub fn base_path(&self) -> Option<&Path> {
+        self.base_path.as_deref()
     }
 
     /// Render a Pageable tree to PDF bytes.
@@ -61,6 +67,14 @@ impl Engine {
 
         // Build and apply DOM passes
         let mut passes: Vec<Box<dyn crate::blitz_adapter::DomPass>> = Vec::new();
+
+        // Resolve <link rel="stylesheet"> before CSS injection
+        if let Some(ref base_path) = self.base_path {
+            passes.push(Box::new(crate::blitz_adapter::LinkStylesheetPass {
+                base_path: base_path.clone(),
+            }));
+        }
+
         if !css_to_inject.is_empty() {
             passes.push(Box::new(crate::blitz_adapter::InjectCssPass {
                 css: css_to_inject.clone(),
@@ -122,6 +136,7 @@ impl Engine {
 pub struct EngineBuilder {
     config_builder: ConfigBuilder,
     assets: Option<AssetBundle>,
+    base_path: Option<PathBuf>,
 }
 
 impl EngineBuilder {
@@ -190,10 +205,46 @@ impl EngineBuilder {
         self
     }
 
+    pub fn base_path(mut self, path: impl Into<PathBuf>) -> Self {
+        self.base_path = Some(path.into());
+        self
+    }
+
     pub fn build(self) -> Engine {
         Engine {
             config: self.config_builder.build(),
             assets: self.assets,
+            base_path: self.base_path,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_engine_builder_base_path() {
+        let engine = Engine::builder().base_path("/tmp/test").build();
+        assert_eq!(engine.base_path(), Some(std::path::Path::new("/tmp/test")));
+    }
+
+    #[test]
+    fn test_engine_builder_no_base_path() {
+        let engine = Engine::builder().build();
+        assert_eq!(engine.base_path(), None);
+    }
+
+    #[test]
+    fn test_render_html_resolves_link_stylesheet() {
+        let dir = tempfile::tempdir().unwrap();
+        let css_path = dir.path().join("test.css");
+        std::fs::write(&css_path, "p { color: red; }").unwrap();
+
+        let html = r#"<html><head><link rel="stylesheet" href="test.css"></head><body><p>Hello</p></body></html>"#;
+
+        let engine = Engine::builder().base_path(dir.path()).build();
+        let result = engine.render_html(html);
+        assert!(result.is_ok());
     }
 }
