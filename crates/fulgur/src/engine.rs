@@ -6,12 +6,13 @@ use crate::error::Result;
 use crate::pageable::Pageable;
 use crate::render::render_to_pdf;
 use std::collections::HashMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 /// Reusable PDF generation engine.
 pub struct Engine {
     config: Config,
     assets: Option<AssetBundle>,
+    base_path: Option<PathBuf>,
 }
 
 impl Engine {
@@ -19,11 +20,16 @@ impl Engine {
         EngineBuilder {
             config_builder: Config::builder(),
             assets: None,
+            base_path: None,
         }
     }
 
     pub fn config(&self) -> &Config {
         &self.config
+    }
+
+    pub fn base_path(&self) -> Option<&Path> {
+        self.base_path.as_deref()
     }
 
     /// Render a Pageable tree to PDF bytes.
@@ -122,6 +128,7 @@ impl Engine {
 pub struct EngineBuilder {
     config_builder: ConfigBuilder,
     assets: Option<AssetBundle>,
+    base_path: Option<PathBuf>,
 }
 
 impl EngineBuilder {
@@ -190,10 +197,33 @@ impl EngineBuilder {
         self
     }
 
+    pub fn base_path(mut self, path: impl Into<PathBuf>) -> Self {
+        self.base_path = Some(path.into());
+        self
+    }
+
     pub fn build(self) -> Engine {
         Engine {
             config: self.config_builder.build(),
             assets: self.assets,
+            base_path: self.base_path,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_engine_builder_base_path() {
+        let engine = Engine::builder().base_path("/tmp/test").build();
+        assert_eq!(engine.base_path(), Some(std::path::Path::new("/tmp/test")));
+    }
+
+    #[test]
+    fn test_engine_builder_no_base_path() {
+        let engine = Engine::builder().build();
+        assert_eq!(engine.base_path(), None);
     }
 }
