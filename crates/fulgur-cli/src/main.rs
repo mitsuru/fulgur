@@ -162,7 +162,12 @@ fn main() {
                     p.canonicalize()
                         .ok()
                         .and_then(|abs| abs.parent().map(|d| d.to_path_buf()))
-                        .or_else(|| p.parent().map(|d| d.to_path_buf()))
+                        .or_else(|| {
+                            p.parent()
+                                .map(|d| d.to_path_buf())
+                                .filter(|d| !d.as_os_str().is_empty())
+                        })
+                        .or_else(|| std::env::current_dir().ok())
                 })
             };
 

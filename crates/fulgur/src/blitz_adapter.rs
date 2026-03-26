@@ -593,7 +593,7 @@ mod tests {
     }
 
     #[test]
-    fn test_link_stylesheet_pass_ignores_http() {
+    fn test_link_stylesheet_pass_ignores_https() {
         let html = r#"<html><head><link rel="stylesheet" href="https://example.com/style.css"></head><body><p>Hello</p></body></html>"#;
         let mut doc = parse(html, 400.0, &[]);
         let pass = LinkStylesheetPass {
@@ -609,6 +609,26 @@ mod tests {
         assert!(
             find_element_by_tag(&doc, "style").is_none(),
             "Expected no <style> element for https:// link"
+        );
+    }
+
+    #[test]
+    fn test_link_stylesheet_pass_ignores_http() {
+        let html = r#"<html><head><link rel="stylesheet" href="http://example.com/style.css"></head><body><p>Hello</p></body></html>"#;
+        let mut doc = parse(html, 400.0, &[]);
+        let pass = LinkStylesheetPass {
+            base_path: PathBuf::from("/tmp"),
+        };
+        let ctx = PassContext {
+            viewport_width: 400.0,
+            viewport_height: 10000.0,
+            font_data: &[],
+        };
+        apply_passes(&mut doc, &[Box::new(pass)], &ctx);
+        resolve(&mut doc);
+        assert!(
+            find_element_by_tag(&doc, "style").is_none(),
+            "Expected no <style> element for http:// link"
         );
     }
 
