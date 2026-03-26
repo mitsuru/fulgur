@@ -67,6 +67,14 @@ impl Engine {
 
         // Build and apply DOM passes
         let mut passes: Vec<Box<dyn crate::blitz_adapter::DomPass>> = Vec::new();
+
+        // Resolve <link rel="stylesheet"> before CSS injection
+        if let Some(ref base_path) = self.base_path {
+            passes.push(Box::new(crate::blitz_adapter::LinkStylesheetPass {
+                base_path: base_path.clone(),
+            }));
+        }
+
         if !css_to_inject.is_empty() {
             passes.push(Box::new(crate::blitz_adapter::InjectCssPass {
                 css: css_to_inject.clone(),
@@ -225,5 +233,18 @@ mod tests {
     fn test_engine_builder_no_base_path() {
         let engine = Engine::builder().build();
         assert_eq!(engine.base_path(), None);
+    }
+
+    #[test]
+    fn test_render_html_resolves_link_stylesheet() {
+        let dir = tempfile::tempdir().unwrap();
+        let css_path = dir.path().join("test.css");
+        std::fs::write(&css_path, "p { color: red; }").unwrap();
+
+        let html = r#"<html><head><link rel="stylesheet" href="test.css"></head><body><p>Hello</p></body></html>"#;
+
+        let engine = Engine::builder().base_path(dir.path()).build();
+        let result = engine.render_html(html);
+        assert!(result.is_ok());
     }
 }
