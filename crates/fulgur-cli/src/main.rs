@@ -154,6 +154,18 @@ fn main() {
             css_files,
             images,
         } => {
+            // Compute base_path before consuming input
+            let base_path = if stdin {
+                std::env::current_dir().ok()
+            } else {
+                input.as_ref().and_then(|p| {
+                    p.canonicalize()
+                        .ok()
+                        .and_then(|abs| abs.parent().map(|d| d.to_path_buf()))
+                        .or_else(|| p.parent().map(|d| d.to_path_buf()))
+                })
+            };
+
             let html = if stdin {
                 let mut buf = String::new();
                 std::io::Read::read_to_string(&mut std::io::stdin(), &mut buf)
@@ -234,6 +246,9 @@ fn main() {
             }
             if let Some(creation_date) = creation_date {
                 builder = builder.creation_date(creation_date);
+            }
+            if let Some(ref base_path) = base_path {
+                builder = builder.base_path(base_path);
             }
             if let Some(assets) = assets {
                 builder = builder.assets(assets);
