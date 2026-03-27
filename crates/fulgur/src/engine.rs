@@ -13,6 +13,9 @@ pub struct Engine {
     config: Config,
     assets: Option<AssetBundle>,
     base_path: Option<PathBuf>,
+    template_name: Option<String>,
+    template_str: Option<String>,
+    data: Option<serde_json::Value>,
 }
 
 impl Engine {
@@ -21,6 +24,9 @@ impl Engine {
             config_builder: Config::builder(),
             assets: None,
             base_path: None,
+            template_name: None,
+            template_str: None,
+            data: None,
         }
     }
 
@@ -121,6 +127,21 @@ impl Engine {
         Ok(())
     }
 
+    /// Render a template with data to PDF bytes.
+    /// The template is expanded via MiniJinja, then passed to render_html().
+    /// Returns an error if no template was set via the builder.
+    pub fn render(&self) -> Result<Vec<u8>> {
+        let template_str = self
+            .template_str
+            .as_deref()
+            .ok_or_else(|| crate::error::Error::Template("no template set".into()))?;
+        let template_name = self.template_name.as_deref().unwrap_or("template.html");
+        let empty = serde_json::Value::Object(serde_json::Map::new());
+        let data = self.data.as_ref().unwrap_or(&empty);
+        let html = crate::template::render_template(template_name, template_str, data)?;
+        self.render_html(&html)
+    }
+
     /// Render a Pageable tree to a PDF file.
     pub fn render_pageable_to_file(
         &self,
@@ -137,6 +158,9 @@ pub struct EngineBuilder {
     config_builder: ConfigBuilder,
     assets: Option<AssetBundle>,
     base_path: Option<PathBuf>,
+    template_name: Option<String>,
+    template_str: Option<String>,
+    data: Option<serde_json::Value>,
 }
 
 impl EngineBuilder {
@@ -210,11 +234,25 @@ impl EngineBuilder {
         self
     }
 
+    pub fn template(mut self, name: impl Into<String>, template: impl Into<String>) -> Self {
+        self.template_name = Some(name.into());
+        self.template_str = Some(template.into());
+        self
+    }
+
+    pub fn data(mut self, data: serde_json::Value) -> Self {
+        self.data = Some(data);
+        self
+    }
+
     pub fn build(self) -> Engine {
         Engine {
             config: self.config_builder.build(),
             assets: self.assets,
             base_path: self.base_path,
+            template_name: self.template_name,
+            template_str: self.template_str,
+            data: self.data,
         }
     }
 }
@@ -233,6 +271,33 @@ mod tests {
     fn test_engine_builder_no_base_path() {
         let engine = Engine::builder().build();
         assert_eq!(engine.base_path(), None);
+    }
+
+    #[test]
+    fn test_engine_render_template() {
+        let engine = Engine::builder()
+            .template("test.html", "<h1>{{ title }}</h1>")
+            .data(serde_json::json!({"title": "Hello"}))
+            .build();
+        let result = engine.render();
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_engine_render_without_template_errors() {
+        let engine = Engine::builder().build();
+        let result = engine.render();
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("Template"));
+    }
+
+    #[test]
+    fn test_engine_render_without_data_uses_empty_object() {
+        let engine = Engine::builder()
+            .template("test.html", "<p>static</p>")
+            .build();
+        let result = engine.render();
+        assert!(result.is_ok());
     }
 
     #[test]
