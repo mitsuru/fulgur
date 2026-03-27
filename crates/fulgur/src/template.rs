@@ -70,4 +70,47 @@ mod tests {
         // MiniJinja auto-escapes HTML by default for .html templates
         assert!(!result.contains("<script>"));
     }
+
+    #[test]
+    fn test_undefined_variable_renders_empty() {
+        // MiniJinja renders undefined variables as empty string by default
+        let tmpl = "{{ missing }}";
+        let data = json!({});
+        let result = render_template("test.html", tmpl, &data).unwrap();
+        assert_eq!(result, "");
+    }
+
+    #[test]
+    fn test_invalid_filter() {
+        let tmpl = "{{ name | nonexistent_filter }}";
+        let data = json!({"name": "hello"});
+        let result = render_template("test.html", tmpl, &data);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_for_loop_over_string_iterates_chars() {
+        // MiniJinja iterates over characters of a string
+        let tmpl = "{% for c in items %}[{{ c }}]{% endfor %}";
+        let data = json!({"items": "ab"});
+        let result = render_template("test.html", tmpl, &data).unwrap();
+        assert_eq!(result, "[a][b]");
+    }
+
+    #[test]
+    fn test_unclosed_block() {
+        let tmpl = "{% for item in items %}{{ item }}";
+        let data = json!({"items": ["a"]});
+        let result = render_template("test.html", tmpl, &data);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_nested_access_missing_key_renders_empty() {
+        // MiniJinja renders missing nested keys as empty string
+        let tmpl = "{{ user.name }}";
+        let data = json!({"user": {}});
+        let result = render_template("test.html", tmpl, &data).unwrap();
+        assert_eq!(result, "");
+    }
 }

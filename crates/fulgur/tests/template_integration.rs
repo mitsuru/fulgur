@@ -32,6 +32,34 @@ fn test_html_mode_still_works() {
 }
 
 #[test]
+fn test_template_syntax_error_propagates() {
+    let result = Engine::builder()
+        .template("bad.html", "{% if %}")
+        .data(json!({}))
+        .build()
+        .render();
+    assert!(result.is_err());
+    assert!(result.unwrap_err().to_string().contains("Template error"));
+}
+
+#[test]
+fn test_render_without_template_errors() {
+    let result = Engine::builder().build().render();
+    assert!(result.is_err());
+    assert!(result.unwrap_err().to_string().contains("no template set"));
+}
+
+#[test]
+fn test_invalid_filter_propagates() {
+    let result = Engine::builder()
+        .template("test.html", "{{ x | bogus }}")
+        .data(json!({"x": 1}))
+        .build()
+        .render();
+    assert!(result.is_err());
+}
+
+#[test]
 fn test_template_with_assets() {
     let mut assets = fulgur::asset::AssetBundle::new();
     assets.add_css("p { color: red; }");
