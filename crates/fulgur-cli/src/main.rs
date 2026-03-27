@@ -83,6 +83,10 @@ enum Commands {
         /// Example: --image logo.png=assets/logo.png
         #[arg(long = "image", short = 'i')]
         images: Vec<String>,
+
+        /// JSON data file for template mode (use "-" for stdin)
+        #[arg(long = "data", short = 'd')]
+        data: Option<PathBuf>,
     },
 }
 
@@ -153,7 +157,13 @@ fn main() {
             fonts,
             css_files,
             images,
+            data,
         } => {
+            if stdin && data.as_ref().is_some_and(|p| p.as_os_str() == "-") {
+                eprintln!("Error: cannot use --stdin and --data - together (both read stdin)");
+                std::process::exit(1);
+            }
+
             // Compute base_path before consuming input
             let base_path = if stdin {
                 std::env::current_dir().ok()
@@ -171,13 +181,13 @@ fn main() {
                 })
             };
 
-            let html = if stdin {
+            let input_content = if stdin {
                 let mut buf = String::new();
                 std::io::Read::read_to_string(&mut std::io::stdin(), &mut buf)
                     .expect("Failed to read stdin");
                 buf
-            } else if let Some(input) = input {
-                std::fs::read_to_string(&input).unwrap_or_else(|e| {
+            } else if let Some(ref input) = input {
+                std::fs::read_to_string(input).unwrap_or_else(|e| {
                     eprintln!("Error reading {}: {e}", input.display());
                     std::process::exit(1);
                 })
@@ -259,26 +269,58 @@ fn main() {
                 builder = builder.assets(assets);
             }
 
+            // Template mode: add template and data to builder
+            if let Some(ref data_path) = data {
+                let json_str = if data_path.as_os_str() == "-" {
+                    let mut buf = String::new();
+                    std::io::Read::read_to_string(&mut std::io::stdin(), &mut buf)
+                        .expect("Failed to read JSON from stdin");
+                    buf
+                } else {
+                    std::fs::read_to_string(data_path).unwrap_or_else(|e| {
+                        eprintln!("Error reading data file {}: {e}", data_path.display());
+                        std::process::exit(1);
+                    })
+                };
+                let json_data: serde_json::Value =
+                    serde_json::from_str(&json_str).unwrap_or_else(|e| {
+                        eprintln!("Error parsing JSON: {e}");
+                        std::process::exit(1);
+                    });
+                let template_name = input
+                    .as_ref()
+                    .and_then(|p| p.file_name())
+                    .and_then(|n| n.to_str())
+                    .unwrap_or("template.html");
+                builder = builder
+                    .template(template_name, &input_content)
+                    .data(json_data);
+            }
+
             let engine = builder.build();
 
+            let pdf = if data.is_some() {
+                engine.render()
+            } else {
+                engine.render_html(&input_content)
+            }
+            .unwrap_or_else(|e| {
+                eprintln!("Error: {e}");
+                std::process::exit(1);
+            });
+
             if output.as_os_str() == "-" {
-                let pdf = engine.render_html(&html).unwrap_or_else(|e| {
-                    eprintln!("Error: {e}");
-                    std::process::exit(1);
-                });
                 use std::io::Write;
                 std::io::stdout().write_all(&pdf).unwrap_or_else(|e| {
                     eprintln!("Error writing to stdout: {e}");
                     std::process::exit(1);
                 });
             } else {
-                match engine.render_html_to_file(&html, &output) {
-                    Ok(()) => eprintln!("PDF written to {}", output.display()),
-                    Err(e) => {
-                        eprintln!("Error: {e}");
-                        std::process::exit(1);
-                    }
-                }
+                std::fs::write(&output, &pdf).unwrap_or_else(|e| {
+                    eprintln!("Error writing to {}: {e}", output.display());
+                    std::process::exit(1);
+                });
+                eprintln!("PDF written to {}", output.display());
             }
         }
     }
