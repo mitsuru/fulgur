@@ -415,7 +415,7 @@ impl BlockPageable {
 
 /// Build a rounded rectangle path using cubic Bézier curves for corners.
 /// radii: [top-left, top-right, bottom-right, bottom-left] × [rx, ry]
-fn build_rounded_rect_path(
+pub fn build_rounded_rect_path(
     x: f32,
     y: f32,
     w: f32,
@@ -520,40 +520,6 @@ fn clone_children(children: &[PositionedChild], y_offset: f32) -> Vec<Positioned
             y: pc.y - y_offset,
         })
         .collect()
-}
-
-/// Draw the background fill for a block or table element.
-fn draw_block_background(
-    canvas: &mut Canvas<'_, '_>,
-    style: &BlockStyle,
-    x: f32,
-    y: f32,
-    w: f32,
-    h: f32,
-) {
-    let Some(bg) = &style.background_color else {
-        return;
-    };
-    let path = if style.has_radius() {
-        build_rounded_rect_path(x, y, w, h, &style.border_radii)
-    } else if let Some(rect) = krilla::geom::Rect::from_xywh(x, y, w, h) {
-        let mut pb = krilla::geom::PathBuilder::new();
-        pb.push_rect(rect);
-        pb.finish()
-    } else {
-        None
-    };
-
-    if let Some(path) = path {
-        canvas.surface.set_fill(Some(krilla::paint::Fill {
-            paint: krilla::color::rgb::Color::new(bg[0], bg[1], bg[2]).into(),
-            opacity: krilla::num::NormalizedF32::new(bg[3] as f32 / 255.0)
-                .unwrap_or(krilla::num::NormalizedF32::ONE),
-            rule: Default::default(),
-        }));
-        canvas.surface.set_stroke(None);
-        canvas.surface.draw_path(&path);
-    }
 }
 
 /// Lighten an RGBA color by a factor (0.0–1.0). Higher factor = lighter.
@@ -1076,7 +1042,7 @@ impl Pageable for BlockPageable {
 
             // visibility: hidden skips own rendering but children still draw
             if self.visible {
-                draw_block_background(canvas, &self.style, x, y, total_width, total_height);
+                crate::background::draw_background(canvas, &self.style, x, y, total_width, total_height);
                 draw_block_border(canvas, &self.style, x, y, total_width, total_height);
             }
 
@@ -1464,7 +1430,7 @@ impl Pageable for TablePageable {
                 .unwrap_or(self.cached_height);
 
             if self.visible {
-                draw_block_background(canvas, &self.style, x, y, total_width, total_height);
+                crate::background::draw_background(canvas, &self.style, x, y, total_width, total_height);
                 draw_block_border(canvas, &self.style, x, y, total_width, total_height);
             }
 

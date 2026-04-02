@@ -2,7 +2,7 @@
 
 use crate::asset::AssetBundle;
 use crate::gcpm::running::RunningElementStore;
-use crate::image::{ImageFormat, ImagePageable};
+use crate::image::ImagePageable;
 use crate::pageable::{
     BackgroundLayer, BgBox, BgClip, BgLengthPercentage, BgRepeat, BgSize, BlockPageable,
     BlockStyle, BorderStyleValue, ListItemPageable, Pageable, PositionedChild, Size,
@@ -641,15 +641,15 @@ fn extract_block_style(node: &Node, assets: Option<&AssetBundle>) -> BlockStyle 
 
             for (i, image) in bg_images.0.iter().enumerate() {
                 use style::values::computed::image::Image;
-                if let Image::Url(ref url) = image {
+                if let Image::Url(url) = image {
                     let src = match url {
-                        style::servo::url::ComputedUrl::Valid(ref u) => u.as_str(),
-                        style::servo::url::ComputedUrl::Invalid(ref s) => s.as_str(),
+                        style::servo::url::ComputedUrl::Valid(u) => u.as_str(),
+                        style::servo::url::ComputedUrl::Invalid(s) => s.as_str(),
                     };
                     if let Some(data) = assets.get_image(src) {
                         if let Some(format) = ImagePageable::detect_format(data) {
-                            let (iw, ih) = ImagePageable::decode_dimensions(data, format)
-                                .unwrap_or((1, 1));
+                            let (iw, ih) =
+                                ImagePageable::decode_dimensions(data, format).unwrap_or((1, 1));
 
                             let size = convert_bg_size(&bg_sizes.0, i);
                             let (px, py) = convert_bg_position(&bg_pos_x.0, &bg_pos_y.0, i);
@@ -694,10 +694,7 @@ fn extract_opacity_visible(node: &Node) -> (f32, bool) {
         .unwrap_or((1.0, true))
 }
 
-fn convert_bg_size(
-    sizes: &[style::values::computed::BackgroundSize],
-    i: usize,
-) -> BgSize {
+fn convert_bg_size(sizes: &[style::values::computed::BackgroundSize], i: usize) -> BgSize {
     use style::values::generics::background::BackgroundSize as StyloBS;
     use style::values::generics::length::GenericLengthPercentageOrAuto as LPAuto;
     let s = &sizes[i % sizes.len()];
@@ -756,10 +753,10 @@ fn convert_bg_repeat(
 }
 
 fn convert_bg_origin(
-    origins: &[style::properties::longhands::background_origin::computed_value::T],
+    origins: &[style::properties::longhands::background_origin::single_value::computed_value::T],
     i: usize,
 ) -> BgBox {
-    use style::properties::longhands::background_origin::computed_value::T as O;
+    use style::properties::longhands::background_origin::single_value::computed_value::T as O;
     match origins[i % origins.len()] {
         O::BorderBox => BgBox::BorderBox,
         O::PaddingBox => BgBox::PaddingBox,
@@ -768,10 +765,10 @@ fn convert_bg_origin(
 }
 
 fn convert_bg_clip(
-    clips: &[style::properties::longhands::background_clip::computed_value::T],
+    clips: &[style::properties::longhands::background_clip::single_value::computed_value::T],
     i: usize,
 ) -> BgClip {
-    use style::properties::longhands::background_clip::computed_value::T as C;
+    use style::properties::longhands::background_clip::single_value::computed_value::T as C;
     match clips[i % clips.len()] {
         C::BorderBox => BgClip::BorderBox,
         C::PaddingBox => BgClip::PaddingBox,
