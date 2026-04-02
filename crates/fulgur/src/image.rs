@@ -69,7 +69,10 @@ impl Pageable for ImagePageable {
     fn draw(&self, canvas: &mut Canvas<'_, '_>, x: Pt, y: Pt, _avail_width: Pt, _avail_height: Pt) {
         use crate::pageable::draw_with_opacity;
 
-        draw_with_opacity(canvas, self.opacity, self.visible, |canvas| {
+        if !self.visible {
+            return;
+        }
+        draw_with_opacity(canvas, self.opacity, |canvas| {
             let data: krilla::Data = Arc::clone(&self.image_data).into();
             let image_result = match self.format {
                 ImageFormat::Png => krilla::image::Image::from_png(data, true),

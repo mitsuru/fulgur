@@ -553,7 +553,10 @@ impl Pageable for ParagraphPageable {
     }
 
     fn draw(&self, canvas: &mut Canvas<'_, '_>, x: Pt, y: Pt, _avail_width: Pt, _avail_height: Pt) {
-        crate::pageable::draw_with_opacity(canvas, self.opacity, self.visible, |canvas| {
+        if !self.visible {
+            return;
+        }
+        crate::pageable::draw_with_opacity(canvas, self.opacity, |canvas| {
             draw_shaped_lines(canvas, &self.lines, x, y);
         });
     }

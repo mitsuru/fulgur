@@ -352,6 +352,7 @@ fn convert_table(
         .iter()
         .fold(0.0f32, |max_h, pc| max_h.max(pc.y + pc.child.height()));
 
+    let (opacity, visible) = extract_opacity_visible(node);
     let table = TablePageable {
         header_cells,
         body_cells,
@@ -360,6 +361,8 @@ fn convert_table(
         layout_size: Some(Size { width, height }),
         width,
         cached_height: height,
+        opacity,
+        visible,
     };
     Box::new(table)
 }

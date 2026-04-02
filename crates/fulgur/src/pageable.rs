@@ -52,16 +52,20 @@ pub struct Canvas<'a, 'b> {
     pub surface: &'a mut krilla::surface::Surface<'b>,
 }
 
-/// Run a draw closure wrapped in opacity/visibility guards.
-/// Skips drawing entirely if invisible or fully transparent.
+/// Run a draw closure wrapped in opacity guards.
+/// Skips drawing entirely if fully transparent (opacity == 0).
 /// Wraps in a Krilla transparency group if partially transparent.
+///
+/// **Does NOT check visibility.** CSS `visibility: hidden` only hides
+/// the element's own content (background, border, text) but children
+/// with `visibility: visible` must still render. Container draw()
+/// methods handle visibility themselves.
 pub fn draw_with_opacity(
     canvas: &mut Canvas<'_, '_>,
     opacity: f32,
-    visible: bool,
     f: impl FnOnce(&mut Canvas<'_, '_>),
 ) {
-    if !visible || opacity == 0.0 {
+    if opacity == 0.0 {
         return;
     }
     let needs_opacity = opacity < 1.0;
@@ -984,7 +988,7 @@ impl Pageable for BlockPageable {
     }
 
     fn draw(&self, canvas: &mut Canvas<'_, '_>, x: Pt, y: Pt, avail_width: Pt, avail_height: Pt) {
-        draw_with_opacity(canvas, self.opacity, self.visible, |canvas| {
+        draw_with_opacity(canvas, self.opacity, |canvas| {
             // Prefer layout_size (Taffy-computed, stable) over cached_size (may be children-only)
             let total_width = self
                 .layout_size
@@ -997,8 +1001,11 @@ impl Pageable for BlockPageable {
                 .map(|s| s.height)
                 .unwrap_or(avail_height);
 
-            draw_block_background(canvas, &self.style, x, y, total_width, total_height);
-            draw_block_border(canvas, &self.style, x, y, total_width, total_height);
+            // visibility: hidden skips own rendering but children still draw
+            if self.visible {
+                draw_block_background(canvas, &self.style, x, y, total_width, total_height);
+                draw_block_border(canvas, &self.style, x, y, total_width, total_height);
+            }
 
             for pc in &self.children {
                 pc.child
@@ -1172,13 +1179,12 @@ impl Pageable for ListItemPageable {
     }
 
     fn draw(&self, canvas: &mut Canvas<'_, '_>, x: Pt, y: Pt, avail_width: Pt, avail_height: Pt) {
-        draw_with_opacity(canvas, self.opacity, self.visible, |canvas| {
-            // Draw marker to the left of the body
-            if !self.marker_lines.is_empty() {
+        draw_with_opacity(canvas, self.opacity, |canvas| {
+            // visibility: hidden skips marker but body still draws (children have own visibility)
+            if self.visible && !self.marker_lines.is_empty() {
                 let marker_x = x - self.marker_width;
                 crate::paragraph::draw_shaped_lines(canvas, &self.marker_lines, marker_x, y);
             }
-            // Draw body
             self.body.draw(canvas, x, y, avail_width, avail_height);
         });
     }
@@ -1219,6 +1225,8 @@ pub struct TablePageable {
     pub width: Pt,
     /// Cached height from wrap()
     pub cached_height: Pt,
+    pub opacity: f32,
+    pub visible: bool,
 }
 
 impl Pageable for TablePageable {
@@ -1292,6 +1300,8 @@ impl Pageable for TablePageable {
                 layout_size: None,
                 width: self.width,
                 cached_height: 0.0,
+                opacity: self.opacity,
+                visible: self.visible,
             }),
             Box::new(TablePageable {
                 header_cells: second_header,
@@ -1301,6 +1311,8 @@ impl Pageable for TablePageable {
                 layout_size: None,
                 width: self.width,
                 cached_height: 0.0,
+                opacity: self.opacity,
+                visible: self.visible,
             }),
         ))
     }
@@ -1353,6 +1365,8 @@ impl Pageable for TablePageable {
                 layout_size: None,
                 width: me.width,
                 cached_height: 0.0,
+                opacity: me.opacity,
+                visible: me.visible,
             }),
             Box::new(TablePageable {
                 header_cells: me.header_cells,
@@ -1362,24 +1376,30 @@ impl Pageable for TablePageable {
                 layout_size: None,
                 width: me.width,
                 cached_height: 0.0,
+                opacity: me.opacity,
+                visible: me.visible,
             }),
         ))
     }
 
     fn draw(&self, canvas: &mut Canvas<'_, '_>, x: Pt, y: Pt, _avail_width: Pt, _avail_height: Pt) {
-        let total_width = self.width;
-        let total_height = self
-            .layout_size
-            .map(|s| s.height)
-            .unwrap_or(self.cached_height);
+        draw_with_opacity(canvas, self.opacity, |canvas| {
+            let total_width = self.width;
+            let total_height = self
+                .layout_size
+                .map(|s| s.height)
+                .unwrap_or(self.cached_height);
 
-        draw_block_background(canvas, &self.style, x, y, total_width, total_height);
-        draw_block_border(canvas, &self.style, x, y, total_width, total_height);
+            if self.visible {
+                draw_block_background(canvas, &self.style, x, y, total_width, total_height);
+                draw_block_border(canvas, &self.style, x, y, total_width, total_height);
+            }
 
-        for pc in self.header_cells.iter().chain(self.body_cells.iter()) {
-            pc.child
-                .draw(canvas, x + pc.x, y + pc.y, total_width, pc.child.height());
-        }
+            for pc in self.header_cells.iter().chain(self.body_cells.iter()) {
+                pc.child
+                    .draw(canvas, x + pc.x, y + pc.y, total_width, pc.child.height());
+            }
+        });
     }
 
     fn pagination(&self) -> Pagination {
@@ -1553,6 +1573,8 @@ mod tests {
             layout_size: None,
             width: 200.0,
             cached_height: 0.0,
+            opacity: 1.0,
+            visible: true,
         };
         table.wrap(200.0, 1000.0);
 
