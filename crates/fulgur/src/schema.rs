@@ -222,9 +222,19 @@ fn collect_from_stmt(
         ast::Stmt::IfCond(c) => {
             // if blocks do NOT create a new scope in MiniJinja —
             // set statements inside propagate to the parent scope.
+            // Process each branch independently and merge bindings conservatively.
             collect_from_expr(&c.expr, root, scope);
-            collect_from_stmts(&c.true_body, root, scope);
-            collect_from_stmts(&c.false_body, root, scope);
+            let mut true_scope = scope.clone();
+            collect_from_stmts(&c.true_body, root, &mut true_scope);
+            let mut false_scope = scope.clone();
+            collect_from_stmts(&c.false_body, root, &mut false_scope);
+            // Merge: any binding added in either branch propagates to parent
+            for (k, v) in true_scope {
+                scope.entry(k).or_insert(v);
+            }
+            for (k, v) in false_scope {
+                scope.entry(k).or_insert(v);
+            }
         }
         ast::Stmt::WithBlock(w) => {
             // Collect from assignment expressions (the right-hand sides)
@@ -333,6 +343,19 @@ fn collect_from_expr(
             // Recurse into both base and subscript expressions
             collect_from_expr(&gi.expr, root, scope);
             collect_from_expr(&gi.subscript_expr, root, scope);
+        }
+        ast::Expr::List(l) => {
+            for item in &l.items {
+                collect_from_expr(item, root, scope);
+            }
+        }
+        ast::Expr::Map(m) => {
+            for k in &m.keys {
+                collect_from_expr(k, root, scope);
+            }
+            for v in &m.values {
+                collect_from_expr(v, root, scope);
+            }
         }
         ast::Expr::Var(_) => {
             // Already handled above via resolve_expr_path
@@ -696,5 +719,28 @@ mod tests {
         // ns is a local (namespace() call can't resolve to a path),
         // ns.found should NOT appear as top-level "found"
         assert!(schema["properties"].get("found").is_none());
+    }
+
+    #[test]
+    fn test_if_branches_independent_scope() {
+        let schema = extract_schema(
+            "{% if cond %}{% set x = user %}{% else %}{% set x = account %}{% endif %}{{ x.id }}",
+            "test.html",
+        )
+        .unwrap();
+        // Both user and account should be collected (conservative merge)
+        assert_eq!(schema["properties"]["user"]["type"], "object");
+        assert_eq!(
+            schema["properties"]["user"]["properties"]["id"]["type"],
+            "string"
+        );
+        assert!(schema["properties"]["x"].is_null());
+    }
+
+    #[test]
+    fn test_list_expression_collects_variables() {
+        let schema = extract_schema("{{ [title, subtitle] | join(', ') }}", "test.html").unwrap();
+        assert_eq!(schema["properties"]["title"]["type"], "string");
+        assert_eq!(schema["properties"]["subtitle"]["type"], "string");
     }
 }
