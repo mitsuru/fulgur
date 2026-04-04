@@ -88,6 +88,31 @@ enum Commands {
         #[arg(long = "data", short = 'd')]
         data: Option<PathBuf>,
     },
+    /// Template utilities (powered by MiniJinja)
+    Template {
+        #[command(subcommand)]
+        command: TemplateCommands,
+    },
+}
+
+#[derive(Subcommand)]
+enum TemplateCommands {
+    /// Extract JSON Schema from a MiniJinja HTML template.
+    /// Analyzes template syntax to infer variable names and types.
+    /// With --data, uses actual JSON values for precise type inference.
+    Schema {
+        /// Input HTML template file
+        #[arg()]
+        input: PathBuf,
+
+        /// Sample JSON data file for precise type inference
+        #[arg(long = "data", short = 'd')]
+        data: Option<PathBuf>,
+
+        /// Output file (default: stdout)
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
 }
 
 fn parse_page_size(s: &str) -> PageSize {
@@ -323,5 +348,56 @@ fn main() {
                 eprintln!("PDF written to {}", output.display());
             }
         }
+        Commands::Template { command } => match command {
+            TemplateCommands::Schema {
+                input,
+                data,
+                output,
+            } => {
+                let template_str = std::fs::read_to_string(&input).unwrap_or_else(|e| {
+                    eprintln!("Error reading {}: {e}", input.display());
+                    std::process::exit(1);
+                });
+                let template_name = input
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or("template.html");
+
+                let schema = if let Some(ref data_path) = data {
+                    let json_str = std::fs::read_to_string(data_path).unwrap_or_else(|e| {
+                        eprintln!("Error reading {}: {e}", data_path.display());
+                        std::process::exit(1);
+                    });
+                    let json_data: serde_json::Value = serde_json::from_str(&json_str)
+                        .unwrap_or_else(|e| {
+                            eprintln!("Error parsing JSON: {e}");
+                            std::process::exit(1);
+                        });
+                    fulgur::schema::extract_schema_with_data(
+                        &template_str,
+                        template_name,
+                        &json_data,
+                    )
+                } else {
+                    fulgur::schema::extract_schema(&template_str, template_name)
+                }
+                .unwrap_or_else(|e| {
+                    eprintln!("Error extracting schema: {e}");
+                    std::process::exit(1);
+                });
+
+                let json_output = serde_json::to_string_pretty(&schema).unwrap();
+
+                if let Some(ref output_path) = output {
+                    std::fs::write(output_path, &json_output).unwrap_or_else(|e| {
+                        eprintln!("Error writing to {}: {e}", output_path.display());
+                        std::process::exit(1);
+                    });
+                    eprintln!("Schema written to {}", output_path.display());
+                } else {
+                    println!("{json_output}");
+                }
+            }
+        },
     }
 }
