@@ -9,7 +9,7 @@ pub fn extract_schema(template_str: &str, template_name: &str) -> crate::error::
     let stmt = parse(
         template_str,
         template_name,
-        SyntaxConfig::default(),
+        SyntaxConfig,
         WhitespaceConfig::default(),
     )?;
 
@@ -65,6 +65,25 @@ fn inferred_to_schema(t: &InferredType) -> Value {
 /// For example, `{% for item in items %}` maps "item" to ["items"].
 type Scope = BTreeMap<String, Vec<String>>;
 
+/// Process a list of statements sequentially, accumulating `set` variable names
+/// into the scope so that later statements see them as local variables.
+fn collect_from_stmts(
+    stmts: &[ast::Stmt<'_>],
+    root: &mut BTreeMap<String, InferredType>,
+    scope: &Scope,
+) {
+    let mut scope = scope.clone();
+    for stmt in stmts {
+        collect_from_stmt(stmt, root, &scope);
+        // If this was a Set statement, add the variable to scope for subsequent statements
+        if let ast::Stmt::Set(s) = stmt {
+            if let ast::Expr::Var(v) = &s.target {
+                scope.insert(v.id.to_string(), vec![]);
+            }
+        }
+    }
+}
+
 fn collect_from_stmt(
     stmt: &ast::Stmt<'_>,
     root: &mut BTreeMap<String, InferredType>,
@@ -72,9 +91,7 @@ fn collect_from_stmt(
 ) {
     match stmt {
         ast::Stmt::Template(t) => {
-            for child in &t.children {
-                collect_from_stmt(child, root, scope);
-            }
+            collect_from_stmts(&t.children, root, scope);
         }
         ast::Stmt::EmitExpr(e) => {
             collect_from_expr(&e.expr, root, scope);
@@ -100,41 +117,43 @@ fn collect_from_stmt(
                 new_scope.insert(loop_var, path);
             }
 
-            for child in &f.body {
-                collect_from_stmt(child, root, &new_scope);
-            }
-            for child in &f.else_body {
-                collect_from_stmt(child, root, scope);
-            }
+            collect_from_stmts(&f.body, root, &new_scope);
+            collect_from_stmts(&f.else_body, root, scope);
         }
         ast::Stmt::IfCond(c) => {
             collect_from_expr(&c.expr, root, scope);
-            for child in &c.true_body {
-                collect_from_stmt(child, root, scope);
-            }
-            for child in &c.false_body {
-                collect_from_stmt(child, root, scope);
-            }
+            collect_from_stmts(&c.true_body, root, scope);
+            collect_from_stmts(&c.false_body, root, scope);
         }
         ast::Stmt::WithBlock(w) => {
-            for child in &w.body {
-                collect_from_stmt(child, root, scope);
+            // Collect from assignment expressions (the right-hand sides)
+            for (_, value_expr) in &w.assignments {
+                collect_from_expr(value_expr, root, scope);
             }
+            // Create a new scope with the `with` variable assignments so they
+            // don't leak as top-level schema properties.
+            let mut new_scope = scope.clone();
+            for (target_expr, _) in &w.assignments {
+                if let ast::Expr::Var(v) = target_expr {
+                    new_scope.insert(v.id.to_string(), vec![]);
+                }
+            }
+            collect_from_stmts(&w.body, root, &new_scope);
         }
         ast::Stmt::FilterBlock(fb) => {
-            for child in &fb.body {
-                collect_from_stmt(child, root, scope);
-            }
+            collect_from_stmts(&fb.body, root, scope);
         }
         ast::Stmt::AutoEscape(ae) => {
-            for child in &ae.body {
-                collect_from_stmt(child, root, scope);
-            }
+            collect_from_stmts(&ae.body, root, scope);
+        }
+        ast::Stmt::Set(s) => {
+            // Collect from the assigned expression
+            collect_from_expr(&s.expr, root, scope);
+            // Note: the variable is added to scope by collect_from_stmts
+            // for subsequent sibling statements.
         }
         ast::Stmt::SetBlock(sb) => {
-            for child in &sb.body {
-                collect_from_stmt(child, root, scope);
-            }
+            collect_from_stmts(&sb.body, root, scope);
         }
         _ => {}
     }
@@ -145,9 +164,15 @@ fn collect_from_expr(
     root: &mut BTreeMap<String, InferredType>,
     scope: &Scope,
 ) {
-    // Try to resolve expression to a variable path and register it
+    // Try to resolve expression to a variable path and register it.
+    // Skip resolve_path for loop variables used standalone (without attribute access)
+    // because their array type is already ensured by ensure_array_at_path in the ForLoop handler.
+    // Also skip variables mapped to an empty path (set/with local variables).
     if let Some(path) = resolve_expr_path(expr, scope) {
-        resolve_path(root, &path, InferredType::String);
+        let is_scope_var_standalone = matches!(expr, ast::Expr::Var(v) if scope.contains_key(v.id));
+        if !is_scope_var_standalone && !path.is_empty() {
+            resolve_path(root, &path, InferredType::String);
+        }
     }
 
     // Also recurse into sub-expressions for filters, calls, etc.
@@ -305,8 +330,30 @@ fn ensure_array_at_path(root: &mut BTreeMap<String, InferredType>, path: &[Strin
         let entry = root
             .entry(key.clone())
             .or_insert_with(|| InferredType::Object(BTreeMap::new()));
-        if let InferredType::Object(children) = entry {
-            ensure_array_at_path(children, &path[1..]);
+        match entry {
+            InferredType::Object(children) => {
+                ensure_array_at_path(children, &path[1..]);
+            }
+            InferredType::Array(inner) => {
+                // Path continues into array items
+                match inner.as_mut() {
+                    InferredType::Object(children) => {
+                        ensure_array_at_path(children, &path[1..]);
+                    }
+                    other => {
+                        // Upgrade from String to Object
+                        let mut children = BTreeMap::new();
+                        ensure_array_at_path(&mut children, &path[1..]);
+                        *other = InferredType::Object(children);
+                    }
+                }
+            }
+            _ => {
+                // Upgrade String to Object
+                let mut children = BTreeMap::new();
+                ensure_array_at_path(&mut children, &path[1..]);
+                *entry = InferredType::Object(children);
+            }
         }
     }
 }
@@ -362,5 +409,58 @@ mod tests {
                 .unwrap()
                 .contains("invoice.html")
         );
+    }
+
+    #[test]
+    fn test_if_condition_variable() {
+        let schema = extract_schema("{% if show %}<p>visible</p>{% endif %}", "test.html").unwrap();
+        assert_eq!(schema["properties"]["show"]["type"], "string");
+    }
+
+    #[test]
+    fn test_filter_expression() {
+        let schema = extract_schema("{{ name | upper }}", "test.html").unwrap();
+        assert_eq!(schema["properties"]["name"]["type"], "string");
+    }
+
+    #[test]
+    fn test_nested_for_loops() {
+        let schema = extract_schema(
+            "{% for row in table %}{% for cell in row.cells %}{{ cell.value }}{% endfor %}{% endfor %}",
+            "test.html",
+        )
+        .unwrap();
+        let table = &schema["properties"]["table"];
+        assert_eq!(table["type"], "array");
+        assert_eq!(table["items"]["type"], "object");
+        assert_eq!(table["items"]["properties"]["cells"]["type"], "array");
+        assert_eq!(
+            table["items"]["properties"]["cells"]["items"]["type"],
+            "object"
+        );
+        assert_eq!(
+            table["items"]["properties"]["cells"]["items"]["properties"]["value"]["type"],
+            "string"
+        );
+    }
+
+    #[test]
+    fn test_with_block_scoping() {
+        let schema =
+            extract_schema("{% with x = title %}{{ x }}{% endwith %}", "test.html").unwrap();
+        // `title` should appear as a top-level property (from the assignment RHS)
+        assert_eq!(schema["properties"]["title"]["type"], "string");
+        // `x` should NOT appear as a top-level property (it's a local variable)
+        assert!(schema["properties"]["x"].is_null());
+    }
+
+    #[test]
+    fn test_set_variable_scoping() {
+        let schema =
+            extract_schema("{% set greeting = name %}{{ greeting }}", "test.html").unwrap();
+        // `name` should appear (from the set expression)
+        assert_eq!(schema["properties"]["name"]["type"], "string");
+        // `greeting` should NOT appear (it's a locally-set variable)
+        assert!(schema["properties"]["greeting"].is_null());
     }
 }
