@@ -14,8 +14,8 @@ pub fn extract_schema(template_str: &str, template_name: &str) -> crate::error::
     )?;
 
     let mut root = BTreeMap::new();
-    let scope = BTreeMap::new();
-    collect_from_stmt(&stmt, &mut root, &scope);
+    let mut scope = BTreeMap::new();
+    collect_from_stmt(&stmt, &mut root, &mut scope);
 
     let mut schema = json!({
         "$schema": "http://json-schema.org/draft-07/schema#",
@@ -45,8 +45,8 @@ pub fn extract_schema_with_data(
 
     // Collect used variables from template AST
     let mut root = BTreeMap::new();
-    let scope = BTreeMap::new();
-    collect_from_stmt(&stmt, &mut root, &scope);
+    let mut scope = BTreeMap::new();
+    collect_from_stmt(&stmt, &mut root, &mut scope);
 
     // Build schema from sample data, but only for variables used in the template
     let mut properties = serde_json::Map::new();
@@ -130,35 +130,49 @@ fn inferred_to_schema(t: &InferredType) -> Value {
 /// For example, `{% for item in items %}` maps "item" to ["items"].
 type Scope = BTreeMap<String, Vec<String>>;
 
+/// Extract all variable names from a target expression (supports tuple unpacking).
+/// For example, `(key, value)` yields `["key", "value"]`.
+fn extract_var_names(expr: &ast::Expr<'_>) -> Vec<String> {
+    match expr {
+        ast::Expr::Var(v) => vec![v.id.to_string()],
+        ast::Expr::List(l) => l.items.iter().flat_map(extract_var_names).collect(),
+        _ => vec![],
+    }
+}
+
+/// Accumulate `set`/`setblock` variable bindings from a statement into the scope.
+fn accumulate_set_in_scope(stmt: &ast::Stmt<'_>, scope: &mut Scope) {
+    if let ast::Stmt::Set(s) = stmt {
+        if let ast::Expr::Var(v) = &s.target {
+            let rhs_path = resolve_expr_path(&s.expr, scope).unwrap_or_default();
+            scope.insert(v.id.to_string(), rhs_path);
+        }
+    }
+    if let ast::Stmt::SetBlock(sb) = stmt {
+        if let ast::Expr::Var(v) = &sb.target {
+            scope.insert(v.id.to_string(), vec![]);
+        }
+    }
+}
+
 /// Process a list of statements sequentially, accumulating `set` variable names
 /// into the scope so that later statements see them as local variables.
+/// The scope is mutated in place; callers that need a new scope should clone before calling.
 fn collect_from_stmts(
     stmts: &[ast::Stmt<'_>],
     root: &mut BTreeMap<String, InferredType>,
-    scope: &Scope,
+    scope: &mut Scope,
 ) {
-    let mut scope = scope.clone();
     for stmt in stmts {
-        collect_from_stmt(stmt, root, &scope);
-        // If this was a Set statement, add the variable to scope for subsequent statements
-        if let ast::Stmt::Set(s) = stmt {
-            if let ast::Expr::Var(v) = &s.target {
-                let rhs_path = resolve_expr_path(&s.expr, &scope).unwrap_or_default();
-                scope.insert(v.id.to_string(), rhs_path);
-            }
-        }
-        if let ast::Stmt::SetBlock(sb) = stmt {
-            if let ast::Expr::Var(v) = &sb.target {
-                scope.insert(v.id.to_string(), vec![]);
-            }
-        }
+        collect_from_stmt(stmt, root, scope);
+        accumulate_set_in_scope(stmt, scope);
     }
 }
 
 fn collect_from_stmt(
     stmt: &ast::Stmt<'_>,
     root: &mut BTreeMap<String, InferredType>,
-    scope: &Scope,
+    scope: &mut Scope,
 ) {
     match stmt {
         ast::Stmt::Template(t) => {
@@ -168,11 +182,8 @@ fn collect_from_stmt(
             collect_from_expr(&e.expr, root, scope);
         }
         ast::Stmt::ForLoop(f) => {
-            // Try to extract loop variable name from target
-            let loop_var = match &f.target {
-                ast::Expr::Var(v) => Some(v.id.to_string()),
-                _ => None,
-            };
+            // Extract all variable names from the target (supports tuple unpacking)
+            let var_names = extract_var_names(&f.target);
 
             // Resolve the iterator expression to a path
             let iter_path = resolve_expr_path(&f.iter, scope);
@@ -185,19 +196,32 @@ fn collect_from_stmt(
             // Collect variables from the iter expression itself
             collect_from_expr(&f.iter, root, scope);
 
-            // Create new scope with loop variable mapped (if extractable)
-            let body_scope = if let (Some(var), Some(path)) = (loop_var, iter_path) {
-                let mut new_scope = scope.clone();
-                new_scope.insert(var, path);
-                new_scope
+            // Create new scope with loop variable(s) mapped
+            let mut body_scope = scope.clone();
+            if let Some(path) = &iter_path {
+                if var_names.len() == 1 {
+                    // Single variable: map to iter path for attribute resolution
+                    body_scope.insert(var_names[0].clone(), path.clone());
+                } else {
+                    // Tuple unpacking: variables are local (empty path)
+                    for name in &var_names {
+                        body_scope.insert(name.clone(), vec![]);
+                    }
+                }
             } else {
-                scope.clone()
-            };
+                // No resolvable iter path: all vars are local
+                for name in &var_names {
+                    body_scope.insert(name.clone(), vec![]);
+                }
+            }
 
-            collect_from_stmts(&f.body, root, &body_scope);
-            collect_from_stmts(&f.else_body, root, scope);
+            collect_from_stmts(&f.body, root, &mut body_scope);
+            let mut else_scope = scope.clone();
+            collect_from_stmts(&f.else_body, root, &mut else_scope);
         }
         ast::Stmt::IfCond(c) => {
+            // if blocks do NOT create a new scope in MiniJinja —
+            // set statements inside propagate to the parent scope.
             collect_from_expr(&c.expr, root, scope);
             collect_from_stmts(&c.true_body, root, scope);
             collect_from_stmts(&c.false_body, root, scope);
@@ -211,18 +235,26 @@ fn collect_from_stmt(
             // don't leak as top-level schema properties.
             let mut new_scope = scope.clone();
             for (target_expr, value_expr) in &w.assignments {
-                if let ast::Expr::Var(v) = target_expr {
+                let var_names = extract_var_names(target_expr);
+                if var_names.len() == 1 {
                     let rhs_path = resolve_expr_path(value_expr, &new_scope).unwrap_or_default();
-                    new_scope.insert(v.id.to_string(), rhs_path);
+                    new_scope.insert(var_names[0].clone(), rhs_path);
+                } else {
+                    // Tuple unpacking: all vars are local
+                    for name in var_names {
+                        new_scope.insert(name, vec![]);
+                    }
                 }
             }
-            collect_from_stmts(&w.body, root, &new_scope);
+            collect_from_stmts(&w.body, root, &mut new_scope);
         }
         ast::Stmt::FilterBlock(fb) => {
-            collect_from_stmts(&fb.body, root, scope);
+            let mut body_scope = scope.clone();
+            collect_from_stmts(&fb.body, root, &mut body_scope);
         }
         ast::Stmt::AutoEscape(ae) => {
-            collect_from_stmts(&ae.body, root, scope);
+            let mut body_scope = scope.clone();
+            collect_from_stmts(&ae.body, root, &mut body_scope);
         }
         ast::Stmt::Set(s) => {
             // Collect from the assigned expression
@@ -231,7 +263,8 @@ fn collect_from_stmt(
             // for subsequent sibling statements.
         }
         ast::Stmt::SetBlock(sb) => {
-            collect_from_stmts(&sb.body, root, scope);
+            let mut body_scope = scope.clone();
+            collect_from_stmts(&sb.body, root, &mut body_scope);
         }
         _ => {}
     }
@@ -296,6 +329,11 @@ fn collect_from_expr(
                 collect_from_expr(&a.expr, root, scope);
             }
         }
+        ast::Expr::GetItem(gi) => {
+            // Recurse into both base and subscript expressions
+            collect_from_expr(&gi.expr, root, scope);
+            collect_from_expr(&gi.subscript_expr, root, scope);
+        }
         ast::Expr::Var(_) => {
             // Already handled above via resolve_expr_path
         }
@@ -334,7 +372,11 @@ fn resolve_expr_path(expr: &ast::Expr<'_>, scope: &Scope) -> Option<Vec<String>>
                 return None;
             }
             if let Some(base_path) = scope.get(name) {
-                Some(base_path.clone())
+                if base_path.is_empty() {
+                    None // Local variable (e.g. setblock, namespace), not an input
+                } else {
+                    Some(base_path.clone())
+                }
             } else {
                 Some(vec![name.to_string()])
             }
@@ -603,5 +645,56 @@ mod tests {
         assert_eq!(schema["properties"]["title"]["type"], "string");
         // pairs should be an array (from the iterator)
         assert_eq!(schema["properties"]["pairs"]["type"], "array");
+    }
+
+    #[test]
+    fn test_for_loop_tuple_unpacking_no_leak() {
+        let schema = extract_schema(
+            "{% for key, value in pairs %}{{ key }}: {{ value }}{% endfor %}",
+            "test.html",
+        )
+        .unwrap();
+        // pairs should be an array
+        assert_eq!(schema["properties"]["pairs"]["type"], "array");
+        // key and value are loop-local — they must NOT leak to top-level schema
+        assert!(schema["properties"]["key"].is_null());
+        assert!(schema["properties"]["value"].is_null());
+    }
+
+    #[test]
+    fn test_if_block_set_propagates() {
+        let schema = extract_schema(
+            "{% if true %}{% set u = user %}{% endif %}{{ u.name }}",
+            "test.html",
+        )
+        .unwrap();
+        // user should be collected (from set RHS) with nested name attribute
+        assert_eq!(schema["properties"]["user"]["type"], "object");
+        assert_eq!(
+            schema["properties"]["user"]["properties"]["name"]["type"],
+            "string"
+        );
+        // u should NOT appear as a top-level property (it's an alias)
+        assert!(schema["properties"]["u"].is_null());
+    }
+
+    #[test]
+    fn test_getitem_collects_variables() {
+        let schema = extract_schema("{{ items[key] }}", "test.html").unwrap();
+        // Both items and key should be collected as top-level variables
+        assert_eq!(schema["properties"]["items"]["type"], "string");
+        assert_eq!(schema["properties"]["key"]["type"], "string");
+    }
+
+    #[test]
+    fn test_namespace_local_does_not_leak() {
+        let schema = extract_schema(
+            "{% set ns = namespace(found=false) %}{{ ns.found }}",
+            "test.html",
+        )
+        .unwrap();
+        // ns is a local (namespace() call can't resolve to a path),
+        // ns.found should NOT appear as top-level "found"
+        assert!(schema["properties"].get("found").is_none());
     }
 }
