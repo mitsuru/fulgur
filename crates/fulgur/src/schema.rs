@@ -143,6 +143,12 @@ fn collect_from_stmts(
         // If this was a Set statement, add the variable to scope for subsequent statements
         if let ast::Stmt::Set(s) = stmt {
             if let ast::Expr::Var(v) = &s.target {
+                let rhs_path = resolve_expr_path(&s.expr, &scope).unwrap_or_default();
+                scope.insert(v.id.to_string(), rhs_path);
+            }
+        }
+        if let ast::Stmt::SetBlock(sb) = stmt {
+            if let ast::Expr::Var(v) = &sb.target {
                 scope.insert(v.id.to_string(), vec![]);
             }
         }
@@ -162,10 +168,10 @@ fn collect_from_stmt(
             collect_from_expr(&e.expr, root, scope);
         }
         ast::Stmt::ForLoop(f) => {
-            // Extract loop variable name from target
+            // Try to extract loop variable name from target
             let loop_var = match &f.target {
-                ast::Expr::Var(v) => v.id.to_string(),
-                _ => return, // Tuple unpacking etc. not supported yet
+                ast::Expr::Var(v) => Some(v.id.to_string()),
+                _ => None,
             };
 
             // Resolve the iterator expression to a path
@@ -176,13 +182,19 @@ fn collect_from_stmt(
                 ensure_array_at_path(root, path);
             }
 
-            // Create new scope with loop variable mapped
-            let mut new_scope = scope.clone();
-            if let Some(path) = iter_path {
-                new_scope.insert(loop_var, path);
-            }
+            // Collect variables from the iter expression itself
+            collect_from_expr(&f.iter, root, scope);
 
-            collect_from_stmts(&f.body, root, &new_scope);
+            // Create new scope with loop variable mapped (if extractable)
+            let body_scope = if let (Some(var), Some(path)) = (loop_var, iter_path) {
+                let mut new_scope = scope.clone();
+                new_scope.insert(var, path);
+                new_scope
+            } else {
+                scope.clone()
+            };
+
+            collect_from_stmts(&f.body, root, &body_scope);
             collect_from_stmts(&f.else_body, root, scope);
         }
         ast::Stmt::IfCond(c) => {
@@ -198,9 +210,10 @@ fn collect_from_stmt(
             // Create a new scope with the `with` variable assignments so they
             // don't leak as top-level schema properties.
             let mut new_scope = scope.clone();
-            for (target_expr, _) in &w.assignments {
+            for (target_expr, value_expr) in &w.assignments {
                 if let ast::Expr::Var(v) = target_expr {
-                    new_scope.insert(v.id.to_string(), vec![]);
+                    let rhs_path = resolve_expr_path(value_expr, &new_scope).unwrap_or_default();
+                    new_scope.insert(v.id.to_string(), rhs_path);
                 }
             }
             collect_from_stmts(&w.body, root, &new_scope);
@@ -559,5 +572,29 @@ mod tests {
         let schema = extract_schema_with_data("{{ used }}", "test.html", &data).unwrap();
         assert!(schema["properties"].get("used").is_some());
         assert!(schema["properties"].get("unused").is_none());
+    }
+
+    #[test]
+    fn test_set_with_attr_access() {
+        let schema = extract_schema("{% set u = user %}{{ u.name }}", "test.html").unwrap();
+        assert_eq!(schema["properties"]["user"]["type"], "object");
+        assert_eq!(
+            schema["properties"]["user"]["properties"]["name"]["type"],
+            "string"
+        );
+        assert!(schema["properties"]["u"].is_null());
+    }
+
+    #[test]
+    fn test_for_loop_tuple_unpacking_still_collects_body() {
+        let schema = extract_schema(
+            "{% for key, value in pairs %}{{ title }}{% endfor %}",
+            "test.html",
+        )
+        .unwrap();
+        // title should be in schema even though tuple unpacking is not supported
+        assert_eq!(schema["properties"]["title"]["type"], "string");
+        // pairs should be an array (from the iterator)
+        assert_eq!(schema["properties"]["pairs"]["type"], "array");
     }
 }

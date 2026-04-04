@@ -24,7 +24,7 @@ parley = "0.6"
 skrifa = "0.37"
 stylo = "0.8.0"
 thiserror = "2"
-minijinja = { version = "2", features = ["unstable_machinery"] }
+minijinja = { version = "=2.19.0", features = ["unstable_machinery"] }
 serde_json = "1"
 
 [dev-dependencies]
