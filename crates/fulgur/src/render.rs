@@ -163,6 +163,34 @@ fn get_body_child_width(doc: &blitz_html::HtmlDocument) -> f32 {
     0.0
 }
 
+/// Get the height of the first non-zero-height child of `<body>` in a Blitz document.
+/// This represents the max-content height of a margin box content laid out at a fixed width.
+fn get_body_child_height(doc: &blitz_html::HtmlDocument) -> f32 {
+    use std::ops::Deref;
+    let root = doc.root_element();
+    let base_doc = doc.deref();
+    if let Some(root_node) = base_doc.get_node(root.id) {
+        for &child_id in &root_node.children {
+            if let Some(child) = base_doc.get_node(child_id) {
+                if let blitz_dom::NodeData::Element(elem) = &child.data {
+                    if elem.name.local.as_ref() == "body" {
+                        for &body_child_id in &child.children {
+                            if let Some(body_child) = base_doc.get_node(body_child_id) {
+                                let h = body_child.final_layout.size.height;
+                                if h > 0.0 {
+                                    return h;
+                                }
+                            }
+                        }
+                        return child.final_layout.size.height;
+                    }
+                }
+            }
+        }
+    }
+    0.0
+}
+
 /// Render a Pageable tree to PDF bytes with GCPM margin box support.
 ///
 /// Uses a 2-pass approach:
@@ -195,8 +223,10 @@ pub fn render_to_pdf_with_gcpm(
     // injected for running elements (they need to be visible in margin boxes).
     let margin_css = strip_display_none(&gcpm.cleaned_css);
 
-    // Caches: measure (html → max-content width), render (html+width → Pageable)
+    // Caches: measure (html → max-content width), height (html → max-content height),
+    // render (html+width → Pageable)
     let mut measure_cache: MeasureCache = HashMap::new();
+    let mut height_cache: MeasureCache = HashMap::new();
     let mut render_cache: RenderCache = HashMap::new();
 
     let mut document = krilla::Document::new();
@@ -263,9 +293,21 @@ pub fn render_to_pdf_with_gcpm(
             }
         }
 
-        // Stage 1: Measure max-content width for each unique HTML.
+        // Stage 1a: Measure max-content width for top/bottom boxes.
         // Uses inline-block wrapper so Blitz computes shrink-to-fit width.
-        for html in resolved_htmls.values() {
+        for (&pos, html) in &resolved_htmls {
+            let is_side = matches!(
+                pos,
+                MarginBoxPosition::LeftTop
+                    | MarginBoxPosition::LeftMiddle
+                    | MarginBoxPosition::LeftBottom
+                    | MarginBoxPosition::RightTop
+                    | MarginBoxPosition::RightMiddle
+                    | MarginBoxPosition::RightBottom
+            );
+            if is_side {
+                continue;
+            }
             if !measure_cache.contains_key(html) {
                 let measure_html = format!(
                     "<html><head><style>{}</style></head><body style=\"margin:0;padding:0;\"><div style=\"display:inline-block\">{}</div></body></html>",
@@ -279,6 +321,34 @@ pub fn render_to_pdf_with_gcpm(
                 );
                 let max_content_width = get_body_child_width(&measure_doc);
                 measure_cache.insert(html.clone(), max_content_width);
+            }
+        }
+
+        // Stage 1b: Measure max-content height for left/right boxes.
+        // Layout at fixed margin width, then read the resulting height.
+        for (&pos, html) in &resolved_htmls {
+            let fixed_width = match pos {
+                MarginBoxPosition::LeftTop
+                | MarginBoxPosition::LeftMiddle
+                | MarginBoxPosition::LeftBottom => config.margin.left,
+                MarginBoxPosition::RightTop
+                | MarginBoxPosition::RightMiddle
+                | MarginBoxPosition::RightBottom => config.margin.right,
+                _ => continue,
+            };
+            if !height_cache.contains_key(html) {
+                let measure_html = format!(
+                    "<html><head><style>{}</style></head><body style=\"margin:0;padding:0;\">{}</body></html>",
+                    margin_css, html
+                );
+                let measure_doc = crate::blitz_adapter::parse_and_layout(
+                    &measure_html,
+                    fixed_width,
+                    page_size.height,
+                    font_data,
+                );
+                let max_content_height = get_body_child_height(&measure_doc);
+                height_cache.insert(html.clone(), max_content_height);
             }
         }
 
