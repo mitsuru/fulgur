@@ -155,6 +155,24 @@ fn accumulate_set_in_scope(stmt: &ast::Stmt<'_>, scope: &mut Scope) {
     }
 }
 
+/// Process an IfCond statement, returning the independent scopes for each branch.
+fn collect_if_cond_scopes(
+    stmt: &ast::Stmt<'_>,
+    root: &mut BTreeMap<String, InferredType>,
+    scope: &Scope,
+) -> (Scope, Scope) {
+    if let ast::Stmt::IfCond(c) = stmt {
+        collect_from_expr(&c.expr, root, scope);
+        let mut true_scope = scope.clone();
+        collect_from_stmts(&c.true_body, root, &mut true_scope);
+        let mut false_scope = scope.clone();
+        collect_from_stmts(&c.false_body, root, &mut false_scope);
+        (true_scope, false_scope)
+    } else {
+        (scope.clone(), scope.clone())
+    }
+}
+
 /// Process a list of statements sequentially, accumulating `set` variable names
 /// into the scope so that later statements see them as local variables.
 /// The scope is mutated in place; callers that need a new scope should clone before calling.
@@ -163,7 +181,35 @@ fn collect_from_stmts(
     root: &mut BTreeMap<String, InferredType>,
     scope: &mut Scope,
 ) {
-    for stmt in stmts {
+    for (i, stmt) in stmts.iter().enumerate() {
+        if let ast::Stmt::IfCond(_) = stmt {
+            // Process IfCond and get the divergent scopes
+            let (true_scope, false_scope) = collect_if_cond_scopes(stmt, root, scope);
+            // Process remaining statements with each branch's scope independently
+            let remaining = &stmts[i + 1..];
+            if !remaining.is_empty() {
+                let mut true_s = true_scope;
+                collect_from_stmts(remaining, root, &mut true_s);
+                let mut false_s = false_scope;
+                collect_from_stmts(remaining, root, &mut false_s);
+                // Merge both scopes into parent
+                for (k, v) in true_s {
+                    scope.entry(k).or_insert(v);
+                }
+                for (k, v) in false_s {
+                    scope.entry(k).or_insert(v);
+                }
+            } else {
+                // No remaining statements, just merge scopes
+                for (k, v) in true_scope {
+                    scope.entry(k).or_insert(v);
+                }
+                for (k, v) in false_scope {
+                    scope.entry(k).or_insert(v);
+                }
+            }
+            return; // remaining already processed
+        }
         collect_from_stmt(stmt, root, scope);
         accumulate_set_in_scope(stmt, scope);
     }
@@ -219,16 +265,11 @@ fn collect_from_stmt(
             let mut else_scope = scope.clone();
             collect_from_stmts(&f.else_body, root, &mut else_scope);
         }
-        ast::Stmt::IfCond(c) => {
-            // if blocks do NOT create a new scope in MiniJinja —
-            // set statements inside propagate to the parent scope.
-            // Process each branch independently and merge bindings conservatively.
-            collect_from_expr(&c.expr, root, scope);
-            let mut true_scope = scope.clone();
-            collect_from_stmts(&c.true_body, root, &mut true_scope);
-            let mut false_scope = scope.clone();
-            collect_from_stmts(&c.false_body, root, &mut false_scope);
-            // Merge: any binding added in either branch propagates to parent
+        ast::Stmt::IfCond(_) => {
+            // IfCond is handled specially by collect_from_stmts to process
+            // remaining sibling statements with each branch's scope independently.
+            // When called directly (e.g. from Template), use the helper.
+            let (true_scope, false_scope) = collect_if_cond_scopes(stmt, root, scope);
             for (k, v) in true_scope {
                 scope.entry(k).or_insert(v);
             }
@@ -685,20 +726,23 @@ mod tests {
     }
 
     #[test]
-    fn test_if_block_set_propagates() {
+    fn test_if_set_both_branches() {
+        // When both branches set the same variable, both RHS paths are resolved
         let schema = extract_schema(
-            "{% if true %}{% set u = user %}{% endif %}{{ u.name }}",
+            "{% if cond %}{% set u = user %}{% else %}{% set u = admin %}{% endif %}{{ u.name }}",
             "test.html",
         )
         .unwrap();
-        // user should be collected (from set RHS) with nested name attribute
         assert_eq!(schema["properties"]["user"]["type"], "object");
         assert_eq!(
             schema["properties"]["user"]["properties"]["name"]["type"],
             "string"
         );
-        // u should NOT appear as a top-level property (it's an alias)
-        assert!(schema["properties"]["u"].is_null());
+        assert_eq!(schema["properties"]["admin"]["type"], "object");
+        assert_eq!(
+            schema["properties"]["admin"]["properties"]["name"]["type"],
+            "string"
+        );
     }
 
     #[test]
@@ -732,6 +776,11 @@ mod tests {
         assert_eq!(schema["properties"]["user"]["type"], "object");
         assert_eq!(
             schema["properties"]["user"]["properties"]["id"]["type"],
+            "string"
+        );
+        assert_eq!(schema["properties"]["account"]["type"], "object");
+        assert_eq!(
+            schema["properties"]["account"]["properties"]["id"]["type"],
             "string"
         );
         assert!(schema["properties"]["x"].is_null());
