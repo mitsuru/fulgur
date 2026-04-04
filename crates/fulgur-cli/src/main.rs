@@ -14,6 +14,19 @@ struct Cli {
 #[derive(Subcommand)]
 enum Commands {
     /// Render HTML to PDF
+    #[command(after_long_help = "\
+\x1b[1;4mTemplate filters:\x1b[0m
+
+  When using --data, the input HTML is processed as a MiniJinja template.
+  In addition to MiniJinja built-in filters (upper, lower, join, etc.),
+  the following custom filter is available:
+
+  \x1b[1mformat(spec)\x1b[0m  Python-style numeric formatting
+    {{ price | format(\",\") }}      → 1,234,567       (comma separator)
+    {{ price | format(\",.2f\") }}   → 1,234,567.89    (comma + 2 decimals)
+    {{ rate  | format(\".2f\") }}    → 10.50            (2 decimal places)
+    {{ seq   | format(\"04d\") }}    → 0005             (zero-padded)
+")]
     Render {
         /// Input HTML file (omit for --stdin)
         #[arg()]
