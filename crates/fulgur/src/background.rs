@@ -228,11 +228,7 @@ fn compute_clip_rect(
 ///
 /// Per CSS Backgrounds §5.3, inner radii are `max(outer_radius - inset, 0)` where
 /// the inset depends on the background-clip box.
-fn compute_inner_radii(
-    outer: &[[f32; 2]; 4],
-    style: &BlockStyle,
-    clip: &BgClip,
-) -> [[f32; 2]; 4] {
+fn compute_inner_radii(outer: &[[f32; 2]; 4], style: &BlockStyle, clip: &BgClip) -> [[f32; 2]; 4] {
     let bw = &style.border_widths;
     let pad = &style.padding;
     // Insets: (top, right, bottom, left)
@@ -250,10 +246,22 @@ fn compute_inner_radii(
     // top-left: (top, left), top-right: (top, right),
     // bottom-right: (bottom, right), bottom-left: (bottom, left)
     [
-        [f32::max(outer[0][0] - left, 0.0), f32::max(outer[0][1] - top, 0.0)],
-        [f32::max(outer[1][0] - right, 0.0), f32::max(outer[1][1] - top, 0.0)],
-        [f32::max(outer[2][0] - right, 0.0), f32::max(outer[2][1] - bottom, 0.0)],
-        [f32::max(outer[3][0] - left, 0.0), f32::max(outer[3][1] - bottom, 0.0)],
+        [
+            f32::max(outer[0][0] - left, 0.0),
+            f32::max(outer[0][1] - top, 0.0),
+        ],
+        [
+            f32::max(outer[1][0] - right, 0.0),
+            f32::max(outer[1][1] - top, 0.0),
+        ],
+        [
+            f32::max(outer[2][0] - right, 0.0),
+            f32::max(outer[2][1] - bottom, 0.0),
+        ],
+        [
+            f32::max(outer[3][0] - left, 0.0),
+            f32::max(outer[3][1] - bottom, 0.0),
+        ],
     ]
 }
 
