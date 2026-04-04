@@ -158,4 +158,9 @@ fn test_visibility_hidden_list_item() {
     let pdf = engine.render_html(html).unwrap();
     assert!(pdf.starts_with(b"%PDF"));
     assert!(pdf.len() > 500);
+    // Neither hidden nor visible list items (with default opacity) should produce transparency groups
+    assert!(
+        !has_transparency_group(&pdf),
+        "list items without explicit opacity should not produce Transparency Group"
+    );
 }
