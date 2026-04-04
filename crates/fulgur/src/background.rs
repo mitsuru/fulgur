@@ -326,7 +326,7 @@ fn resolve_repeat_axis(
             if image_size <= 0.0 {
                 return (image_size, 0.0, position, position);
             }
-            let offset = ((position - clip_start) % image_size + image_size) % image_size;
+            let offset = ((clip_start - position) % image_size + image_size) % image_size;
             let start = clip_start - offset;
             (image_size, 0.0, start, clip_end)
         }
@@ -425,5 +425,15 @@ mod tests {
         assert_eq!(size, 100.0);
         assert_eq!(space, 0.0);
         assert_eq!(start, 0.0);
+    }
+
+    #[test]
+    fn test_repeat_alignment_with_offset_position() {
+        // Tiles must align with position: tiles at position ± n*image_size.
+        // position=25, clip_start=10, image_size=20 → tiles at 5, 25, 45, ...
+        let (size, _space, start, _end) =
+            resolve_repeat_axis(BgRepeat::Repeat, 25.0, 20.0, 10.0, 100.0);
+        assert_eq!(size, 20.0);
+        assert_eq!(start, 5.0);
     }
 }
