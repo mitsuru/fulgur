@@ -94,6 +94,9 @@ impl ImagePageable {
                         return None;
                     }
                     let seg_len = u16::from_be_bytes([data[i], data[i + 1]]) as usize;
+                    if seg_len < 2 {
+                        return None;
+                    }
                     i += seg_len;
                 }
                 None
