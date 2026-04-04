@@ -298,7 +298,7 @@ pub fn render_to_pdf_with_gcpm(
             let hc_key = (html.clone(), width_key(fixed_width));
             height_cache.entry(hc_key).or_insert_with(|| {
                 let measure_html = format!(
-                    "<html><head><style>{}</style></head><body style=\"margin:0;padding:0;\">{}</body></html>",
+                    "<html><head><style>{}</style></head><body style=\"margin:0;padding:0;\"><div>{}</div></body></html>",
                     margin_css, html
                 );
                 let measure_doc = crate::blitz_adapter::parse_and_layout(
