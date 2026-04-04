@@ -191,7 +191,7 @@ impl MarginBoxPosition {
     }
 }
 
-/// Map an edge to its (left, center, right) non-corner positions.
+/// Map an edge to its (first, center, last) non-corner positions.
 fn edge_positions(edge: Edge) -> (MarginBoxPosition, MarginBoxPosition, MarginBoxPosition) {
     match edge {
         Edge::Top => (
@@ -204,8 +204,6 @@ fn edge_positions(edge: Edge) -> (MarginBoxPosition, MarginBoxPosition, MarginBo
             MarginBoxPosition::BottomCenter,
             MarginBoxPosition::BottomRight,
         ),
-        // Left/Right don't use this helper in compute_edge_layout,
-        // but we provide a mapping for completeness.
         Edge::Left => (
             MarginBoxPosition::LeftTop,
             MarginBoxPosition::LeftMiddle,
@@ -293,99 +291,88 @@ pub fn compute_edge_layout(
 ) -> HashMap<MarginBoxPosition, MarginBoxRect> {
     let mut result = HashMap::new();
 
-    match edge {
-        Edge::Top | Edge::Bottom => {
-            let content_width = page_size.width - margin.left - margin.right;
-            let (y, height) = if edge == Edge::Top {
-                (0.0, margin.top)
-            } else {
-                (page_size.height - margin.bottom, margin.bottom)
-            };
+    let (first_pos, center_pos, last_pos) = edge_positions(edge);
+    let first_max = defined.get(&first_pos).copied();
+    let center_max = defined.get(&center_pos).copied();
+    let last_max = defined.get(&last_pos).copied();
 
-            let (left_pos, center_pos, right_pos) = edge_positions(edge);
-            let left_max = defined.get(&left_pos).copied();
-            let center_max = defined.get(&center_pos).copied();
-            let right_max = defined.get(&right_pos).copied();
+    // Primary axis: width for T/B, height for L/R
+    // fixed_origin: start offset on primary axis (margin.left for T/B, margin.top for L/R)
+    // cross_origin: position on cross axis (y for T/B, x for L/R)
+    // cross_extent: size on cross axis (margin height for T/B, margin width for L/R)
+    let (available, fixed_origin, cross_origin, cross_extent) = match edge {
+        Edge::Top => (
+            page_size.width - margin.left - margin.right,
+            margin.left,
+            0.0,
+            margin.top,
+        ),
+        Edge::Bottom => (
+            page_size.width - margin.left - margin.right,
+            margin.left,
+            page_size.height - margin.bottom,
+            margin.bottom,
+        ),
+        Edge::Left => (
+            page_size.height - margin.top - margin.bottom,
+            margin.top,
+            0.0,
+            margin.left,
+        ),
+        Edge::Right => (
+            page_size.height - margin.top - margin.bottom,
+            margin.top,
+            page_size.width - margin.right,
+            margin.right,
+        ),
+    };
 
-            let (l_w, c_w, r_w) = distribute_sizes(left_max, center_max, right_max, content_width);
+    let (f_size, c_size, l_size) = distribute_sizes(first_max, center_max, last_max, available);
 
-            // Compute x positions. When center is defined, left and right
-            // slots are always equal width (half_ac), even if one is undefined.
-            // This keeps center visually centered on the content area.
-            if let Some(cw) = c_w {
-                // Center-based layout: left_slot | center | right_slot
-                let left_slot = l_w.unwrap_or_else(|| {
-                    // Left undefined: reserve same space as right slot
-                    r_w.unwrap_or(0.0)
-                });
-                let x_left = margin.left;
-                let x_center = x_left + left_slot;
-                let x_right = x_center + cw;
+    let is_horizontal = matches!(edge, Edge::Top | Edge::Bottom);
 
-                if let Some(w) = l_w {
-                    result.insert(
-                        left_pos,
-                        MarginBoxRect {
-                            x: x_left,
-                            y,
-                            width: w,
-                            height,
-                        },
-                    );
-                }
-                result.insert(
-                    center_pos,
-                    MarginBoxRect {
-                        x: x_center,
-                        y,
-                        width: cw,
-                        height,
-                    },
-                );
-                if let Some(w) = r_w {
-                    result.insert(
-                        right_pos,
-                        MarginBoxRect {
-                            x: x_right,
-                            y,
-                            width: w,
-                            height,
-                        },
-                    );
-                }
-            } else {
-                // No center: sequential layout
-                let mut x = margin.left;
-                if let Some(w) = l_w {
-                    result.insert(
-                        left_pos,
-                        MarginBoxRect {
-                            x,
-                            y,
-                            width: w,
-                            height,
-                        },
-                    );
-                    x += w;
-                }
-                if let Some(w) = r_w {
-                    result.insert(
-                        right_pos,
-                        MarginBoxRect {
-                            x,
-                            y,
-                            width: w,
-                            height,
-                        },
-                    );
-                }
+    // Build rect from primary-axis offset and size
+    let make_rect = |offset: f32, size: f32| -> MarginBoxRect {
+        if is_horizontal {
+            MarginBoxRect {
+                x: offset,
+                y: cross_origin,
+                width: size,
+                height: cross_extent,
+            }
+        } else {
+            MarginBoxRect {
+                x: cross_origin,
+                y: offset,
+                width: cross_extent,
+                height: size,
             }
         }
-        Edge::Left | Edge::Right => {
-            // Phase 3: just return bounding_rect for each defined position
-            for &pos in defined.keys() {
-                result.insert(pos, pos.bounding_rect(page_size, margin));
-            }
+    };
+
+    if let Some(cs) = c_size {
+        // Center-based layout: first_slot | center | last_slot
+        let first_slot = f_size.unwrap_or_else(|| l_size.unwrap_or(0.0));
+        let o_first = fixed_origin;
+        let o_center = o_first + first_slot;
+        let o_last = o_center + cs;
+
+        if let Some(s) = f_size {
+            result.insert(first_pos, make_rect(o_first, s));
+        }
+        result.insert(center_pos, make_rect(o_center, cs));
+        if let Some(s) = l_size {
+            result.insert(last_pos, make_rect(o_last, s));
+        }
+    } else {
+        // No center: sequential layout
+        let mut offset = fixed_origin;
+        if let Some(s) = f_size {
+            result.insert(first_pos, make_rect(offset, s));
+            offset += s;
+        }
+        if let Some(s) = l_size {
+            result.insert(last_pos, make_rect(offset, s));
         }
     }
 
@@ -593,6 +580,84 @@ mod tests {
         assert!((c.x - (l.x + l.width)).abs() < 0.01);
         // Right starts after center
         assert!((r.x - (c.x + c.width)).abs() < 0.01);
+    }
+
+    #[test]
+    fn test_compute_edge_layout_left_all_three() {
+        let page = PageSize::A4;
+        let margin = Margin::uniform(72.0);
+        let content_height = page.height - margin.top - margin.bottom;
+
+        let mut defined = BTreeMap::new();
+        defined.insert(MarginBoxPosition::LeftTop, 50.0);
+        defined.insert(MarginBoxPosition::LeftMiddle, 200.0);
+        defined.insert(MarginBoxPosition::LeftBottom, 50.0);
+
+        let result = compute_edge_layout(Edge::Left, &defined, page, margin);
+        assert_eq!(result.len(), 3);
+
+        let t = result[&MarginBoxPosition::LeftTop];
+        let m = result[&MarginBoxPosition::LeftMiddle];
+        let b = result[&MarginBoxPosition::LeftBottom];
+
+        // Heights sum to content_height
+        assert!((t.height + m.height + b.height - content_height).abs() < 0.01);
+        // All have x=0, width=margin.left
+        assert!((t.x - 0.0).abs() < 0.01);
+        assert!((t.width - margin.left).abs() < 0.01);
+        // Correct y positions: top starts at margin.top
+        assert!((t.y - margin.top).abs() < 0.01);
+        // Middle starts after top
+        assert!((m.y - (t.y + t.height)).abs() < 0.01);
+        // Bottom starts after middle
+        assert!((b.y - (m.y + m.height)).abs() < 0.01);
+    }
+
+    #[test]
+    fn test_compute_edge_layout_right_top_bottom() {
+        let page = PageSize::A4;
+        let margin = Margin::uniform(72.0);
+        let content_height = page.height - margin.top - margin.bottom;
+
+        let mut defined = BTreeMap::new();
+        defined.insert(MarginBoxPosition::RightTop, 100.0);
+        defined.insert(MarginBoxPosition::RightBottom, 200.0);
+
+        let result = compute_edge_layout(Edge::Right, &defined, page, margin);
+        assert_eq!(result.len(), 2);
+
+        let t = result[&MarginBoxPosition::RightTop];
+        let b = result[&MarginBoxPosition::RightBottom];
+
+        // Heights sum to content_height
+        assert!((t.height + b.height - content_height).abs() < 0.01);
+        // x = page_width - margin.right, width = margin.right
+        assert!((t.x - (page.width - margin.right)).abs() < 0.01);
+        assert!((t.width - margin.right).abs() < 0.01);
+        // Top starts at margin.top
+        assert!((t.y - margin.top).abs() < 0.01);
+        // Bottom starts where top ends
+        assert!((b.y - (t.y + t.height)).abs() < 0.01);
+    }
+
+    #[test]
+    fn test_compute_edge_layout_left_middle_only() {
+        let page = PageSize::A4;
+        let margin = Margin::uniform(72.0);
+        let content_height = page.height - margin.top - margin.bottom;
+
+        let mut defined = BTreeMap::new();
+        defined.insert(MarginBoxPosition::LeftMiddle, 100.0);
+
+        let result = compute_edge_layout(Edge::Left, &defined, page, margin);
+        assert_eq!(result.len(), 1);
+
+        let m = result[&MarginBoxPosition::LeftMiddle];
+        // Single slot gets full height
+        assert!((m.height - content_height).abs() < 0.01);
+        assert!((m.x - 0.0).abs() < 0.01);
+        assert!((m.y - margin.top).abs() < 0.01);
+        assert!((m.width - margin.left).abs() < 0.01);
     }
 
     #[test]
