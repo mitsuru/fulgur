@@ -84,7 +84,7 @@ enum Commands {
         #[arg(long = "image", short = 'i')]
         images: Vec<String>,
 
-        /// JSON data file for template mode (use "-" for stdin)
+        /// MiniJinja JSON data file for template rendering ("-" for stdin, see `fulgur template`)
         #[arg(long = "data", short = 'd')]
         data: Option<PathBuf>,
     },
