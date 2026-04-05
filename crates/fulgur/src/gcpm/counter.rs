@@ -118,7 +118,9 @@ fn resolve_string_policy(state: &StringSetPageState, policy: StringPolicy) -> &s
 /// running element instance for the given page (0-based `page_idx`).
 ///
 /// WeasyPrint-compatible semantics:
-/// - `first` / `start`: first instance assigned on the current page.
+/// - `first`: first instance assigned on the current page.
+/// - `start`: ignores current-page assignments and returns the last instance
+///   of the most recent preceding page (the value in effect at page start).
 /// - `last`: last instance assigned on the current page.
 /// - `first-except`: returns `None` if the current page has any assignment.
 /// - Fallback (any policy, no resolution on current page): the last instance
