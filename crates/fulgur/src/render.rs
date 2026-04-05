@@ -187,7 +187,11 @@ pub fn render_to_pdf_with_gcpm(
     } else {
         crate::paginate::collect_string_set_states(&pages)
     };
-    let running_states = crate::paginate::collect_running_element_states(&pages);
+    let running_states = if gcpm.running_mappings.is_empty() {
+        vec![BTreeMap::new(); pages.len()]
+    } else {
+        crate::paginate::collect_running_element_states(&pages)
+    };
 
     let page_size = if config.landscape {
         config.page_size.landscape()
