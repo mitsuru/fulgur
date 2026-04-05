@@ -43,6 +43,21 @@ pub enum StringPolicy {
     FirstExcept,
 }
 
+/// Policy for `element(name, <policy>)` — determines which running element
+/// instance to show on a given page. WeasyPrint-compatible semantics.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ElementPolicy {
+    /// First instance assigned on the current page (default).
+    First,
+    /// Element in effect at start of page. Implemented identically to `First`
+    /// with fallback (WeasyPrint has the same effective behavior).
+    Start,
+    /// Last instance assigned on the current page.
+    Last,
+    /// Like `First`, but empty on pages where the element is assigned.
+    FirstExcept,
+}
+
 /// A single value component within a `string-set` declaration.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum StringSetValue {
@@ -72,8 +87,13 @@ pub struct StringSetMapping {
 /// A single content item inside a margin box rule's `content` property.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ContentItem {
-    /// A running element reference, e.g. `element(title)`.
-    Element(String),
+    /// A running element reference, e.g. `element(title)` or `element(title, first)`.
+    Element {
+        /// The running element name.
+        name: String,
+        /// The policy for selecting which instance to show.
+        policy: ElementPolicy,
+    },
     /// A counter reference, e.g. `counter(page)`.
     Counter(CounterType),
     /// A literal string, e.g. `"Page "`.
