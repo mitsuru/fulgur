@@ -332,3 +332,139 @@ fn test_gcpm_side_boxes_asymmetric_margins() {
     assert!(!pdf.is_empty());
     assert!(pdf.starts_with(b"%PDF-"));
 }
+
+#[test]
+fn test_gcpm_string_set_chapter_title() {
+    let css = r#"
+        h1 { string-set: chapter-title content(text); }
+        @page {
+            @top-center { content: string(chapter-title); }
+            @bottom-center { content: "Page " counter(page) " of " counter(pages); }
+        }
+    "#;
+
+    let mut paragraphs = String::new();
+    for i in 0..3 {
+        paragraphs.push_str(&format!(
+            "<h1>Chapter {}</h1>\n<p>Content for chapter {}. This paragraph has enough text to take some space on the page.</p>\n",
+            i + 1, i + 1
+        ));
+        for j in 0..20 {
+            paragraphs.push_str(&format!(
+                "<p>Paragraph {} of chapter {}.</p>\n",
+                j + 1,
+                i + 1
+            ));
+        }
+    }
+
+    let html = format!(
+        r#"<!DOCTYPE html>
+<html>
+<head></head>
+<body>
+{}
+</body>
+</html>"#,
+        paragraphs
+    );
+
+    let mut assets = AssetBundle::new();
+    assets.add_css(css);
+
+    let engine = Engine::builder().assets(assets).build();
+    let pdf = engine.render_html(&html).unwrap();
+
+    assert!(!pdf.is_empty(), "PDF output should not be empty");
+    assert!(
+        pdf.starts_with(b"%PDF-"),
+        "PDF output should start with %PDF-"
+    );
+}
+
+#[test]
+fn test_gcpm_string_set_with_attr() {
+    let css = r#"
+        h1 { string-set: title attr(data-title); }
+        @page {
+            @top-left { content: string(title); }
+        }
+    "#;
+
+    let html = r#"<!DOCTYPE html>
+<html>
+<head></head>
+<body>
+  <h1 data-title="Custom Title">Visible Heading</h1>
+  <p>Some body content.</p>
+</body>
+</html>"#;
+
+    let mut assets = AssetBundle::new();
+    assets.add_css(css);
+
+    let engine = Engine::builder().assets(assets).build();
+    let pdf = engine.render_html(html).unwrap();
+
+    assert!(!pdf.is_empty());
+    assert!(pdf.starts_with(b"%PDF-"));
+}
+
+#[test]
+fn test_gcpm_string_set_with_literal_concat() {
+    let css = r#"
+        h1 { string-set: header "Section: " content(text); }
+        @page {
+            @top-center { content: string(header); }
+        }
+    "#;
+
+    let html = r#"<!DOCTYPE html>
+<html>
+<head></head>
+<body>
+  <h1>Introduction</h1>
+  <p>Body text.</p>
+</body>
+</html>"#;
+
+    let mut assets = AssetBundle::new();
+    assets.add_css(css);
+
+    let engine = Engine::builder().assets(assets).build();
+    let pdf = engine.render_html(html).unwrap();
+
+    assert!(!pdf.is_empty());
+    assert!(pdf.starts_with(b"%PDF-"));
+}
+
+#[test]
+fn test_gcpm_string_set_with_policies() {
+    let css = r#"
+        h2 { string-set: section content(text); }
+        @page {
+            @top-left { content: string(section, start); }
+            @top-right { content: string(section, last); }
+        }
+    "#;
+
+    let mut body = String::new();
+    for i in 0..30 {
+        body.push_str(&format!("<h2>Section {}</h2>\n<p>Content.</p>\n", i + 1));
+    }
+
+    let html = format!(
+        r#"<!DOCTYPE html>
+<html><head></head><body>{}</body></html>"#,
+        body
+    );
+
+    let mut assets = AssetBundle::new();
+    assets.add_css(css);
+
+    let engine = Engine::builder().assets(assets).build();
+    let pdf = engine.render_html(&html).unwrap();
+
+    assert!(!pdf.is_empty());
+    assert!(pdf.starts_with(b"%PDF-"));
+}
