@@ -6,7 +6,7 @@ use crate::image::ImagePageable;
 use crate::pageable::{
     BackgroundLayer, BgBox, BgClip, BgLengthPercentage, BgRepeat, BgSize, BlockPageable,
     BlockStyle, BorderStyleValue, ListItemPageable, Pageable, PositionedChild, Size,
-    SpacerPageable, TablePageable,
+    SpacerPageable, StringSetPageable, StringSetWrapperPageable, TablePageable,
 };
 use crate::paragraph::{
     ParagraphPageable, ShapedGlyph, ShapedGlyphRun, ShapedLine, TextDecoration, TextDecorationLine,
@@ -24,6 +24,8 @@ pub struct ConvertContext<'a> {
     pub assets: Option<&'a AssetBundle>,
     /// Cache font data by (data pointer address, font index) to avoid redundant .to_vec() copies.
     pub(crate) font_cache: HashMap<(usize, u32), Arc<Vec<u8>>>,
+    /// String-set entries from DOM walk, keyed by node_id for O(1) lookup.
+    pub string_set_by_node: HashMap<usize, Vec<(String, String)>>,
 }
 
 impl ConvertContext<'_> {
@@ -80,6 +82,72 @@ fn debug_print_tree(doc: &blitz_dom::BaseDocument, node_id: usize, depth: usize)
 }
 
 fn convert_node(
+    doc: &blitz_dom::BaseDocument,
+    node_id: usize,
+    ctx: &mut ConvertContext<'_>,
+) -> Box<dyn Pageable> {
+    let result = convert_node_inner(doc, node_id, ctx);
+    maybe_prepend_string_set(node_id, result, ctx)
+}
+
+/// If the given node has string-set entries, wrap the pageable in a
+/// `StringSetWrapperPageable` that keeps markers attached to the child during
+/// pagination. Otherwise return the pageable as-is.
+fn maybe_prepend_string_set(
+    node_id: usize,
+    child: Box<dyn Pageable>,
+    ctx: &mut ConvertContext<'_>,
+) -> Box<dyn Pageable> {
+    let entries = ctx.string_set_by_node.remove(&node_id);
+    match entries {
+        Some(entries) if !entries.is_empty() => {
+            let markers = entries
+                .into_iter()
+                .map(|(name, value)| StringSetPageable::new(name, value))
+                .collect();
+            Box::new(StringSetWrapperPageable::new(markers, child))
+        }
+        _ => child,
+    }
+}
+
+/// Emit bare `StringSetPageable` markers for a node that is about to be
+/// skipped by pagination (zero-size leaf) or flattened (zero-size container).
+///
+/// Without this, `string-set` on an empty element — e.g.
+/// `<div class="chapter" data-title="Ch 1"></div>` with
+/// `.chapter { string-set: title attr(data-title); }` — would never reach the
+/// Pageable tree because `convert_node` is never called for the node.
+///
+/// The `x`/`y` arguments are the node's Taffy-computed `final_layout.location`.
+/// They MUST be propagated to the `PositionedChild` because `BlockPageable::split`
+/// uses `children[split_index].y` as the rebase point for the next page; a
+/// marker hardcoded to `y = 0` would corrupt the y-offsets of all children
+/// following it on the next page when a split lands on its index.
+///
+/// Bare markers are appended directly (no `StringSetWrapperPageable` wrapper):
+/// there is no real child content to keep them attached to, and their
+/// position in the parent's child list already represents the point in the
+/// document flow where the string was set.
+fn emit_orphan_string_set_markers(
+    node_id: usize,
+    x: f32,
+    y: f32,
+    ctx: &mut ConvertContext<'_>,
+    out: &mut Vec<PositionedChild>,
+) {
+    if let Some(entries) = ctx.string_set_by_node.remove(&node_id) {
+        for (name, value) in entries {
+            out.push(PositionedChild {
+                child: Box::new(StringSetPageable::new(name, value)),
+                x,
+                y,
+            });
+        }
+    }
+}
+
+fn convert_node_inner(
     doc: &blitz_dom::BaseDocument,
     node_id: usize,
     ctx: &mut ConvertContext<'_>,
@@ -253,19 +321,37 @@ fn collect_positioned_children(
 
         let child_layout = child_node.final_layout;
 
-        // Zero-size leaf nodes (whitespace text, etc.) — skip
+        // Zero-size leaf nodes (whitespace text, etc.) — skip, but first
+        // harvest any string-set entries so `string-set: name attr(...)` on
+        // an empty element still propagates into the page tree.
         if child_layout.size.height == 0.0
             && child_layout.size.width == 0.0
             && child_node.children.is_empty()
         {
+            emit_orphan_string_set_markers(
+                child_id,
+                child_layout.location.x,
+                child_layout.location.y,
+                ctx,
+                &mut result,
+            );
             continue;
         }
 
-        // Zero-size container (thead, tbody, tr, etc.) — flatten children into parent
+        // Zero-size container (thead, tbody, tr, etc.) — flatten children
+        // into the parent. Harvest the container's own string-set entries
+        // before recursing so they aren't dropped.
         if child_layout.size.height == 0.0
             && child_layout.size.width == 0.0
             && !child_node.children.is_empty()
         {
+            emit_orphan_string_set_markers(
+                child_id,
+                child_layout.location.x,
+                child_layout.location.y,
+                ctx,
+                &mut result,
+            );
             let nested = collect_positioned_children(doc, &child_node.children, ctx);
             result.extend(nested);
             continue;

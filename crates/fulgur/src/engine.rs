@@ -93,21 +93,42 @@ impl Engine {
         crate::blitz_adapter::apply_passes(&mut doc, &passes, &ctx);
 
         // Extract running elements via DomPass (before resolve)
-        let mut running_store = if !gcpm.is_empty() {
-            let pass = crate::blitz_adapter::RunningElementPass::new(gcpm.clone());
+        let mut running_store = if !gcpm.running_mappings.is_empty() {
+            let pass = crate::blitz_adapter::RunningElementPass::new(gcpm.running_mappings.clone());
             pass.apply(&mut doc, &ctx);
             pass.into_running_store()
         } else {
             crate::gcpm::running::RunningElementStore::new()
         };
 
+        // Extract string-set values via DomPass
+        let string_set_store = if !gcpm.string_set_mappings.is_empty() {
+            let pass = crate::blitz_adapter::StringSetPass::new(gcpm.string_set_mappings.clone());
+            pass.apply(&mut doc, &ctx);
+            pass.into_store()
+        } else {
+            crate::gcpm::string_set::StringSetStore::new()
+        };
+
         crate::blitz_adapter::resolve(&mut doc);
 
         // --- Convert DOM to Pageable and render ---
+        // Build string-set lookup map
+        let string_set_by_node: HashMap<usize, Vec<(String, String)>> = {
+            let mut map: HashMap<usize, Vec<(String, String)>> = HashMap::new();
+            for entry in string_set_store.entries() {
+                map.entry(entry.node_id)
+                    .or_default()
+                    .push((entry.name.clone(), entry.value.clone()));
+            }
+            map
+        };
+
         let mut convert_ctx = ConvertContext {
             running_store: &mut running_store,
             assets: self.assets.as_ref(),
             font_cache: HashMap::new(),
+            string_set_by_node,
         };
         let root = crate::convert::dom_to_pageable(&doc, &mut convert_ctx);
 

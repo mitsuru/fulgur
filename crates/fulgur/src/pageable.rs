@@ -1127,6 +1127,118 @@ impl Pageable for SpacerPageable {
     }
 }
 
+// ─── StringSetPageable ──────────────────────────────────
+
+/// Zero-size marker for named string values.
+/// Inserted into the Pageable tree to track string-set positions during pagination.
+#[derive(Clone)]
+pub struct StringSetPageable {
+    pub name: String,
+    pub value: String,
+}
+
+impl StringSetPageable {
+    pub fn new(name: String, value: String) -> Self {
+        Self { name, value }
+    }
+}
+
+impl Pageable for StringSetPageable {
+    fn wrap(&mut self, _avail_width: Pt, _avail_height: Pt) -> Size {
+        Size {
+            width: 0.0,
+            height: 0.0,
+        }
+    }
+
+    fn split(
+        &self,
+        _avail_width: Pt,
+        _avail_height: Pt,
+    ) -> Option<(Box<dyn Pageable>, Box<dyn Pageable>)> {
+        None
+    }
+
+    fn draw(&self, _canvas: &mut Canvas, _x: Pt, _y: Pt, _avail_width: Pt, _avail_height: Pt) {}
+
+    fn clone_box(&self) -> Box<dyn Pageable> {
+        Box::new(self.clone())
+    }
+
+    fn height(&self) -> Pt {
+        0.0
+    }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+}
+
+// ─── StringSetWrapperPageable ──────────────────────────────
+
+/// Wraps a Pageable together with `StringSetPageable` markers that must stay
+/// attached to it during pagination.
+///
+/// Without this wrapper, a plain `BlockPageable` containing `[markers..., child]`
+/// could split such that the markers are left on the previous page while the
+/// real child is moved to the next page (when the child is unsplittable and
+/// larger than the available space). `collect_string_set_states` would then
+/// resolve `string()` one page too early.
+///
+/// The wrapper delegates `split()` to the inner child: if the child splits,
+/// markers travel with the first fragment; if the child cannot split, the
+/// wrapper is atomic and the whole thing moves to the next page together.
+#[derive(Clone)]
+pub struct StringSetWrapperPageable {
+    pub markers: Vec<StringSetPageable>,
+    pub child: Box<dyn Pageable>,
+}
+
+impl StringSetWrapperPageable {
+    pub fn new(markers: Vec<StringSetPageable>, child: Box<dyn Pageable>) -> Self {
+        Self { markers, child }
+    }
+}
+
+impl Pageable for StringSetWrapperPageable {
+    fn wrap(&mut self, avail_width: Pt, avail_height: Pt) -> Size {
+        self.child.wrap(avail_width, avail_height)
+    }
+
+    fn split(
+        &self,
+        avail_width: Pt,
+        avail_height: Pt,
+    ) -> Option<(Box<dyn Pageable>, Box<dyn Pageable>)> {
+        let (first, second) = self.child.split(avail_width, avail_height)?;
+        let first_wrapped = StringSetWrapperPageable {
+            markers: self.markers.clone(),
+            child: first,
+        };
+        Some((Box::new(first_wrapped), second))
+    }
+
+    fn draw(&self, canvas: &mut Canvas<'_, '_>, x: Pt, y: Pt, avail_width: Pt, avail_height: Pt) {
+        self.child.draw(canvas, x, y, avail_width, avail_height);
+    }
+
+    fn clone_box(&self) -> Box<dyn Pageable> {
+        Box::new(self.clone())
+    }
+
+    fn height(&self) -> Pt {
+        self.child.height()
+    }
+
+    fn pagination(&self) -> Pagination {
+        self.child.pagination()
+    }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+}
+
 // ─── ListItemPageable ───────────────────────────────────
 
 use crate::paragraph::ShapedLine;
@@ -1667,6 +1779,28 @@ mod tests {
             "expected y=80.0, got {}",
             second_table.body_cells[1].y
         );
+    }
+
+    #[test]
+    fn test_string_set_pageable_zero_size() {
+        let mut p = StringSetPageable::new("title".to_string(), "Chapter 1".to_string());
+        let size = p.wrap(100.0, 100.0);
+        assert_eq!(size.width, 0.0);
+        assert_eq!(size.height, 0.0);
+        assert_eq!(p.height(), 0.0);
+    }
+
+    #[test]
+    fn test_string_set_pageable_no_split() {
+        let p = StringSetPageable::new("title".to_string(), "Chapter 1".to_string());
+        assert!(p.split(100.0, 100.0).is_none());
+    }
+
+    #[test]
+    fn test_string_set_pageable_fields() {
+        let p = StringSetPageable::new("title".to_string(), "Chapter 1".to_string());
+        assert_eq!(p.name, "title");
+        assert_eq!(p.value, "Chapter 1");
     }
 }
 

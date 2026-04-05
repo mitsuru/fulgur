@@ -182,6 +182,11 @@ pub fn render_to_pdf_with_gcpm(
     // Pass 1: paginate body content
     let pages = paginate(root, content_width, content_height);
     let total_pages = pages.len();
+    let string_set_states = if gcpm.string_set_mappings.is_empty() {
+        vec![BTreeMap::new(); pages.len()]
+    } else {
+        crate::paginate::collect_string_set_states(&pages)
+    };
 
     let page_size = if config.landscape {
         config.page_size.landscape()
@@ -249,8 +254,13 @@ pub fn render_to_pdf_with_gcpm(
         // with the margin box's own declarations (font-size, color, margin, etc.)
         let mut resolved_htmls: BTreeMap<MarginBoxPosition, String> = BTreeMap::new();
         for (&pos, rule) in &effective_boxes {
-            let content_html =
-                resolve_content_to_html(&rule.content, &running_pairs, page_num, total_pages);
+            let content_html = resolve_content_to_html(
+                &rule.content,
+                &running_pairs,
+                &string_set_states[page_idx],
+                page_num,
+                total_pages,
+            );
             if !content_html.is_empty() {
                 let html = if rule.declarations.is_empty() {
                     content_html
@@ -371,6 +381,7 @@ pub fn render_to_pdf_with_gcpm(
                     running_store: &mut dummy_store,
                     assets: None,
                     font_cache: HashMap::new(),
+                    string_set_by_node: HashMap::new(),
                 };
                 let pageable = crate::convert::dom_to_pageable(&render_doc, &mut dummy_ctx);
                 render_cache.insert(cache_key.clone(), pageable);
