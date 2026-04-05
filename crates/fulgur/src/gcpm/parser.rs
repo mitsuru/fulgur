@@ -497,19 +497,19 @@ fn parse_string_set_value<'i, 't>(
 // 6. Content value parser
 // ---------------------------------------------------------------------------
 
-/// Parse the policy argument of `string(name, <policy>)`.
+/// Parse a GCPM string/element policy identifier, handling cssparser's
+/// tokenization of `first-except` which may arrive either as a single ident
+/// or as `first` + `-` + `except`.
 ///
-/// Handles cssparser tokenization of `first-except`, which may arrive either as
-/// a single ident or as `first` + `-` + `except` depending on context.
-fn parse_string_policy<'i>(input: &mut Parser<'i, '_>) -> Result<StringPolicy, ParseError<'i, ()>> {
+/// `map_fn` converts the canonical lowercase identifier (`"first"`, `"start"`,
+/// `"last"`, `"first-except"`) into the caller's typed policy enum. Returning
+/// `None` from `map_fn` signals an unknown identifier.
+fn parse_policy_ident<'i, T>(
+    input: &mut Parser<'i, '_>,
+    map_fn: impl Fn(&str) -> Option<T>,
+) -> Result<T, ParseError<'i, ()>> {
     let ident = input.expect_ident()?.clone();
-    if ident.eq_ignore_ascii_case("start") {
-        Ok(StringPolicy::Start)
-    } else if ident.eq_ignore_ascii_case("last") {
-        Ok(StringPolicy::Last)
-    } else if ident.eq_ignore_ascii_case("first-except") {
-        Ok(StringPolicy::FirstExcept)
-    } else if ident.eq_ignore_ascii_case("first") {
+    let canonical: String = if ident.eq_ignore_ascii_case("first") {
         // Try to consume a trailing `-except` (cssparser may split the hyphenated ident).
         let has_except = input
             .try_parse(|input| {
@@ -522,47 +522,40 @@ fn parse_string_policy<'i>(input: &mut Parser<'i, '_>) -> Result<StringPolicy, P
                 }
             })
             .is_ok();
-        Ok(if has_except {
-            StringPolicy::FirstExcept
+        if has_except {
+            "first-except".to_string()
         } else {
-            StringPolicy::First
-        })
+            "first".to_string()
+        }
     } else {
-        Err(input.new_error(BasicParseErrorKind::QualifiedRuleInvalid))
-    }
+        ident.to_ascii_lowercase()
+    };
+
+    map_fn(&canonical).ok_or_else(|| input.new_error(BasicParseErrorKind::QualifiedRuleInvalid))
+}
+
+/// Parse the policy argument of `string(name, <policy>)`.
+fn parse_string_policy<'i>(input: &mut Parser<'i, '_>) -> Result<StringPolicy, ParseError<'i, ()>> {
+    parse_policy_ident(input, |s| match s {
+        "first" => Some(StringPolicy::First),
+        "start" => Some(StringPolicy::Start),
+        "last" => Some(StringPolicy::Last),
+        "first-except" => Some(StringPolicy::FirstExcept),
+        _ => None,
+    })
 }
 
 /// Parse the policy argument of `element(name, <policy>)`.
 fn parse_element_policy<'i>(
     input: &mut Parser<'i, '_>,
 ) -> Result<ElementPolicy, ParseError<'i, ()>> {
-    let ident = input.expect_ident()?.clone();
-    if ident.eq_ignore_ascii_case("start") {
-        Ok(ElementPolicy::Start)
-    } else if ident.eq_ignore_ascii_case("last") {
-        Ok(ElementPolicy::Last)
-    } else if ident.eq_ignore_ascii_case("first-except") {
-        Ok(ElementPolicy::FirstExcept)
-    } else if ident.eq_ignore_ascii_case("first") {
-        let has_except = input
-            .try_parse(|input| {
-                input.expect_delim('-')?;
-                let next = input.expect_ident()?.clone();
-                if next.eq_ignore_ascii_case("except") {
-                    Ok(())
-                } else {
-                    Err(input.new_error::<()>(BasicParseErrorKind::QualifiedRuleInvalid))
-                }
-            })
-            .is_ok();
-        Ok(if has_except {
-            ElementPolicy::FirstExcept
-        } else {
-            ElementPolicy::First
-        })
-    } else {
-        Err(input.new_error(BasicParseErrorKind::QualifiedRuleInvalid))
-    }
+    parse_policy_ident(input, |s| match s {
+        "first" => Some(ElementPolicy::First),
+        "start" => Some(ElementPolicy::Start),
+        "last" => Some(ElementPolicy::Last),
+        "first-except" => Some(ElementPolicy::FirstExcept),
+        _ => None,
+    })
 }
 
 /// Parse a `content` property value into a list of `ContentItem`s using cssparser.
