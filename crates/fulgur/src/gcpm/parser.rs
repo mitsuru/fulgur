@@ -390,11 +390,17 @@ impl<'i, 'a> DeclarationParser<'i> for StyleRuleParser<'a> {
             if let Ok((set_name, values)) = parse_string_set_value(input) {
                 *self.string_set = Some((set_name, values));
 
+                // Replace with an empty string rather than Remove: the skip-`}`
+                // logic in build_cleaned_css is only correct for @page block
+                // removals. string-set lives inside a style rule, so eating a
+                // trailing `}` would corrupt the rule's closing brace when the
+                // declaration has no terminating semicolon.
                 let decl_start_byte = decl_start.position().byte_index();
                 let end_byte = input.position().byte_index();
-                self.edits.push(CssEdit::Remove {
+                self.edits.push(CssEdit::Replace {
                     start: decl_start_byte,
                     end: end_byte,
+                    replacement: String::new(),
                 });
             } else {
                 while input.next().is_ok() {}
@@ -1022,6 +1028,32 @@ mod tests {
         assert_eq!(
             ctx.string_set_mappings[0].parsed,
             ParsedSelector::Class("chapter-heading".to_string())
+        );
+    }
+
+    /// Regression: when `string-set` is the last declaration in a rule and has
+    /// no trailing semicolon, the cleaned CSS must still contain the rule's
+    /// closing brace. Previously the CssEdit::Remove skip-`}` logic (written
+    /// for @page blocks) would eat the style rule's closing brace.
+    #[test]
+    fn test_string_set_last_declaration_without_semicolon() {
+        let css = "h1 { color: red; string-set: title content(text) }\np { margin: 0; }";
+        let ctx = parse_gcpm(css);
+        assert_eq!(ctx.string_set_mappings.len(), 1);
+        assert!(
+            ctx.cleaned_css.contains("color: red"),
+            "color: red should remain in cleaned_css: {:?}",
+            ctx.cleaned_css
+        );
+        assert!(
+            ctx.cleaned_css.contains("p { margin: 0; }"),
+            "following rule must be intact — the h1 closing brace was not eaten: {:?}",
+            ctx.cleaned_css
+        );
+        assert!(
+            !ctx.cleaned_css.contains("string-set"),
+            "string-set declaration should be removed: {:?}",
+            ctx.cleaned_css
         );
     }
 }
