@@ -299,7 +299,8 @@ impl DomPass for LinkStylesheetPass {
 }
 
 use crate::gcpm::running::{RunningElementStore, serialize_node};
-use crate::gcpm::{GcpmContext, ParsedSelector};
+use crate::gcpm::string_set::{StringSetEntry, StringSetStore, extract_text_content};
+use crate::gcpm::{GcpmContext, ParsedSelector, StringSetValue};
 use std::cell::RefCell;
 
 /// Extracts running elements from the DOM and stores their serialized HTML.
@@ -378,6 +379,121 @@ impl RunningElementPass {
             ParsedSelector::Id(name) => get_attr(elem, "id") == Some(name.as_str()),
             ParsedSelector::Tag(name) => elem.name.local.as_ref().eq_ignore_ascii_case(name),
         }
+    }
+}
+
+/// Extracts string-set values from the DOM by walking the tree and resolving text content.
+pub struct StringSetPass {
+    gcpm: GcpmContext,
+    store: RefCell<StringSetStore>,
+}
+
+impl StringSetPass {
+    pub fn new(gcpm: GcpmContext) -> Self {
+        Self {
+            gcpm,
+            store: RefCell::new(StringSetStore::new()),
+        }
+    }
+
+    pub fn into_store(self) -> StringSetStore {
+        self.store.into_inner()
+    }
+}
+
+impl DomPass for StringSetPass {
+    fn apply(&self, doc: &mut HtmlDocument, _ctx: &PassContext<'_>) {
+        if self.gcpm.string_set_mappings.is_empty() {
+            return;
+        }
+        let root = doc.root_element();
+        let root_id = root.id;
+        self.walk_tree(doc, root_id);
+    }
+}
+
+impl StringSetPass {
+    fn walk_tree(&self, doc: &HtmlDocument, node_id: usize) {
+        let Some(node) = doc.get_node(node_id) else {
+            return;
+        };
+
+        if let Some(elem) = node.element_data() {
+            if matches!(
+                elem.name.local.as_ref(),
+                "head" | "script" | "style" | "link" | "meta" | "title" | "noscript"
+            ) {
+                return;
+            }
+            if let Some((name, values)) = self.find_string_set(elem) {
+                let value = self.resolve_values(doc, node_id, elem, &values);
+                self.store.borrow_mut().push(StringSetEntry {
+                    name,
+                    value,
+                    node_id,
+                });
+            }
+        }
+
+        // Always recurse (string-set elements stay in document flow)
+        let children: Vec<usize> = doc
+            .get_node(node_id)
+            .map(|n| n.children.clone())
+            .unwrap_or_default();
+        for child_id in children {
+            self.walk_tree(doc, child_id);
+        }
+    }
+
+    fn find_string_set(
+        &self,
+        elem: &blitz_dom::node::ElementData,
+    ) -> Option<(String, Vec<StringSetValue>)> {
+        self.gcpm
+            .string_set_mappings
+            .iter()
+            .find(|m| self.matches_selector(&m.parsed, elem))
+            .map(|m| (m.name.clone(), m.values.clone()))
+    }
+
+    fn matches_selector(
+        &self,
+        selector: &ParsedSelector,
+        elem: &blitz_dom::node::ElementData,
+    ) -> bool {
+        match selector {
+            ParsedSelector::Class(name) => get_attr(elem, "class")
+                .is_some_and(|cls| cls.split_whitespace().any(|c| c == name.as_str())),
+            ParsedSelector::Id(name) => get_attr(elem, "id") == Some(name.as_str()),
+            ParsedSelector::Tag(name) => elem.name.local.as_ref().eq_ignore_ascii_case(name),
+        }
+    }
+
+    fn resolve_values(
+        &self,
+        doc: &HtmlDocument,
+        node_id: usize,
+        elem: &blitz_dom::node::ElementData,
+        values: &[StringSetValue],
+    ) -> String {
+        let mut out = String::new();
+        for val in values {
+            match val {
+                StringSetValue::ContentText => {
+                    out.push_str(&extract_text_content(doc, node_id));
+                }
+                StringSetValue::ContentBefore | StringSetValue::ContentAfter => {
+                    // Skip for now (requires Stylo computed styles, rarely used)
+                }
+                StringSetValue::Attr(attr_name) => {
+                    if let Some(v) = get_attr(elem, attr_name) {
+                        out.push_str(v);
+                    }
+                }
+                StringSetValue::Literal(s) => out.push_str(s),
+            }
+        }
+        out
     }
 }
 

@@ -2,6 +2,7 @@ pub mod counter;
 pub mod margin_box;
 pub mod parser;
 pub mod running;
+pub mod string_set;
 
 use margin_box::MarginBoxPosition;
 
