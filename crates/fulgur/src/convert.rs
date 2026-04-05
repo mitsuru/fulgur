@@ -5,8 +5,9 @@ use crate::gcpm::running::RunningElementStore;
 use crate::image::ImagePageable;
 use crate::pageable::{
     BackgroundLayer, BgBox, BgClip, BgLengthPercentage, BgRepeat, BgSize, BlockPageable,
-    BlockStyle, BorderStyleValue, ListItemPageable, Pageable, PositionedChild, Size,
-    SpacerPageable, StringSetPageable, StringSetWrapperPageable, TablePageable,
+    BlockStyle, BorderStyleValue, ListItemPageable, Pageable, PositionedChild,
+    RunningElementMarkerPageable, Size, SpacerPageable, StringSetPageable,
+    StringSetWrapperPageable, TablePageable,
 };
 use crate::paragraph::{
     ParagraphPageable, ShapedGlyph, ShapedGlyphRun, ShapedLine, TextDecoration, TextDecorationLine,
@@ -20,7 +21,7 @@ use std::sync::Arc;
 
 /// Context for DOM-to-Pageable conversion, bundling all shared state.
 pub struct ConvertContext<'a> {
-    pub running_store: &'a mut RunningElementStore,
+    pub running_store: &'a RunningElementStore,
     pub assets: Option<&'a AssetBundle>,
     /// Cache font data by (data pointer address, font index) to avoid redundant .to_vec() copies.
     pub(crate) font_cache: HashMap<(usize, u32), Arc<Vec<u8>>>,
@@ -144,6 +145,35 @@ fn emit_orphan_string_set_markers(
                 y,
             });
         }
+    }
+}
+
+/// Emit a `RunningElementMarkerPageable` when a zero-size node corresponds to
+/// a running element instance registered by `RunningElementPass`.
+///
+/// Running elements are rewritten to `display: none` by the GCPM parser,
+/// which means they land in the zero-size branches of
+/// `collect_positioned_children`. This helper preserves their source
+/// position in the Pageable tree as a zero-size marker so pagination can
+/// determine which running element instances fall on which page.
+fn emit_orphan_running_marker(
+    node_id: usize,
+    x: f32,
+    y: f32,
+    ctx: &ConvertContext<'_>,
+    out: &mut Vec<PositionedChild>,
+) {
+    if let Some(instance_id) = ctx.running_store.instance_for_node(node_id)
+        && let Some(name) = ctx.running_store.name_of(instance_id)
+    {
+        out.push(PositionedChild {
+            child: Box::new(RunningElementMarkerPageable::new(
+                name.to_string(),
+                instance_id,
+            )),
+            x,
+            y,
+        });
     }
 }
 
@@ -335,6 +365,13 @@ fn collect_positioned_children(
                 ctx,
                 &mut result,
             );
+            emit_orphan_running_marker(
+                child_id,
+                child_layout.location.x,
+                child_layout.location.y,
+                ctx,
+                &mut result,
+            );
             continue;
         }
 
@@ -346,6 +383,13 @@ fn collect_positioned_children(
             && !child_node.children.is_empty()
         {
             emit_orphan_string_set_markers(
+                child_id,
+                child_layout.location.x,
+                child_layout.location.y,
+                ctx,
+                &mut result,
+            );
+            emit_orphan_running_marker(
                 child_id,
                 child_layout.location.x,
                 child_layout.location.y,

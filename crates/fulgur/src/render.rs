@@ -376,9 +376,9 @@ pub fn render_to_pdf_with_gcpm(
                     rect.height,
                     font_data,
                 );
-                let mut dummy_store = RunningElementStore::new();
+                let dummy_store = RunningElementStore::new();
                 let mut dummy_ctx = crate::convert::ConvertContext {
-                    running_store: &mut dummy_store,
+                    running_store: &dummy_store,
                     assets: None,
                     font_cache: HashMap::new(),
                     string_set_by_node: HashMap::new(),
