@@ -69,6 +69,24 @@ jobs:
           sed -i "s/fulgur = { version = \"[^\"]*\", path/fulgur = { version = \"$VERSION\", path/" crates/fulgur-cli/Cargo.toml
           cargo check --workspace
 
+      - name: Regenerate example PDFs
+        run: |
+          set -e
+          cargo build --bin fulgur --release
+          for dir in examples/*/; do
+            html="${dir}index.html"
+            css="${dir}style.css"
+            pdf="${dir}index.pdf"
+            [ -f "$html" ] || continue
+            args=()
+            [ -f "$css" ] && args+=(--css "$css")
+            for img in "${dir}"*.png "${dir}"*.jpg "${dir}"*.gif; do
+              [ -f "$img" ] || continue
+              args+=(--image "$(basename "$img")=$img")
+            done
+            target/release/fulgur render "$html" "${args[@]}" -o "$pdf"
+          done
+
       - name: Generate changelog
         env:
           VERSION: ${{ steps.version.outputs.version }}
