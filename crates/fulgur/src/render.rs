@@ -125,9 +125,9 @@ fn parse_datetime(s: &str) -> Option<krilla::metadata::DateTime> {
 
 /// Cached max-content width and render Pageable for margin boxes.
 /// Measure cache: html → max-content width (measured once at content_width).
-/// Render cache: (html, final_width as bits) → Pageable (laid out at confirmed width).
+/// Render cache: (html, final_width as bits, final_height as bits) → Pageable.
 type MeasureCache = HashMap<String, f32>;
-type RenderCache = HashMap<(String, u32), Box<dyn Pageable>>;
+type RenderCache = HashMap<(String, u32, u32), Box<dyn Pageable>>;
 
 fn width_key(w: f32) -> u32 {
     w.to_bits()
@@ -354,7 +354,7 @@ pub fn render_to_pdf_with_gcpm(
                 .copied()
                 .unwrap_or_else(|| pos.bounding_rect(page_size, config.margin));
 
-            let cache_key = (html.clone(), width_key(rect.width));
+            let cache_key = (html.clone(), width_key(rect.width), width_key(rect.height));
             if !render_cache.contains_key(&cache_key) {
                 let render_html = format!(
                     "<html><head><style>{}</style></head><body style=\"margin:0;padding:0;\">{}</body></html>",
