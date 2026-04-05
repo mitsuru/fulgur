@@ -492,7 +492,7 @@ fn parse_string_set_value<'i, 't>(
 // ---------------------------------------------------------------------------
 
 /// Parse a `content` property value into a list of `ContentItem`s using cssparser.
-/// Handles: `element(<name>)`, `counter(page)`, `counter(pages)`, `"string"`.
+/// Handles: `element(<name>)`, `counter(page)`, `counter(pages)`, `string(<name>, <policy>)`, `"string"`.
 fn parse_content_value(input: &mut Parser<'_, '_>) -> Vec<ContentItem> {
     let mut items = Vec::new();
 
@@ -525,7 +525,9 @@ fn parse_content_value(input: &mut Parser<'_, '_>) -> Vec<ContentItem> {
                                 .try_parse(|input| {
                                     input.expect_comma()?;
                                     let ident = input.expect_ident()?.clone();
-                                    let policy_str = if ident.eq_ignore_ascii_case("first") {
+                                    let policy_str = if ident.eq_ignore_ascii_case("first-except") {
+                                        "first-except".to_string()
+                                    } else if ident.eq_ignore_ascii_case("first") {
                                         input
                                             .try_parse(|input| {
                                                 input.expect_delim('-')?;
