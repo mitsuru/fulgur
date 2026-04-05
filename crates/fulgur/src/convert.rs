@@ -119,12 +119,20 @@ fn maybe_prepend_string_set(
 /// `.chapter { string-set: title attr(data-title); }` — would never reach the
 /// Pageable tree because `convert_node` is never called for the node.
 ///
+/// The `x`/`y` arguments are the node's Taffy-computed `final_layout.location`.
+/// They MUST be propagated to the `PositionedChild` because `BlockPageable::split`
+/// uses `children[split_index].y` as the rebase point for the next page; a
+/// marker hardcoded to `y = 0` would corrupt the y-offsets of all children
+/// following it on the next page when a split lands on its index.
+///
 /// Bare markers are appended directly (no `StringSetWrapperPageable` wrapper):
 /// there is no real child content to keep them attached to, and their
 /// position in the parent's child list already represents the point in the
 /// document flow where the string was set.
 fn emit_orphan_string_set_markers(
     node_id: usize,
+    x: f32,
+    y: f32,
     ctx: &mut ConvertContext<'_>,
     out: &mut Vec<PositionedChild>,
 ) {
@@ -132,8 +140,8 @@ fn emit_orphan_string_set_markers(
         for (name, value) in entries {
             out.push(PositionedChild {
                 child: Box::new(StringSetPageable::new(name, value)),
-                x: 0.0,
-                y: 0.0,
+                x,
+                y,
             });
         }
     }
@@ -320,7 +328,13 @@ fn collect_positioned_children(
             && child_layout.size.width == 0.0
             && child_node.children.is_empty()
         {
-            emit_orphan_string_set_markers(child_id, ctx, &mut result);
+            emit_orphan_string_set_markers(
+                child_id,
+                child_layout.location.x,
+                child_layout.location.y,
+                ctx,
+                &mut result,
+            );
             continue;
         }
 
@@ -331,7 +345,13 @@ fn collect_positioned_children(
             && child_layout.size.width == 0.0
             && !child_node.children.is_empty()
         {
-            emit_orphan_string_set_markers(child_id, ctx, &mut result);
+            emit_orphan_string_set_markers(
+                child_id,
+                child_layout.location.x,
+                child_layout.location.y,
+                ctx,
+                &mut result,
+            );
             let nested = collect_positioned_children(doc, &child_node.children, ctx);
             result.extend(nested);
             continue;
