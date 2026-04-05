@@ -1183,6 +1183,20 @@ impl Pageable for StringSetPageable {
 /// which running element instances fall on which page. The actual HTML of
 /// the running element lives in `RunningElementStore`, keyed by
 /// `instance_id`.
+///
+/// Parallels `StringSetPageable` but carries an `instance_id` instead of
+/// a value — running elements are full DOM subtrees that can be large, so
+/// the marker stays zero-cost and the HTML is looked up by id at render
+/// time via `resolve_element_policy`.
+///
+/// **Known limitation:** When a running element marker is followed by an
+/// unsplittable Pageable that overflows the current page, the content is
+/// pushed to the next page but the zero-size marker stays behind. For the
+/// typical "chapter title immediately before a large block" layout this
+/// causes the marker to land one page earlier than the content it
+/// conceptually belongs to. A `RunningElementWrapperPageable` analogous
+/// to `StringSetWrapperPageable` would fix this; deferred until a real
+/// use case surfaces the issue.
 #[derive(Clone)]
 pub struct RunningElementMarkerPageable {
     pub name: String,

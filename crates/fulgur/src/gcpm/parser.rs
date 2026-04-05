@@ -583,6 +583,14 @@ fn parse_content_value(input: &mut Parser<'_, '_>) -> Vec<ContentItem> {
                             // Optional second argument: policy identifier.
                             // If a comma is present but the policy is invalid,
                             // drop the item entirely.
+                            //
+                            // Note: this is asymmetric with `string(name, <policy>)`
+                            // below, which silently falls back to `StringPolicy::First`
+                            // on invalid policy via `unwrap_or`. `element()` is stricter
+                            // because a mistyped running-element policy (e.g. `last`
+                            // typoed as `lsat`) should surface as a missing margin box
+                            // rather than silently defaulting to `first` — the running
+                            // element concept is newer and we prefer fail-loud here.
                             let had_comma = input.try_parse(|input| input.expect_comma()).is_ok();
                             if had_comma {
                                 if let Ok(policy) = parse_element_policy(input) {
