@@ -296,3 +296,39 @@ fn test_gcpm_left_right_with_running_element() {
     assert!(!pdf.is_empty());
     assert!(pdf.starts_with(b"%PDF-"));
 }
+
+/// Regression: same running element on both sides with asymmetric margins
+/// exercises the height_cache width-dependent key and per-side measurement.
+#[test]
+fn test_gcpm_side_boxes_asymmetric_margins() {
+    let css = r#"
+        .sidebar-label { position: running(sideLabel); }
+        @page {
+            margin-top: 72pt;
+            margin-right: 144pt;
+            margin-bottom: 72pt;
+            margin-left: 36pt;
+            @left-middle { content: element(sideLabel) " - " counter(page); font-size: 8px; }
+            @right-middle { content: element(sideLabel) " - " counter(page); font-size: 8px; }
+        }
+    "#;
+
+    let html = r#"<!DOCTYPE html>
+<html>
+<head></head>
+<body>
+  <div class="sidebar-label">A very long chapter label that should wrap differently on each side</div>
+  <p>Body content with asymmetric side margins.</p>
+</body>
+</html>"#;
+
+    let mut assets = AssetBundle::new();
+    assets.add_css(css);
+
+    let engine = Engine::builder().assets(assets).build();
+    let pdf = engine
+        .render_html(html)
+        .expect("should render side boxes with asymmetric widths and mixed content");
+    assert!(!pdf.is_empty());
+    assert!(pdf.starts_with(b"%PDF-"));
+}
