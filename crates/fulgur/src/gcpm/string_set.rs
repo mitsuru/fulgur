@@ -62,6 +62,17 @@ fn collect_text(doc: &blitz_dom::BaseDocument, node_id: usize, out: &mut String)
     let Some(node) = doc.get_node(node_id) else {
         return;
     };
+    // Skip non-rendered subtrees so <script>/<style> bodies don't leak into
+    // named strings when a broad selector (e.g. `body`) is used as the
+    // string-set target.
+    if let Some(elem) = node.element_data() {
+        if matches!(
+            elem.name.local.as_ref(),
+            "head" | "script" | "style" | "link" | "meta" | "title" | "noscript"
+        ) {
+            return;
+        }
+    }
     match &node.data {
         blitz_dom::NodeData::Text(text_data) => out.push_str(&text_data.content),
         _ => {

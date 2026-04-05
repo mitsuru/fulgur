@@ -111,6 +111,34 @@ fn maybe_prepend_string_set(
     }
 }
 
+/// Emit bare `StringSetPageable` markers for a node that is about to be
+/// skipped by pagination (zero-size leaf) or flattened (zero-size container).
+///
+/// Without this, `string-set` on an empty element — e.g.
+/// `<div class="chapter" data-title="Ch 1"></div>` with
+/// `.chapter { string-set: title attr(data-title); }` — would never reach the
+/// Pageable tree because `convert_node` is never called for the node.
+///
+/// Bare markers are appended directly (no `StringSetWrapperPageable` wrapper):
+/// there is no real child content to keep them attached to, and their
+/// position in the parent's child list already represents the point in the
+/// document flow where the string was set.
+fn emit_orphan_string_set_markers(
+    node_id: usize,
+    ctx: &mut ConvertContext<'_>,
+    out: &mut Vec<PositionedChild>,
+) {
+    if let Some(entries) = ctx.string_set_by_node.remove(&node_id) {
+        for (name, value) in entries {
+            out.push(PositionedChild {
+                child: Box::new(StringSetPageable::new(name, value)),
+                x: 0.0,
+                y: 0.0,
+            });
+        }
+    }
+}
+
 fn convert_node_inner(
     doc: &blitz_dom::BaseDocument,
     node_id: usize,
@@ -285,19 +313,25 @@ fn collect_positioned_children(
 
         let child_layout = child_node.final_layout;
 
-        // Zero-size leaf nodes (whitespace text, etc.) — skip
+        // Zero-size leaf nodes (whitespace text, etc.) — skip, but first
+        // harvest any string-set entries so `string-set: name attr(...)` on
+        // an empty element still propagates into the page tree.
         if child_layout.size.height == 0.0
             && child_layout.size.width == 0.0
             && child_node.children.is_empty()
         {
+            emit_orphan_string_set_markers(child_id, ctx, &mut result);
             continue;
         }
 
-        // Zero-size container (thead, tbody, tr, etc.) — flatten children into parent
+        // Zero-size container (thead, tbody, tr, etc.) — flatten children
+        // into the parent. Harvest the container's own string-set entries
+        // before recursing so they aren't dropped.
         if child_layout.size.height == 0.0
             && child_layout.size.width == 0.0
             && !child_node.children.is_empty()
         {
+            emit_orphan_string_set_markers(child_id, ctx, &mut result);
             let nested = collect_positioned_children(doc, &child_node.children, ctx);
             result.extend(nested);
             continue;
