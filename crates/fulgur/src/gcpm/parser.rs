@@ -580,23 +580,17 @@ fn parse_content_value(input: &mut Parser<'_, '_>) -> Vec<ContentItem> {
                         let arg = input.expect_ident()?.clone();
                         if fn_name.eq_ignore_ascii_case("element") {
                             let name = arg.to_string();
-                            // Optional second argument: policy identifier.
-                            // If a comma is present but the policy is invalid,
-                            // drop the item entirely.
-                            //
-                            // Note: this is asymmetric with `string(name, <policy>)`
-                            // below, which silently falls back to `StringPolicy::First`
-                            // on invalid policy via `unwrap_or`. `element()` is stricter
-                            // because a mistyped running-element policy (e.g. `last`
-                            // typoed as `lsat`) should surface as a missing margin box
-                            // rather than silently defaulting to `first` — the running
-                            // element concept is newer and we prefer fail-loud here.
+                            // Asymmetric with `string(name, <policy>)` below:
+                            // invalid policy drops the item entirely here,
+                            // whereas `string()` falls back to `First` via
+                            // `unwrap_or`. Running element references are
+                            // stricter so a typo surfaces as a missing margin
+                            // box rather than silently defaulting.
                             let had_comma = input.try_parse(|input| input.expect_comma()).is_ok();
                             if had_comma {
                                 if let Ok(policy) = parse_element_policy(input) {
                                     items.push(ContentItem::Element { name, policy });
                                 }
-                                // Invalid policy — reject this call.
                             } else {
                                 items.push(ContentItem::Element {
                                     name,

@@ -177,6 +177,20 @@ fn emit_orphan_running_marker(
     }
 }
 
+/// Emit both string-set and running-element orphan markers for a zero-size
+/// node. They must always be emitted together because either marker kind may
+/// attach to the same source position.
+fn emit_orphan_markers(
+    node_id: usize,
+    x: f32,
+    y: f32,
+    ctx: &mut ConvertContext<'_>,
+    out: &mut Vec<PositionedChild>,
+) {
+    emit_orphan_string_set_markers(node_id, x, y, ctx, out);
+    emit_orphan_running_marker(node_id, x, y, ctx, out);
+}
+
 fn convert_node_inner(
     doc: &blitz_dom::BaseDocument,
     node_id: usize,
@@ -358,14 +372,7 @@ fn collect_positioned_children(
             && child_layout.size.width == 0.0
             && child_node.children.is_empty()
         {
-            emit_orphan_string_set_markers(
-                child_id,
-                child_layout.location.x,
-                child_layout.location.y,
-                ctx,
-                &mut result,
-            );
-            emit_orphan_running_marker(
+            emit_orphan_markers(
                 child_id,
                 child_layout.location.x,
                 child_layout.location.y,
@@ -382,14 +389,7 @@ fn collect_positioned_children(
             && child_layout.size.width == 0.0
             && !child_node.children.is_empty()
         {
-            emit_orphan_string_set_markers(
-                child_id,
-                child_layout.location.x,
-                child_layout.location.y,
-                ctx,
-                &mut result,
-            );
-            emit_orphan_running_marker(
+            emit_orphan_markers(
                 child_id,
                 child_layout.location.x,
                 child_layout.location.y,

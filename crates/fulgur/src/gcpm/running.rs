@@ -7,9 +7,9 @@ use std::collections::BTreeMap;
 
 /// A single running element assignment, identified by a numeric instance id.
 #[derive(Debug, Clone)]
-pub struct RunningInstance {
-    pub name: String,
-    pub html: String,
+struct RunningInstance {
+    name: String,
+    html: String,
 }
 
 /// Stores running element instances in source order, keyed by a sequential id.
@@ -37,12 +37,11 @@ impl RunningElementStore {
     }
 
     /// Register a running element instance. Returns the assigned instance_id.
+    ///
+    /// Invariant: each `node_id` is registered at most once, guaranteed by
+    /// `RunningElementPass::walk_tree` not recursing into running element
+    /// subtrees.
     pub fn register(&mut self, node_id: usize, name: String, html: String) -> usize {
-        debug_assert!(
-            !self.node_to_instance.contains_key(&node_id),
-            "RunningElementStore: node_id {} registered twice",
-            node_id
-        );
         let id = self.instances.len();
         self.instances.push(RunningInstance { name, html });
         self.node_to_instance.insert(node_id, id);

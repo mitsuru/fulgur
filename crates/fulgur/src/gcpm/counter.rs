@@ -138,12 +138,12 @@ pub fn resolve_element_policy<'a>(
         }
         ElementPolicy::Last => current.and_then(|s| s.instance_ids.last().copied()),
         ElementPolicy::FirstExcept => {
-            // If the current page contains an assignment, return nothing.
-            if current.map(|s| !s.instance_ids.is_empty()).unwrap_or(false) {
+            // Current page has an assignment → suppress.
+            // (`collect_running_element_states` only inserts an entry when
+            // it pushes an instance_id, so `current.is_some()` suffices.)
+            if current.is_some() {
                 return None;
             }
-            // No assignment on current page — fall through to the preceding
-            // page scan below.
             None
         }
     };
