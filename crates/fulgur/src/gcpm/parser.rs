@@ -183,6 +183,32 @@ impl<'i, 'a> QualifiedRuleParser<'i> for GcpmSheetParser<'a> {
 }
 
 // ---------------------------------------------------------------------------
+// CSS length unit → points converter
+// ---------------------------------------------------------------------------
+
+/// Parses a CSS length string (e.g. "20mm", "1in") and returns the equivalent
+/// value in PDF points (1 pt = 1/72 inch).
+#[allow(dead_code)] // will be used by @page size/margin parser (Task 3)
+fn parse_css_length(s: &str) -> Option<f32> {
+    let s = s.trim();
+    // Find where the numeric part ends and the unit begins.
+    let unit_start = s
+        .find(|c: char| c.is_ascii_alphabetic())
+        .filter(|&i| i > 0)?;
+    let (num_str, unit) = s.split_at(unit_start);
+    let value: f32 = num_str.parse().ok()?;
+    let factor = match unit {
+        "mm" => 72.0 / 25.4,
+        "cm" => 72.0 / 2.54,
+        "in" => 72.0,
+        "pt" => 1.0,
+        "px" => 72.0 / 96.0,
+        _ => return None,
+    };
+    Some(value * factor)
+}
+
+// ---------------------------------------------------------------------------
 // 2. @page block parser (PageRuleParser) — uses RuleBodyParser
 // ---------------------------------------------------------------------------
 
@@ -1159,5 +1185,36 @@ mod tests {
             "string-set declaration should be removed: {:?}",
             ctx.cleaned_css
         );
+    }
+
+    #[test]
+    fn test_parse_css_length_mm() {
+        assert!((parse_css_length("20mm").unwrap() - 56.6929).abs() < 0.01);
+    }
+
+    #[test]
+    fn test_parse_css_length_cm() {
+        assert!((parse_css_length("2cm").unwrap() - 56.6929).abs() < 0.01);
+    }
+
+    #[test]
+    fn test_parse_css_length_in() {
+        assert!((parse_css_length("1in").unwrap() - 72.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn test_parse_css_length_pt() {
+        assert!((parse_css_length("72pt").unwrap() - 72.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn test_parse_css_length_px() {
+        assert!((parse_css_length("96px").unwrap() - 72.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn test_parse_css_length_invalid() {
+        assert!(parse_css_length("20em").is_none());
+        assert!(parse_css_length("abc").is_none());
     }
 }
