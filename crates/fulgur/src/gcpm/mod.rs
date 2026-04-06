@@ -1,5 +1,6 @@
 pub mod counter;
 pub mod margin_box;
+pub mod page_settings;
 pub mod parser;
 pub mod running;
 pub mod string_set;
