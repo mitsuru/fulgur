@@ -224,6 +224,12 @@ fn parse_page_size_value(input: &mut Parser<'_, '_>) -> Option<PageSizeDecl> {
             if name.eq_ignore_ascii_case("auto") {
                 return Some(PageSizeDecl::Auto);
             }
+            if name.eq_ignore_ascii_case("landscape") {
+                return Some(PageSizeDecl::KeywordWithOrientation("auto".to_string(), true));
+            }
+            if name.eq_ignore_ascii_case("portrait") {
+                return Some(PageSizeDecl::KeywordWithOrientation("auto".to_string(), false));
+            }
             let keyword = name.to_string();
             // Try to read a second ident for orientation
             let orientation = input.try_parse(|input| {
@@ -406,9 +412,13 @@ impl<'i, 'a> DeclarationParser<'i> for PageRuleParser<'a> {
         _start: &cssparser::ParserState,
     ) -> Result<(), ParseError<'i, ()>> {
         if name.eq_ignore_ascii_case("size") {
-            *self.size = parse_page_size_value(input);
+            if let Some(v) = parse_page_size_value(input) {
+                *self.size = Some(v);
+            }
         } else if name.eq_ignore_ascii_case("margin") {
-            *self.margin = parse_page_margin_value(input);
+            if let Some(v) = parse_page_margin_value(input) {
+                *self.margin = Some(v);
+            }
         } else {
             // Skip unknown declarations
             while input.next().is_ok() {}
