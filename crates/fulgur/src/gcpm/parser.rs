@@ -205,57 +205,60 @@ impl<'i, 'a> QualifiedRuleParser<'i> for GcpmSheetParser<'a> {
 
 /// Convert a CSS dimension value+unit to PDF points.
 fn css_unit_to_pt(value: f32, unit: &str) -> Option<f32> {
-    let factor = match unit {
-        "mm" => 72.0 / 25.4,
-        "cm" => 72.0 / 2.54,
-        "in" => 72.0,
-        "pt" => 1.0,
-        "px" => 72.0 / 96.0,
+    let factor = match () {
+        _ if unit.eq_ignore_ascii_case("mm") => 72.0 / 25.4,
+        _ if unit.eq_ignore_ascii_case("cm") => 72.0 / 2.54,
+        _ if unit.eq_ignore_ascii_case("in") => 72.0,
+        _ if unit.eq_ignore_ascii_case("pt") => 1.0,
+        _ if unit.eq_ignore_ascii_case("px") => 72.0 / 96.0,
         _ => return None,
     };
     Some(value * factor)
 }
 
 /// Parse the value of an `@page { size: ... }` declaration.
+///
+/// Returns `None` if the value is invalid or has trailing tokens
+/// (CSS requires invalid declarations to be ignored entirely).
 fn parse_page_size_value(input: &mut Parser<'_, '_>) -> Option<PageSizeDecl> {
     let token = input.next().ok()?.clone();
-    match token {
+    let result = match token {
         Token::Ident(ref name) => {
             if name.eq_ignore_ascii_case("auto") {
-                return Some(PageSizeDecl::Auto);
-            }
-            if name.eq_ignore_ascii_case("landscape") {
-                return Some(PageSizeDecl::KeywordWithOrientation(
+                Some(PageSizeDecl::Auto)
+            } else if name.eq_ignore_ascii_case("landscape") {
+                Some(PageSizeDecl::KeywordWithOrientation(
                     "auto".to_string(),
                     true,
-                ));
-            }
-            if name.eq_ignore_ascii_case("portrait") {
-                return Some(PageSizeDecl::KeywordWithOrientation(
+                ))
+            } else if name.eq_ignore_ascii_case("portrait") {
+                Some(PageSizeDecl::KeywordWithOrientation(
                     "auto".to_string(),
                     false,
-                ));
-            }
-            let keyword = name.to_string();
-            // Try to read a second ident for orientation
-            let orientation = input.try_parse(|input| {
-                let tok = input.next()?.clone();
-                match tok {
-                    Token::Ident(ref orient) => {
-                        if orient.eq_ignore_ascii_case("landscape") {
-                            Ok(true)
-                        } else if orient.eq_ignore_ascii_case("portrait") {
-                            Ok(false)
-                        } else {
-                            Err(input.new_error::<()>(BasicParseErrorKind::QualifiedRuleInvalid))
+                ))
+            } else {
+                let keyword = name.to_string();
+                // Try to read a second ident for orientation
+                let orientation = input.try_parse(|input| {
+                    let tok = input.next()?.clone();
+                    match tok {
+                        Token::Ident(ref orient) => {
+                            if orient.eq_ignore_ascii_case("landscape") {
+                                Ok(true)
+                            } else if orient.eq_ignore_ascii_case("portrait") {
+                                Ok(false)
+                            } else {
+                                Err(input
+                                    .new_error::<()>(BasicParseErrorKind::QualifiedRuleInvalid))
+                            }
                         }
+                        _ => Err(input.new_error::<()>(BasicParseErrorKind::QualifiedRuleInvalid)),
                     }
-                    _ => Err(input.new_error::<()>(BasicParseErrorKind::QualifiedRuleInvalid)),
+                });
+                match orientation {
+                    Ok(landscape) => Some(PageSizeDecl::KeywordWithOrientation(keyword, landscape)),
+                    Err(_) => Some(PageSizeDecl::Keyword(keyword)),
                 }
-            });
-            match orientation {
-                Ok(landscape) => Some(PageSizeDecl::KeywordWithOrientation(keyword, landscape)),
-                Err(_) => Some(PageSizeDecl::Keyword(keyword)),
             }
         }
         Token::Dimension { value, unit, .. } => {
@@ -277,10 +280,18 @@ fn parse_page_size_value(input: &mut Parser<'_, '_>) -> Option<PageSizeDecl> {
             Some(PageSizeDecl::Custom(w, h))
         }
         _ => None,
+    };
+    // Reject if trailing tokens remain (CSS: invalid declaration → ignore entirely)
+    if result.is_some() && input.next().is_ok() {
+        return None;
     }
+    result
 }
 
 /// Parse the value of an `@page { margin: ... }` declaration (CSS shorthand).
+///
+/// Returns `None` if the value is invalid or has trailing tokens
+/// (CSS requires invalid declarations to be ignored entirely).
 fn parse_page_margin_value(input: &mut Parser<'_, '_>) -> Option<Margin> {
     let mut values = Vec::new();
     loop {
@@ -303,6 +314,11 @@ fn parse_page_margin_value(input: &mut Parser<'_, '_>) -> Option<Margin> {
         if values.len() >= 4 {
             break;
         }
+    }
+
+    // Reject if trailing tokens remain (CSS: invalid declaration → ignore entirely)
+    if input.next().is_ok() {
+        return None;
     }
 
     match values.len() {
@@ -1462,5 +1478,40 @@ mod tests {
         let css = "@page { size: -10mm 297mm; }";
         let ctx = parse_gcpm(css);
         assert!(ctx.page_settings.is_empty() || ctx.page_settings[0].size.is_none());
+    }
+
+    #[test]
+    fn test_page_size_trailing_tokens_rejected() {
+        let css = "@page { size: A4 bogus; }";
+        let ctx = parse_gcpm(css);
+        assert!(ctx.page_settings.is_empty() || ctx.page_settings[0].size.is_none());
+    }
+
+    #[test]
+    fn test_page_margin_trailing_tokens_rejected() {
+        let css = "@page { margin: 10mm 20mm bad; }";
+        let ctx = parse_gcpm(css);
+        assert!(ctx.page_settings.is_empty() || ctx.page_settings[0].margin.is_none());
+    }
+
+    #[test]
+    fn test_page_margin_five_values_rejected() {
+        let css = "@page { margin: 1mm 2mm 3mm 4mm 5mm; }";
+        let ctx = parse_gcpm(css);
+        assert!(ctx.page_settings.is_empty() || ctx.page_settings[0].margin.is_none());
+    }
+
+    #[test]
+    fn test_css_unit_case_insensitive() {
+        let css = "@page { size: 210MM 297MM; }";
+        let ctx = parse_gcpm(css);
+        let size = ctx.page_settings[0].size.as_ref().unwrap();
+        match size {
+            PageSizeDecl::Custom(w, h) => {
+                assert!((*w - 210.0 * 72.0 / 25.4).abs() < 0.01);
+                assert!((*h - 297.0 * 72.0 / 25.4).abs() < 0.01);
+            }
+            _ => panic!("expected Custom size"),
+        }
     }
 }
