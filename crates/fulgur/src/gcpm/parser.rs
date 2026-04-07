@@ -225,10 +225,16 @@ fn parse_page_size_value(input: &mut Parser<'_, '_>) -> Option<PageSizeDecl> {
                 return Some(PageSizeDecl::Auto);
             }
             if name.eq_ignore_ascii_case("landscape") {
-                return Some(PageSizeDecl::KeywordWithOrientation("auto".to_string(), true));
+                return Some(PageSizeDecl::KeywordWithOrientation(
+                    "auto".to_string(),
+                    true,
+                ));
             }
             if name.eq_ignore_ascii_case("portrait") {
-                return Some(PageSizeDecl::KeywordWithOrientation("auto".to_string(), false));
+                return Some(PageSizeDecl::KeywordWithOrientation(
+                    "auto".to_string(),
+                    false,
+                ));
             }
             let keyword = name.to_string();
             // Try to read a second ident for orientation
@@ -286,7 +292,7 @@ fn parse_page_margin_value(input: &mut Parser<'_, '_>) -> Option<Margin> {
                         input.new_error::<()>(BasicParseErrorKind::QualifiedRuleInvalid)
                     })
                 }
-                Token::Number { value, .. } if value == 0.0 => Ok(0.0_f32),
+                Token::Number { value: 0.0, .. } => Ok(0.0_f32),
                 _ => Err(input.new_error::<()>(BasicParseErrorKind::QualifiedRuleInvalid)),
             }
         });
