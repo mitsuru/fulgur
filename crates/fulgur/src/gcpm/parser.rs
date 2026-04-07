@@ -286,7 +286,7 @@ fn parse_page_margin_value(input: &mut Parser<'_, '_>) -> Option<Margin> {
                         input.new_error::<()>(BasicParseErrorKind::QualifiedRuleInvalid)
                     })
                 }
-                Token::Number { value: 0.0, .. } => Ok(0.0_f32),
+                Token::Number { value, .. } if value == 0.0 => Ok(0.0_f32),
                 _ => Err(input.new_error::<()>(BasicParseErrorKind::QualifiedRuleInvalid)),
             }
         });
