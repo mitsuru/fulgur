@@ -149,30 +149,6 @@ pub struct ContentCounterMapping {
     pub content: Vec<ContentItem>,
 }
 
-/// Parsed `size` declaration from `@page`.
-#[derive(Debug, Clone, PartialEq)]
-pub enum PageSizeDecl {
-    /// A named page size, e.g. `A4`, `letter`.
-    Keyword(String),
-    /// A named page size with orientation, e.g. `A4 landscape`.
-    KeywordWithOrientation(String, bool),
-    /// Explicit width × height, e.g. `210mm 297mm`. Values in points.
-    Custom(f32, f32),
-    /// `auto` — use Config default.
-    Auto,
-}
-
-/// A parsed `@page { size: ...; margin: ...; }` settings rule.
-#[derive(Debug, Clone, PartialEq)]
-pub struct PageSettingsRule {
-    /// Optional page selector (e.g. `:first`, `:left`). `None` means all pages.
-    pub page_selector: Option<String>,
-    /// Parsed `size` declaration, if present.
-    pub size: Option<PageSizeDecl>,
-    /// Parsed `margin` declaration, if present. Values in points.
-    pub margin: Option<crate::config::Margin>,
-}
-
 /// A single content item inside a margin box rule's `content` property.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ContentItem {
@@ -245,8 +221,6 @@ pub struct GcpmContext {
     pub counter_mappings: Vec<CounterMapping>,
     /// Mappings from CSS selectors + pseudo-elements to content items with counter().
     pub content_counter_mappings: Vec<ContentCounterMapping>,
-    /// Page settings rules parsed from `@page { size: ...; margin: ...; }`.
-    pub page_settings: Vec<PageSettingsRule>,
     /// The CSS with GCPM constructs stripped, suitable for normal rendering.
     pub cleaned_css: String,
 }
@@ -260,7 +234,6 @@ impl GcpmContext {
             && self.page_settings.is_empty()
             && self.counter_mappings.is_empty()
             && self.content_counter_mappings.is_empty()
-            && self.page_settings.is_empty()
     }
 }
 
@@ -277,7 +250,6 @@ mod tests {
             page_settings: vec![],
             counter_mappings: vec![],
             content_counter_mappings: vec![],
-            page_settings: vec![],
             cleaned_css: String::new(),
         };
         assert!(ctx.is_empty());
@@ -300,7 +272,6 @@ mod tests {
             page_settings: vec![],
             counter_mappings: vec![],
             content_counter_mappings: vec![],
-            page_settings: vec![],
             cleaned_css: String::new(),
         };
         assert!(!ctx.is_empty());
@@ -318,7 +289,6 @@ mod tests {
             page_settings: vec![],
             counter_mappings: vec![],
             content_counter_mappings: vec![],
-            page_settings: vec![],
             cleaned_css: String::new(),
         };
         assert!(!ctx.is_empty());
