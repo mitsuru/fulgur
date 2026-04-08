@@ -22,9 +22,8 @@ pub fn resolve_content_to_string(
                 "page" => out.push_str(&format_counter(page as i32, *style)),
                 "pages" => out.push_str(&format_counter(total_pages as i32, *style)),
                 _ => {
-                    if let Some(&value) = custom_counters.get(name.as_str()) {
-                        out.push_str(&format_counter(value, *style));
-                    }
+                    let value = custom_counters.get(name.as_str()).copied().unwrap_or(0);
+                    out.push_str(&format_counter(value, *style));
                 }
             },
             ContentItem::Element { .. } => {}
@@ -65,9 +64,8 @@ pub fn resolve_content_to_html(
                 "page" => out.push_str(&format_counter(page_num as i32, *style)),
                 "pages" => out.push_str(&format_counter(total_pages as i32, *style)),
                 _ => {
-                    if let Some(&value) = custom_counters.get(name.as_str()) {
-                        out.push_str(&format_counter(value, *style));
-                    }
+                    let value = custom_counters.get(name.as_str()).copied().unwrap_or(0);
+                    out.push_str(&format_counter(value, *style));
                 }
             },
             ContentItem::Element { name, policy } => {

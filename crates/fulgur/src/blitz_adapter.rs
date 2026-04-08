@@ -610,27 +610,18 @@ impl CounterPass {
             self.ops_by_node.borrow_mut().push((node_id, matched_ops));
         }
 
-        // Phase 3: Resolve content (after counter state update) and set data
-        // attributes + generate CSS (needs mutable doc borrow).
-        // Collect all content resolutions first, then assign ONE cid and
-        // generate ALL CSS rules with that cid. This avoids the bug where
-        // ::before + ::after each overwrote data-fulgur-cid with different values.
-        let content_resolutions: Vec<(&str, String)> = matched_content_indices
-            .into_iter()
-            .map(|idx| {
-                let mapping = &self.content_mappings[idx];
-                let resolved = self.resolve_content(&mapping.content);
-                let pseudo_str = match mapping.pseudo {
-                    PseudoElement::Before => "before",
-                    PseudoElement::After => "after",
-                };
-                (pseudo_str, resolved)
-            })
-            .collect();
+        // Phase 3: Split ::before (resolve now) and ::after (resolve after children).
+        // CSS spec: ::before is a first child, ::after is a last child, so
+        // ::after must see counter state changes from descendants.
+        let (before_indices, after_indices): (Vec<usize>, Vec<usize>) =
+            matched_content_indices.into_iter().partition(|&idx| {
+                self.content_mappings[idx].pseudo == PseudoElement::Before
+            });
 
-        if !content_resolutions.is_empty() {
+        // Allocate a cid if any content mappings matched (needed for both phases)
+        let attr_value = if !before_indices.is_empty() || !after_indices.is_empty() {
             let mut id = self.counter_id.borrow_mut();
-            let attr_value = format!("{}", *id);
+            let v = format!("{}", *id);
             *id += 1;
             drop(id);
 
@@ -638,19 +629,25 @@ impl CounterPass {
             let qual = make_qual_name("data-fulgur-cid");
             if let Some(node_mut) = doc.get_node_mut(node_id) {
                 if let Some(elem_mut) = node_mut.element_data_mut() {
-                    elem_mut.attrs.set(qual, &attr_value);
+                    elem_mut.attrs.set(qual, &v);
                 }
             }
+            Some(v)
+        } else {
+            None
+        };
 
-            // Generate CSS for all pseudo-elements with the same cid
-            let mut css = self.generated_css.borrow_mut();
+        // Resolve ::before now (before child traversal)
+        if let Some(ref cid) = attr_value {
             use std::fmt::Write;
-            for (pseudo_str, resolved) in content_resolutions {
+            let mut css = self.generated_css.borrow_mut();
+            for idx in &before_indices {
+                let mapping = &self.content_mappings[*idx];
+                let resolved = self.resolve_content(&mapping.content);
                 let _ = write!(
                     css,
-                    "[data-fulgur-cid=\"{}\"]::{}{{content:\"{}\"}}",
-                    attr_value,
-                    pseudo_str,
+                    "[data-fulgur-cid=\"{}\"]::before{{content:\"{}\"}}",
+                    cid,
                     css_escape_string(&resolved)
                 );
             }
@@ -663,6 +660,22 @@ impl CounterPass {
             .unwrap_or_default();
         for child_id in children {
             self.walk_tree(doc, child_id);
+        }
+
+        // Resolve ::after now (after child traversal, sees descendant counter changes)
+        if let Some(ref cid) = attr_value {
+            use std::fmt::Write;
+            let mut css = self.generated_css.borrow_mut();
+            for idx in &after_indices {
+                let mapping = &self.content_mappings[*idx];
+                let resolved = self.resolve_content(&mapping.content);
+                let _ = write!(
+                    css,
+                    "[data-fulgur-cid=\"{}\"]::after{{content:\"{}\"}}",
+                    cid,
+                    css_escape_string(&resolved)
+                );
+            }
         }
     }
 
@@ -813,6 +826,7 @@ mod tests {
             string_set_mappings: vec![],
             counter_mappings: vec![],
             content_counter_mappings: vec![],
+            page_settings: vec![],
             cleaned_css: String::new(),
         };
 
@@ -855,6 +869,7 @@ mod tests {
             string_set_mappings: vec![],
             counter_mappings: vec![],
             content_counter_mappings: vec![],
+            page_settings: vec![],
             cleaned_css: String::new(),
         };
 
@@ -883,6 +898,7 @@ mod tests {
             string_set_mappings: vec![],
             counter_mappings: vec![],
             content_counter_mappings: vec![],
+            page_settings: vec![],
             cleaned_css: String::new(),
         };
 
@@ -914,6 +930,7 @@ mod tests {
             string_set_mappings: vec![],
             counter_mappings: vec![],
             content_counter_mappings: vec![],
+            page_settings: vec![],
             cleaned_css: String::new(),
         };
 

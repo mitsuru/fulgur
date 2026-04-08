@@ -242,9 +242,9 @@ fn collect_counter_markers(pageable: &dyn Pageable, ops: &mut Vec<CounterOp>) {
     } else if let Some(wrapper) = any.downcast_ref::<RunningElementWrapperPageable>() {
         collect_counter_markers(wrapper.child.as_ref(), ops);
     } else if let Some(table) = any.downcast_ref::<TablePageable>() {
-        for child in &table.header_cells {
-            collect_counter_markers(child.child.as_ref(), ops);
-        }
+        // Skip header_cells: they are cloned into every page fragment by
+        // TablePageable::split(), so walking them would replay counter ops
+        // on every page the table spans.  Only body_cells carry unique ops.
         for child in &table.body_cells {
             collect_counter_markers(child.child.as_ref(), ops);
         }
