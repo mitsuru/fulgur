@@ -49,15 +49,27 @@ impl Pageable for SvgPageable {
         None
     }
 
-    fn draw(
-        &self,
-        _canvas: &mut Canvas<'_, '_>,
-        _x: Pt,
-        _y: Pt,
-        _avail_width: Pt,
-        _avail_height: Pt,
-    ) {
-        // TODO (Task 3): implement draw via krilla_svg::SurfaceExt::draw_svg
+    fn draw(&self, canvas: &mut Canvas<'_, '_>, x: Pt, y: Pt, _avail_width: Pt, _avail_height: Pt) {
+        use crate::pageable::draw_with_opacity;
+        use krilla_svg::{SurfaceExt, SvgSettings};
+
+        if !self.visible {
+            return;
+        }
+        draw_with_opacity(canvas, self.opacity, |canvas| {
+            let Some(size) = krilla::geom::Size::from_wh(self.width, self.height) else {
+                return;
+            };
+            let transform = krilla::geom::Transform::from_translate(x, y);
+            canvas.surface.push_transform(&transform);
+            // draw_svg returns Option<()>; None means the tree was malformed.
+            // We silently skip rather than panic, matching ImagePageable's behavior
+            // when krilla::image::Image::from_* returns Err.
+            let _ = canvas
+                .surface
+                .draw_svg(&self.tree, size, SvgSettings::default());
+            canvas.surface.pop();
+        });
     }
 
     fn pagination(&self) -> Pagination {
