@@ -35,17 +35,34 @@ fn test_inline_svg_renders_to_pdf() {
 #[test]
 fn test_svg_with_border_and_padding_renders() {
     let engine = build_engine();
-    let html = r#"<html><body>
+    let styled_html = r#"<html><body>
         <svg xmlns="http://www.w3.org/2000/svg" width="100" height="50"
              style="display:block; border: 2px solid black; padding: 10px; background: #eee">
             <rect width="100" height="50" fill="blue"/>
         </svg>
     </body></html>"#;
+    let plain_html = r#"<html><body>
+        <svg xmlns="http://www.w3.org/2000/svg" width="100" height="50"
+             style="display:block">
+            <rect width="100" height="50" fill="blue"/>
+        </svg>
+    </body></html>"#;
 
-    let pdf = engine.render_html(html).unwrap();
-    assert!(pdf.starts_with(b"%PDF"));
+    let styled_pdf = engine.render_html(styled_html).unwrap();
+    let plain_pdf = engine.render_html(plain_html).unwrap();
 
-    // The PDF should be larger than the same HTML without the SVG
-    let empty_pdf = engine.render_html(r#"<html><body></body></html>"#).unwrap();
-    assert!(pdf.len() > empty_pdf.len());
+    assert!(styled_pdf.starts_with(b"%PDF"));
+    assert!(plain_pdf.starts_with(b"%PDF"));
+
+    // The styled SVG must produce a larger PDF than the plain one because
+    // the BlockPageable wrapping branch adds border strokes and a background
+    // fill on top of the same <rect> content. If the has_visual_style()
+    // branch is ever broken, this assertion will catch it.
+    assert!(
+        styled_pdf.len() > plain_pdf.len(),
+        "styled SVG PDF ({} bytes) must exceed plain SVG PDF ({} bytes) \
+         because border/padding/background add content",
+        styled_pdf.len(),
+        plain_pdf.len()
+    );
 }
