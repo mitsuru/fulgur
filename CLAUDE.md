@@ -16,7 +16,7 @@ cargo build --release
 # Test
 cargo test --lib
 cargo test -p fulgur
-cargo test -p fulgur --test gcpm_integration -- --test-threads=1
+cargo test -p fulgur --test gcpm_integration
 
 # Lint
 cargo clippy
@@ -63,7 +63,14 @@ HTML string → Blitz (parse/style/layout) → Pageable tree → Page splitting 
 
 ### Gotchas
 
-- Integration tests require `--test-threads=1` (Blitz not thread-safe)
+- Blitz (`blitz-dom 0.2.4`) has a runtime data race in `BaseDocument::new()` /
+  stylo global state init that causes silent exit (EXIT=0, no panic, no test
+  output) when called concurrently from the same process.
+  `blitz_adapter::*` is gated by a `static BLITZ_LOCK: Mutex<()>` so that
+  `Engine` is safe to share across threads — calls are serialized internally.
+  True parallelism is impossible; for batch throughput use process-level
+  parallelism (gunicorn/puma workers, multiple `fulgur render` invocations).
+  Background and rationale: `docs/plans/2026-04-11-blitz-thread-safety-investigation.md`.
 - Use `BTreeMap` (not `HashMap`) for iteration that affects PDF output (determinism)
 - Blitz: `!important` unreliable, `padding-top` on inline roots ignored (use `margin-top`)
 - `cargo fmt --check` enforced by CI
