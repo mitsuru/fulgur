@@ -545,12 +545,15 @@ impl DomPass for CounterPass {
         }
         let root = doc.root_element();
         let root_id = root.id;
-        self.walk_tree(doc, root_id);
+        self.walk_tree(doc, root_id, 0);
     }
 }
 
 impl CounterPass {
-    fn walk_tree(&self, doc: &mut HtmlDocument, node_id: usize) {
+    fn walk_tree(&self, doc: &mut HtmlDocument, node_id: usize, depth: usize) {
+        if depth >= MAX_DOM_DEPTH {
+            return;
+        }
         // Phase 1: Read element data immutably to collect matched operations
         // and matched content mapping indices. We must drop the immutable borrow
         // before calling doc.get_node_mut().
@@ -562,7 +565,7 @@ impl CounterPass {
                 // Not an element — just recurse into children
                 let children: Vec<usize> = node.children.clone();
                 for child_id in children {
-                    self.walk_tree(doc, child_id);
+                    self.walk_tree(doc, child_id, depth + 1);
                 }
                 return;
             };
@@ -658,7 +661,7 @@ impl CounterPass {
             .map(|n| n.children.clone())
             .unwrap_or_default();
         for child_id in children {
-            self.walk_tree(doc, child_id);
+            self.walk_tree(doc, child_id, depth + 1);
         }
 
         // Resolve ::after now (after child traversal, sees descendant counter changes)

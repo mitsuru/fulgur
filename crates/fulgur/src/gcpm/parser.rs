@@ -646,8 +646,20 @@ impl<'i, 'a> DeclarationParser<'i> for StyleRuleParser<'a> {
             || name.eq_ignore_ascii_case("counter-set")
         {
             let ops = parse_counter_ops(input, &name);
-            // Last-declaration-wins: replace, don't extend
-            *self.counter_ops = ops;
+            // counter-reset / counter-increment / counter-set are independent
+            // CSS properties, so they must each contribute to counter_ops.
+            // Apply last-declaration-wins per property by removing prior ops
+            // of the SAME variant before extending with the new ones.
+            let prop = name.to_ascii_lowercase();
+            self.counter_ops.retain(|op| {
+                !matches!(
+                    (op, prop.as_str()),
+                    (CounterOp::Reset { .. }, "counter-reset")
+                        | (CounterOp::Increment { .. }, "counter-increment")
+                        | (CounterOp::Set { .. }, "counter-set")
+                )
+            });
+            self.counter_ops.extend(ops);
             let start = decl_start.position().byte_index();
             let end = input.position().byte_index();
             self.edits.push(CssEdit::Replace {
@@ -660,23 +672,25 @@ impl<'i, 'a> DeclarationParser<'i> for StyleRuleParser<'a> {
             let has_counter = items
                 .iter()
                 .any(|item| matches!(item, ContentItem::Counter { .. }));
-            // Last-declaration-wins: always update (clear if no counter)
+            // Last-declaration-wins: always update content_items (clear when
+            // the new content has no counter()).
             if has_counter {
                 *self.content_items = Some(items);
+                // Strip the original `content: counter(...)` from cleaned CSS
+                // because Blitz cannot evaluate counter() — CounterPass injects
+                // a synthetic ::before/::after rule with the resolved value.
+                let start = decl_start.position().byte_index();
+                let end = input.position().byte_index();
+                self.edits.push(CssEdit::Replace {
+                    start,
+                    end,
+                    replacement: String::new(),
+                });
             } else {
+                // Plain `content: "..."` stays in cleaned CSS so Blitz can
+                // render it directly.
                 *self.content_items = None;
             }
-            // Always strip `content` from cleaned CSS for ::before/::after rules
-            // we recognise — counter()/string()/element() are resolved by us, not
-            // by Blitz, so leaving the original declaration would cause Blitz to
-            // try (and fail) to render the unsupported function.
-            let start = decl_start.position().byte_index();
-            let end = input.position().byte_index();
-            self.edits.push(CssEdit::Replace {
-                start,
-                end,
-                replacement: String::new(),
-            });
         } else {
             // Skip other declarations
             while input.next().is_ok() {}
@@ -1658,5 +1672,79 @@ mod tests {
         let ctx = parse_gcpm(css);
         assert!(!ctx.cleaned_css.contains("counter(chapter)"));
         assert!(ctx.cleaned_css.contains("font-weight: bold"));
+    }
+
+    #[test]
+    fn test_parse_pseudo_content_without_counter_kept_in_cleaned_css() {
+        // Plain string content (no counter()) must remain in cleaned CSS so
+        // Blitz can render it directly. Stripping it would break authors who
+        // use ::before/::after for purely decorative literals.
+        let css = r#".note::before { content: "Note: "; font-weight: bold; }"#;
+        let ctx = parse_gcpm(css);
+        assert!(
+            ctx.cleaned_css.contains(r#"content: "Note: ""#),
+            "literal content must survive in cleaned_css: {:?}",
+            ctx.cleaned_css
+        );
+        assert!(ctx.cleaned_css.contains("font-weight: bold"));
+    }
+
+    #[test]
+    fn test_parse_counter_reset_and_increment_in_same_rule() {
+        // counter-reset and counter-increment are independent properties — both
+        // must contribute to the recorded ops, even when declared in the same
+        // rule block. Regression test for the previous implementation where
+        // each property overwrote the entire counter_ops vector.
+        let css = "h2 { counter-reset: section 0; counter-increment: chapter; }";
+        let ctx = parse_gcpm(css);
+        assert_eq!(ctx.counter_mappings.len(), 1);
+        let mapping = &ctx.counter_mappings[0];
+        assert!(
+            mapping
+                .ops
+                .iter()
+                .any(|op| matches!(op, CounterOp::Reset { name, .. } if name == "section")),
+            "counter-reset must survive: {:?}",
+            mapping.ops
+        );
+        assert!(
+            mapping
+                .ops
+                .iter()
+                .any(|op| matches!(op, CounterOp::Increment { name, .. } if name == "chapter")),
+            "counter-increment must survive: {:?}",
+            mapping.ops
+        );
+    }
+
+    #[test]
+    fn test_parse_counter_increment_last_declaration_wins_within_property() {
+        // Two counter-increment declarations in the same rule: the later one
+        // wins (CSS last-declaration-wins). Counter-reset, declared between
+        // them, must still survive because it's a different property.
+        let css = "h2 { counter-increment: chapter; counter-reset: section; counter-increment: page; }";
+        let ctx = parse_gcpm(css);
+        assert_eq!(ctx.counter_mappings.len(), 1);
+        let mapping = &ctx.counter_mappings[0];
+        let increments: Vec<_> = mapping
+            .ops
+            .iter()
+            .filter_map(|op| match op {
+                CounterOp::Increment { name, .. } => Some(name.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            increments,
+            vec!["page"],
+            "only the last counter-increment should remain"
+        );
+        assert!(
+            mapping
+                .ops
+                .iter()
+                .any(|op| matches!(op, CounterOp::Reset { .. })),
+            "counter-reset between two increments must survive"
+        );
     }
 }
