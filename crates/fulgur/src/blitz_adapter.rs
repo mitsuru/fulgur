@@ -6,7 +6,25 @@ use blitz_html::HtmlDocument;
 use blitz_traits::shell::{ColorScheme, Viewport};
 use parley::FontContext;
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
+
+/// Process-wide lock that serializes every Blitz API call.
+///
+/// Blitz (`blitz-dom 0.2.4`) has a runtime data race in `BaseDocument::new()` /
+/// stylo global state initialization that causes a silent exit (EXIT=0, no
+/// panic, no test output) when called concurrently from multiple threads in the
+/// same process. The race is `timing-dependent` — under `strace` slowdown the
+/// tests pass; without it they silently fail.
+///
+/// We serialize all Blitz-touching code through this lock so that fulgur's
+/// `Engine` can be safely shared across threads (web servers, test runners,
+/// Python/Ruby bindings under thread pools). True parallelism is impossible
+/// with this constraint, so for batch throughput use process-level parallelism
+/// (gunicorn workers, puma workers, multiple `fulgur render` invocations).
+///
+/// See `docs/plans/2026-04-11-blitz-thread-safety-investigation.md` for the
+/// full investigation, evidence, and rationale.
+static BLITZ_LOCK: Mutex<()> = Mutex::new(());
 
 /// Suppress stdout during a closure. Blitz's HTML parser unconditionally prints
 /// `println!("ERROR: {error}")` for non-fatal parse errors (e.g., "Unexpected token").
@@ -91,6 +109,8 @@ pub trait DomPass {
 
 /// Parse HTML into a document without resolving styles or layout.
 pub fn parse(html: &str, viewport_width: f32, font_data: &[Arc<Vec<u8>>]) -> HtmlDocument {
+    let _guard = BLITZ_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+
     let viewport = Viewport::new(viewport_width as u32, 10000, 1.0, ColorScheme::Light);
 
     let font_ctx = if font_data.is_empty() {
@@ -116,6 +136,7 @@ pub fn parse(html: &str, viewport_width: f32, font_data: &[Arc<Vec<u8>>]) -> Htm
 
 /// Apply a sequence of DOM passes to a parsed document.
 pub fn apply_passes(doc: &mut HtmlDocument, passes: &[Box<dyn DomPass>], ctx: &PassContext<'_>) {
+    let _guard = BLITZ_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     for pass in passes {
         pass.apply(doc, ctx);
     }
@@ -123,6 +144,7 @@ pub fn apply_passes(doc: &mut HtmlDocument, passes: &[Box<dyn DomPass>], ctx: &P
 
 /// Resolve styles (Stylo) and compute layout (Taffy).
 pub fn resolve(doc: &mut HtmlDocument) {
+    let _guard = BLITZ_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     doc.resolve(0.0);
 }
 
