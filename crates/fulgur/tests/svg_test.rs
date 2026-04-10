@@ -31,3 +31,21 @@ fn test_inline_svg_renders_to_pdf() {
         empty_pdf.len()
     );
 }
+
+#[test]
+fn test_svg_with_border_and_padding_renders() {
+    let engine = build_engine();
+    let html = r#"<html><body>
+        <svg xmlns="http://www.w3.org/2000/svg" width="100" height="50"
+             style="display:block; border: 2px solid black; padding: 10px; background: #eee">
+            <rect width="100" height="50" fill="blue"/>
+        </svg>
+    </body></html>"#;
+
+    let pdf = engine.render_html(html).unwrap();
+    assert!(pdf.starts_with(b"%PDF"));
+
+    // The PDF should be larger than the same HTML without the SVG
+    let empty_pdf = engine.render_html(r#"<html><body></body></html>"#).unwrap();
+    assert!(pdf.len() > empty_pdf.len());
+}
