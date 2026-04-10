@@ -16,6 +16,7 @@ pub mod paginate;
 pub mod paragraph;
 pub mod render;
 pub mod schema;
+pub mod svg;
 pub mod template;
 
 pub use config::{Config, ConfigBuilder, Margin, PageSize};
