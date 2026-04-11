@@ -568,11 +568,12 @@ pub fn compute_overflow_clip_path(
     let pb_w = w - bw[1] - bw[3];
     let pb_h = h - bw[0] - bw[2];
 
-    if pb_w <= 0.0 || pb_h <= 0.0 {
-        return None;
-    }
-
-    // Non-clipped axes extend to effectively unlimited range
+    // Non-clipped axes extend to effectively unlimited range so only the
+    // clipped axis is actually bounded. We intentionally do NOT bail out on
+    // `pb_w <= 0 || pb_h <= 0` here: a collapsed non-clipped axis is fine
+    // because it will be expanded to `±INFINITE` below. Only if a *clipped*
+    // axis has zero/negative size should we skip the clip (the final
+    // `cw <= 0 || ch <= 0` check below handles that).
     const INFINITE: f32 = 1.0e6;
     let (cx, cw) = if style.overflow_x == Overflow::Clip {
         (pb_x, pb_w)
@@ -584,6 +585,10 @@ pub fn compute_overflow_clip_path(
     } else {
         (pb_y - INFINITE, pb_h + 2.0 * INFINITE)
     };
+
+    if cw <= 0.0 || ch <= 0.0 {
+        return None;
+    }
 
     let both_axes = style.overflow_x == Overflow::Clip && style.overflow_y == Overflow::Clip;
     let has_radius = style.has_radius();
@@ -2350,6 +2355,59 @@ mod overflow_tests {
         };
         let path = compute_overflow_clip_path(&style, 0.0, 0.0, 100.0, 100.0);
         assert!(path.is_none(), "zero padding-box should return None");
+    }
+
+    #[test]
+    fn test_clip_path_axis_x_only_survives_zero_height() {
+        // `overflow-x: hidden; overflow-y: visible` with a collapsed height
+        // (e.g. borders eating all the vertical space) must still produce a
+        // clip path: the non-clipped axis is expanded to ±INFINITE so zero
+        // `pb_h` is harmless.
+        let style = BlockStyle {
+            overflow_x: Overflow::Clip,
+            // overflow_y stays Visible
+            border_widths: [50.0, 0.0, 50.0, 0.0], // top+bottom = 100, same as h
+            ..Default::default()
+        };
+        let path = compute_overflow_clip_path(&style, 0.0, 0.0, 100.0, 100.0);
+        assert!(
+            path.is_some(),
+            "x-only clip should survive a collapsed padding-box height"
+        );
+    }
+
+    #[test]
+    fn test_clip_path_axis_y_only_survives_zero_width() {
+        // Symmetric: `overflow-y: hidden; overflow-x: visible` with collapsed
+        // width must still produce a clip path.
+        let style = BlockStyle {
+            overflow_y: Overflow::Clip,
+            // overflow_x stays Visible
+            border_widths: [0.0, 50.0, 0.0, 50.0], // left+right = 100, same as w
+            ..Default::default()
+        };
+        let path = compute_overflow_clip_path(&style, 0.0, 0.0, 100.0, 100.0);
+        assert!(
+            path.is_some(),
+            "y-only clip should survive a collapsed padding-box width"
+        );
+    }
+
+    #[test]
+    fn test_clip_path_axis_x_only_returns_none_on_zero_clipped_axis() {
+        // If the *clipped* axis has zero size, no meaningful clip is
+        // possible and the helper should return None.
+        let style = BlockStyle {
+            overflow_x: Overflow::Clip,
+            // overflow_y stays Visible
+            border_widths: [0.0, 50.0, 0.0, 50.0], // width collapses to 0
+            ..Default::default()
+        };
+        let path = compute_overflow_clip_path(&style, 0.0, 0.0, 100.0, 100.0);
+        assert!(
+            path.is_none(),
+            "x-only clip with zero pb_w should return None"
+        );
     }
 
     #[test]
