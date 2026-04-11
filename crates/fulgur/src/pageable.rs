@@ -151,6 +151,10 @@ pub struct BlockStyle {
     pub border_radii: [[f32; 2]; 4],
     /// Border styles: top, right, bottom, left
     pub border_styles: [BorderStyleValue; 4],
+    /// `overflow-x` value
+    pub overflow_x: Overflow,
+    /// `overflow-y` value
+    pub overflow_y: Overflow,
 }
 
 /// CSS border-style values supported by fulgur.
@@ -175,6 +179,19 @@ pub enum BorderStyleValue {
     Inset,
     /// 3D outset effect
     Outset,
+}
+
+/// CSS `overflow-x` / `overflow-y` value.
+///
+/// PDF は静的メディアなので、CSS の `hidden`/`clip`/`scroll`/`auto` はすべて
+/// 「padding-box でクリップ」という同一の動作に統合する。
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Overflow {
+    /// `visible` — クリップしない (デフォルト)
+    #[default]
+    Visible,
+    /// `hidden` / `clip` / `scroll` / `auto` — padding-box でクリップする
+    Clip,
 }
 
 // ─── Background types ────────────────────────────────────
@@ -263,6 +280,11 @@ impl BlockStyle {
             self.border_widths[3] + self.padding[3],
             self.border_widths[0] + self.padding[0],
         )
+    }
+
+    /// Whether any axis has overflow clipping enabled.
+    pub fn has_overflow_clip(&self) -> bool {
+        self.overflow_x == Overflow::Clip || self.overflow_y == Overflow::Clip
     }
 }
 
@@ -2088,5 +2110,29 @@ mod background_tests {
             clip: BgClip::BorderBox,
         });
         assert!(style.has_visual_style());
+    }
+}
+
+#[cfg(test)]
+mod overflow_tests {
+    use super::*;
+
+    #[test]
+    fn test_overflow_default_is_visible() {
+        let style = BlockStyle::default();
+        assert_eq!(style.overflow_x, Overflow::Visible);
+        assert_eq!(style.overflow_y, Overflow::Visible);
+    }
+
+    #[test]
+    fn test_overflow_clip_flag() {
+        let mut style = BlockStyle::default();
+        style.overflow_x = Overflow::Clip;
+        assert!(style.has_overflow_clip());
+        style.overflow_x = Overflow::Visible;
+        style.overflow_y = Overflow::Clip;
+        assert!(style.has_overflow_clip());
+        style.overflow_y = Overflow::Visible;
+        assert!(!style.has_overflow_clip());
     }
 }
