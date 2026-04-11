@@ -1162,9 +1162,27 @@ impl Pageable for BlockPageable {
                 draw_block_border(canvas, &self.style, x, y, total_width, total_height);
             }
 
+            // overflow clipping: clip children to the padding box.
+            // Background and borders are intentionally drawn outside the clip
+            // so borders render correctly at the block's edge.
+            let clip_pushed = if let Some(clip_path) =
+                compute_overflow_clip_path(&self.style, x, y, total_width, total_height)
+            {
+                canvas
+                    .surface
+                    .push_clip_path(&clip_path, &krilla::paint::FillRule::default());
+                true
+            } else {
+                false
+            };
+
             for pc in &self.children {
                 pc.child
                     .draw(canvas, x + pc.x, y + pc.y, avail_width, pc.child.height());
+            }
+
+            if clip_pushed {
+                canvas.surface.pop();
             }
         });
     }
@@ -2303,5 +2321,23 @@ mod overflow_tests {
         };
         let path = compute_overflow_clip_path(&style, 0.0, 0.0, 100.0, 100.0);
         assert!(path.is_none(), "zero padding-box should return None");
+    }
+
+    #[test]
+    fn test_block_draw_has_no_clip_by_default() {
+        // Default BlockStyle has both axes Visible, so has_overflow_clip is false.
+        let style = BlockStyle::default();
+        assert!(!style.has_overflow_clip());
+        assert!(compute_overflow_clip_path(&style, 0.0, 0.0, 100.0, 100.0).is_none());
+    }
+
+    #[test]
+    fn test_block_draw_has_clip_when_configured() {
+        let style = BlockStyle {
+            overflow_x: Overflow::Clip,
+            ..Default::default()
+        };
+        assert!(style.has_overflow_clip());
+        assert!(compute_overflow_clip_path(&style, 0.0, 0.0, 100.0, 100.0).is_some());
     }
 }
