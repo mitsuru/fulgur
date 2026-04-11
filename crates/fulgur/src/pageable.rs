@@ -1485,8 +1485,6 @@ impl Pageable for RunningElementWrapperPageable {
 
 // ─── ListItemPageable ───────────────────────────────────
 
-use crate::paragraph::ShapedLine;
-
 /// Clamp an intrinsic image size to a line-height limit while preserving
 /// the aspect ratio. Used to size list-style-image markers so they match
 /// the surrounding text's line-height.
@@ -1509,24 +1507,41 @@ pub(crate) fn clamp_marker_size(
     }
 }
 
+/// Marker attached to a `ListItemPageable`.
+///
+/// Exactly one variant holds valid content per list item, enforced by the
+/// type system. `None` is used for the second fragment after a page-break
+/// split (the marker only appears on the first fragment).
+#[derive(Clone)]
+pub enum ListItemMarker {
+    /// Text marker with shaped glyph runs extracted from Blitz/Parley.
+    Text {
+        lines: Vec<crate::paragraph::ShapedLine>,
+        width: Pt,
+    },
+    /// No marker — split trailing fragment or list-style-type: none.
+    None,
+}
+
 /// A list item with an outside-positioned marker.
 #[derive(Clone)]
 pub struct ListItemPageable {
-    /// Shaped lines for the marker text (extracted from Blitz's Parley layout)
-    pub marker_lines: Vec<ShapedLine>,
-    /// Width of the marker (for positioning to the left of body)
-    pub marker_width: Pt,
-    /// The list item's body content
+    /// Marker (text or none; image variant added in a follow-up step).
+    pub marker: ListItemMarker,
+    /// Line-height of the first shaped line — used to vertically center
+    /// image markers. Zero for `ListItemMarker::None`.
+    pub marker_line_height: Pt,
+    /// The list item's body content.
     pub body: Box<dyn Pageable>,
-    /// Visual style (background, borders, padding)
+    /// Visual style (background, borders, padding).
     pub style: BlockStyle,
-    /// Taffy-computed width
+    /// Taffy-computed width.
     pub width: Pt,
-    /// Cached height from wrap()
+    /// Cached height from wrap().
     pub height: Pt,
-    /// CSS opacity (0.0–1.0), applied to both marker and body
+    /// CSS opacity (0.0–1.0), applied to both marker and body.
     pub opacity: f32,
-    /// CSS visibility (false = hidden)
+    /// CSS visibility (false = hidden).
     pub visible: bool,
 }
 
@@ -1548,8 +1563,8 @@ impl Pageable for ListItemPageable {
         let (top_body, bottom_body) = self.body.split(avail_width, avail_height)?;
         Some((
             Box::new(ListItemPageable {
-                marker_lines: self.marker_lines.clone(),
-                marker_width: self.marker_width,
+                marker: self.marker.clone(),
+                marker_line_height: self.marker_line_height,
                 body: top_body,
                 style: self.style.clone(),
                 width: self.width,
@@ -1558,8 +1573,8 @@ impl Pageable for ListItemPageable {
                 visible: self.visible,
             }),
             Box::new(ListItemPageable {
-                marker_lines: Vec::new(),
-                marker_width: 0.0,
+                marker: ListItemMarker::None,
+                marker_line_height: 0.0,
                 body: bottom_body,
                 style: self.style.clone(),
                 width: self.width,
@@ -1580,8 +1595,8 @@ impl Pageable for ListItemPageable {
         };
         Ok((
             Box::new(ListItemPageable {
-                marker_lines: me.marker_lines,
-                marker_width: me.marker_width,
+                marker: me.marker,
+                marker_line_height: me.marker_line_height,
                 body: top_body,
                 style: me.style.clone(),
                 width: me.width,
@@ -1590,8 +1605,8 @@ impl Pageable for ListItemPageable {
                 visible: me.visible,
             }),
             Box::new(ListItemPageable {
-                marker_lines: Vec::new(),
-                marker_width: 0.0,
+                marker: ListItemMarker::None,
+                marker_line_height: 0.0,
                 body: bottom_body,
                 style: me.style,
                 width: me.width,
@@ -1604,10 +1619,14 @@ impl Pageable for ListItemPageable {
 
     fn draw(&self, canvas: &mut Canvas<'_, '_>, x: Pt, y: Pt, avail_width: Pt, avail_height: Pt) {
         draw_with_opacity(canvas, self.opacity, |canvas| {
-            // visibility: hidden skips marker but body still draws (children have own visibility)
-            if self.visible && !self.marker_lines.is_empty() {
-                let marker_x = x - self.marker_width;
-                crate::paragraph::draw_shaped_lines(canvas, &self.marker_lines, marker_x, y);
+            if self.visible {
+                match &self.marker {
+                    ListItemMarker::Text { lines, width } if !lines.is_empty() => {
+                        let marker_x = x - width;
+                        crate::paragraph::draw_shaped_lines(canvas, lines, marker_x, y);
+                    }
+                    _ => {}
+                }
             }
             self.body.draw(canvas, x, y, avail_width, avail_height);
         });
@@ -1925,8 +1944,11 @@ mod tests {
     fn test_list_item_delegates_to_body() {
         let body = make_spacer(100.0);
         let mut item = ListItemPageable {
-            marker_lines: Vec::new(),
-            marker_width: 20.0,
+            marker: ListItemMarker::Text {
+                lines: Vec::new(),
+                width: 20.0,
+            },
+            marker_line_height: 0.0,
             body,
             style: BlockStyle::default(),
             width: 200.0,
@@ -1947,8 +1969,11 @@ mod tests {
         ]);
         body.wrap(200.0, 1000.0);
         let mut item = ListItemPageable {
-            marker_lines: vec![],
-            marker_width: 20.0,
+            marker: ListItemMarker::Text {
+                lines: Vec::new(),
+                width: 20.0,
+            },
+            marker_line_height: 14.0,
             body: Box::new(body),
             style: BlockStyle::default(),
             width: 200.0,
@@ -1960,12 +1985,15 @@ mod tests {
         let result = item.split(200.0, 250.0);
         assert!(result.is_some());
         let (first, second) = result.unwrap();
-        // First part keeps marker
+        // First part keeps the text marker
         let first_item = first.as_any().downcast_ref::<ListItemPageable>().unwrap();
-        assert!((first_item.marker_width - 20.0).abs() < 0.01);
+        match &first_item.marker {
+            ListItemMarker::Text { width, .. } => assert!((*width - 20.0).abs() < 0.01),
+            _ => panic!("expected Text marker on first fragment"),
+        }
         // Second part has no marker
         let second_item = second.as_any().downcast_ref::<ListItemPageable>().unwrap();
-        assert!((second_item.marker_width - 0.0).abs() < 0.01);
+        assert!(matches!(second_item.marker, ListItemMarker::None));
     }
 
     #[test]

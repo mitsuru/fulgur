@@ -7,7 +7,7 @@ use crate::image::ImagePageable;
 use crate::pageable::{
     BackgroundLayer, BgBox, BgClip, BgLengthPercentage, BgRepeat, BgSize, BlockPageable,
     BlockStyle, BorderStyleValue, CounterOpMarkerPageable, CounterOpWrapperPageable,
-    ListItemPageable, Pageable, PositionedChild, RunningElementMarkerPageable,
+    ListItemMarker, ListItemPageable, Pageable, PositionedChild, RunningElementMarkerPageable,
     RunningElementWrapperPageable, Size, SpacerPageable, StringSetPageable,
     StringSetWrapperPageable, TablePageable,
 };
@@ -237,9 +237,7 @@ fn convert_node_inner(
     if let Some(elem_data) = node.element_data()
         && elem_data.list_item_data.is_some()
     {
-        let (marker_lines, marker_width, marker_line_height) =
-            extract_marker_lines(doc, node, ctx);
-        let _ = marker_line_height;
+        let (marker_lines, marker_width, marker_line_height) = extract_marker_lines(doc, node, ctx);
         let style = extract_block_style(node, ctx.assets);
         let (opacity, visible) = extract_opacity_visible(node);
 
@@ -280,8 +278,11 @@ fn convert_node_inner(
             Box::new(block)
         };
         let mut item = ListItemPageable {
-            marker_lines,
-            marker_width,
+            marker: ListItemMarker::Text {
+                lines: marker_lines,
+                width: marker_width,
+            },
+            marker_line_height,
             body,
             style: BlockStyle::default(),
             width,
