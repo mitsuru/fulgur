@@ -237,7 +237,9 @@ fn convert_node_inner(
     if let Some(elem_data) = node.element_data()
         && elem_data.list_item_data.is_some()
     {
-        let (marker_lines, marker_width) = extract_marker_lines(doc, node, ctx);
+        let (marker_lines, marker_width, marker_line_height) =
+            extract_marker_lines(doc, node, ctx);
+        let _ = marker_line_height;
         let style = extract_block_style(node, ctx.assets);
         let (opacity, visible) = extract_opacity_visible(node);
 
@@ -1105,18 +1107,18 @@ fn extract_marker_lines(
     doc: &blitz_dom::BaseDocument,
     node: &Node,
     ctx: &mut ConvertContext<'_>,
-) -> (Vec<ShapedLine>, f32) {
+) -> (Vec<ShapedLine>, f32, f32) {
     let elem_data = match node.element_data() {
         Some(d) => d,
-        None => return (Vec::new(), 0.0),
+        None => return (Vec::new(), 0.0, 0.0),
     };
     let list_item_data = match &elem_data.list_item_data {
         Some(d) => d,
-        None => return (Vec::new(), 0.0),
+        None => return (Vec::new(), 0.0, 0.0),
     };
     let parley_layout = match &list_item_data.position {
         blitz_dom::node::ListItemLayoutPosition::Outside(layout) => layout,
-        blitz_dom::node::ListItemLayoutPosition::Inside => return (Vec::new(), 0.0),
+        blitz_dom::node::ListItemLayoutPosition::Inside => return (Vec::new(), 0.0, 0.0),
     };
 
     let marker_text = match &list_item_data.marker {
@@ -1129,9 +1131,13 @@ fn extract_marker_lines(
 
     let mut shaped_lines = Vec::new();
     let mut max_width: f32 = 0.0;
+    let mut line_height_pt: f32 = 0.0;
 
     for line in parley_layout.lines() {
         let metrics = line.metrics();
+        if line_height_pt == 0.0 {
+            line_height_pt = metrics.line_height;
+        }
         let mut glyph_runs = Vec::new();
         let mut line_width: f32 = 0.0;
 
@@ -1182,7 +1188,7 @@ fn extract_marker_lines(
         });
     }
 
-    (shaped_lines, max_width)
+    (shaped_lines, max_width, line_height_pt)
 }
 
 /// Get text color from a DOM node's computed styles.
