@@ -1600,6 +1600,96 @@ impl Pageable for CounterOpWrapperPageable {
     }
 }
 
+// ─── TransformWrapperPageable ──────────────────────────────
+
+/// Wraps a Pageable in a CSS `transform`. The matrix is pre-resolved
+/// at convert time (percentages / keywords already turned into px).
+///
+/// The wrapper is **atomic**: `split()` always returns `None`, forcing
+/// the whole subtree onto a single page. A transformed element that
+/// spans a page break would be geometrically meaningless (half of a
+/// rotated title on each page), so we follow PrinceXML / WeasyPrint
+/// behavior and never split through a transform.
+///
+/// `origin_x` / `origin_y` are the `transform-origin` resolved to px,
+/// measured from the element's border-box top-left corner.
+#[derive(Clone)]
+pub struct TransformWrapperPageable {
+    pub inner: Box<dyn Pageable>,
+    pub matrix: Affine2D,
+    pub origin_x: f32,
+    pub origin_y: f32,
+}
+
+impl TransformWrapperPageable {
+    pub fn new(inner: Box<dyn Pageable>, matrix: Affine2D, origin_x: f32, origin_y: f32) -> Self {
+        Self {
+            inner,
+            matrix,
+            origin_x,
+            origin_y,
+        }
+    }
+
+    /// Compute the full matrix that will be pushed onto the Krilla surface
+    /// when this wrapper is drawn at `(draw_x, draw_y)`.
+    ///
+    /// The transform-origin is translated into the draw coordinate system
+    /// (`draw_x + origin_x`, `draw_y + origin_y`), then the composition
+    /// `T(ox, oy) · M · T(-ox, -oy)` is built so that rotation/scale
+    /// happen around the chosen origin point.
+    ///
+    /// Exposed (hidden from docs) so integration tests can verify
+    /// geometric correctness without constructing a Krilla surface.
+    #[doc(hidden)]
+    pub fn effective_matrix(&self, draw_x: Pt, draw_y: Pt) -> Affine2D {
+        let ox = draw_x + self.origin_x;
+        let oy = draw_y + self.origin_y;
+        Affine2D::translation(ox, oy)
+            .mul(&self.matrix)
+            .mul(&Affine2D::translation(-ox, -oy))
+    }
+}
+
+impl Pageable for TransformWrapperPageable {
+    fn wrap(&mut self, avail_width: Pt, avail_height: Pt) -> Size {
+        // transform does not affect layout; reuse the inner measurement.
+        self.inner.wrap(avail_width, avail_height)
+    }
+
+    fn split(
+        &self,
+        _avail_width: Pt,
+        _avail_height: Pt,
+    ) -> Option<(Box<dyn Pageable>, Box<dyn Pageable>)> {
+        // Atomic: never split through a transform.
+        None
+    }
+
+    fn draw(&self, canvas: &mut Canvas<'_, '_>, x: Pt, y: Pt, avail_width: Pt, avail_height: Pt) {
+        let full = self.effective_matrix(x, y);
+        canvas.surface.push_transform(&full.to_krilla());
+        self.inner.draw(canvas, x, y, avail_width, avail_height);
+        canvas.surface.pop();
+    }
+
+    fn clone_box(&self) -> Box<dyn Pageable> {
+        Box::new(self.clone())
+    }
+
+    fn height(&self) -> Pt {
+        self.inner.height()
+    }
+
+    fn pagination(&self) -> Pagination {
+        self.inner.pagination()
+    }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+}
+
 // ─── StringSetWrapperPageable ──────────────────────────────
 
 /// Wraps a Pageable together with `StringSetPageable` markers that must stay
@@ -2625,5 +2715,101 @@ mod affine_tests {
         assert!(approx(s.c, 0.0));
         assert!(approx(s.e, 0.0));
         assert!(approx(s.f, 0.0));
+    }
+}
+
+#[cfg(test)]
+mod transform_wrapper_tests {
+    use super::*;
+    use std::f32::consts::FRAC_PI_2;
+
+    const EPS: f32 = 1e-5;
+
+    fn approx(a: f32, b: f32) -> bool {
+        (a - b).abs() < EPS
+    }
+
+    // A minimal no-op Pageable for wrapping in tests.
+    #[derive(Clone)]
+    struct StubPageable {
+        w: Pt,
+        h: Pt,
+    }
+
+    impl Pageable for StubPageable {
+        fn wrap(&mut self, _: Pt, _: Pt) -> Size {
+            Size {
+                width: self.w,
+                height: self.h,
+            }
+        }
+        fn split(&self, _: Pt, _: Pt) -> Option<(Box<dyn Pageable>, Box<dyn Pageable>)> {
+            None
+        }
+        fn draw(&self, _: &mut Canvas<'_, '_>, _: Pt, _: Pt, _: Pt, _: Pt) {}
+        fn clone_box(&self) -> Box<dyn Pageable> {
+            Box::new(self.clone())
+        }
+        fn height(&self) -> Pt {
+            self.h
+        }
+        fn as_any(&self) -> &dyn std::any::Any {
+            self
+        }
+    }
+
+    fn wrap(matrix: Affine2D, origin_x: Pt, origin_y: Pt) -> TransformWrapperPageable {
+        TransformWrapperPageable {
+            inner: Box::new(StubPageable { w: 100.0, h: 100.0 }),
+            matrix,
+            origin_x,
+            origin_y,
+        }
+    }
+
+    #[test]
+    fn translate_only_matrix() {
+        let w = wrap(Affine2D::translation(10.0, 20.0), 0.0, 0.0);
+        let m = w.effective_matrix(0.0, 0.0);
+        assert!(approx(m.e, 10.0));
+        assert!(approx(m.f, 20.0));
+        assert!(approx(m.a, 1.0));
+        assert!(approx(m.d, 1.0));
+    }
+
+    #[test]
+    fn rotate_90_maps_unit_vector_at_origin_zero() {
+        let w = wrap(Affine2D::rotation(FRAC_PI_2), 0.0, 0.0);
+        let m = w.effective_matrix(0.0, 0.0);
+        let x = m.a * 1.0 + m.c * 0.0 + m.e;
+        let y = m.b * 1.0 + m.d * 0.0 + m.f;
+        assert!(approx(x, 0.0), "x expected 0.0, got {x}");
+        assert!(approx(y, 1.0), "y expected 1.0, got {y}");
+    }
+
+    #[test]
+    fn rotate_with_center_origin_fixes_center() {
+        // 100×100 box with transform-origin at center (50, 50).
+        // After 90° rotation, the origin point must map to itself.
+        let w = wrap(Affine2D::rotation(FRAC_PI_2), 50.0, 50.0);
+        let m = w.effective_matrix(0.0, 0.0);
+        let x = m.a * 50.0 + m.c * 50.0 + m.e;
+        let y = m.b * 50.0 + m.d * 50.0 + m.f;
+        assert!(approx(x, 50.0), "origin x should be fixed, got {x}");
+        assert!(approx(y, 50.0), "origin y should be fixed, got {y}");
+    }
+
+    #[test]
+    fn split_is_always_none() {
+        let w = wrap(Affine2D::rotation(FRAC_PI_2), 0.0, 0.0);
+        assert!(w.split(1000.0, 1000.0).is_none());
+    }
+
+    #[test]
+    fn wrap_delegates_to_inner_size() {
+        let mut w = wrap(Affine2D::rotation(FRAC_PI_2), 0.0, 0.0);
+        let size = w.wrap(1000.0, 1000.0);
+        assert!(approx(size.width, 100.0));
+        assert!(approx(size.height, 100.0));
     }
 }
