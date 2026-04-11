@@ -60,17 +60,28 @@ fn render_example(example_dir: &Path, out_path: &Path) {
     // update-examples.yml, and release-prepare.yml — drift here would
     // cause the committed-PDF match check to fail spuriously when a
     // new image format is introduced in one place but not the other.
-    for entry in std::fs::read_dir(example_dir).expect("readdir example") {
-        let entry = entry.expect("entry");
-        let path = entry.path();
-        let ext_ok = path
-            .extension()
-            .and_then(|e| e.to_str())
-            .map(|e| matches!(e.to_ascii_lowercase().as_str(), "png" | "jpg" | "gif"))
-            .unwrap_or(false);
-        if !ext_ok {
-            continue;
-        }
+    //
+    // `std::fs::read_dir()` does not guarantee any particular
+    // enumeration order (per the stdlib docs), so we collect and
+    // sort by path before passing `--image` flags. This keeps the
+    // argument order stable across filesystems, reruns, and future
+    // libc/toolchain changes, which in turn keeps the emitted PDF
+    // byte-for-byte reproducible.
+    let mut image_paths: Vec<PathBuf> = std::fs::read_dir(example_dir)
+        .expect("readdir example")
+        .filter_map(|entry| {
+            let path = entry.ok()?.path();
+            let ext = path.extension().and_then(|e| e.to_str())?;
+            if matches!(ext.to_ascii_lowercase().as_str(), "png" | "jpg" | "gif") {
+                Some(path)
+            } else {
+                None
+            }
+        })
+        .collect();
+    image_paths.sort();
+
+    for path in &image_paths {
         let filename = path.file_name().and_then(|n| n.to_str()).expect("filename");
         cmd.arg("--image")
             .arg(format!("{}={}", filename, path.display()));
