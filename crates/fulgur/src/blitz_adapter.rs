@@ -787,7 +787,7 @@ use crate::pageable::Affine2D;
 /// 3D operations (`translate3d`, `rotate3d`, `scale3d`, `matrix3d`,
 /// `perspective`, etc.) are treated as identity with a `log::warn!`.
 /// fulgur is a 2D PDF renderer.
-pub fn compute_transform(
+pub(crate) fn compute_transform(
     styles: &style::properties::ComputedValues,
     border_box_width: f32,
     border_box_height: f32,
