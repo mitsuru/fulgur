@@ -12,6 +12,113 @@ pub struct Size {
     pub height: Pt,
 }
 
+/// 2×3 affine transformation matrix used for CSS `transform`.
+///
+/// Stored in column-vector convention:
+///
+/// ```text
+/// | a  c  e |     | x |     | a*x + c*y + e |
+/// | b  d  f |  *  | y |  =  | b*x + d*y + f |
+/// | 0  0  1 |     | 1 |     |       1       |
+/// ```
+///
+/// This matches `krilla::geom::Transform::from_row(a, b, c, d, e, f)`.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Affine2D {
+    pub a: f32,
+    pub b: f32,
+    pub c: f32,
+    pub d: f32,
+    pub e: f32,
+    pub f: f32,
+}
+
+impl Affine2D {
+    pub const IDENTITY: Self = Self {
+        a: 1.0,
+        b: 0.0,
+        c: 0.0,
+        d: 1.0,
+        e: 0.0,
+        f: 0.0,
+    };
+
+    /// ε tolerance for identity detection (absorbs trig float noise).
+    const IDENTITY_EPS: f32 = 1e-5;
+
+    pub fn is_identity(&self) -> bool {
+        (self.a - 1.0).abs() < Self::IDENTITY_EPS
+            && self.b.abs() < Self::IDENTITY_EPS
+            && self.c.abs() < Self::IDENTITY_EPS
+            && (self.d - 1.0).abs() < Self::IDENTITY_EPS
+            && self.e.abs() < Self::IDENTITY_EPS
+            && self.f.abs() < Self::IDENTITY_EPS
+    }
+
+    pub fn translation(tx: f32, ty: f32) -> Self {
+        Self {
+            a: 1.0,
+            b: 0.0,
+            c: 0.0,
+            d: 1.0,
+            e: tx,
+            f: ty,
+        }
+    }
+
+    pub fn scale(sx: f32, sy: f32) -> Self {
+        Self {
+            a: sx,
+            b: 0.0,
+            c: 0.0,
+            d: sy,
+            e: 0.0,
+            f: 0.0,
+        }
+    }
+
+    pub fn rotation(theta_rad: f32) -> Self {
+        let (s, c) = theta_rad.sin_cos();
+        Self {
+            a: c,
+            b: s,
+            c: -s,
+            d: c,
+            e: 0.0,
+            f: 0.0,
+        }
+    }
+
+    /// 2D skew. `ax_rad` is the x-axis skew angle, `ay_rad` is the y-axis skew.
+    pub fn skew(ax_rad: f32, ay_rad: f32) -> Self {
+        Self {
+            a: 1.0,
+            b: ay_rad.tan(),
+            c: ax_rad.tan(),
+            d: 1.0,
+            e: 0.0,
+            f: 0.0,
+        }
+    }
+
+    /// Matrix product `self * rhs`. Applied to a point `p`, this yields
+    /// `(self * rhs) * p = self * (rhs * p)`, i.e. `rhs` acts first.
+    pub fn mul(&self, rhs: &Self) -> Self {
+        Self {
+            a: self.a * rhs.a + self.c * rhs.b,
+            b: self.b * rhs.a + self.d * rhs.b,
+            c: self.a * rhs.c + self.c * rhs.d,
+            d: self.b * rhs.c + self.d * rhs.d,
+            e: self.a * rhs.e + self.c * rhs.f + self.e,
+            f: self.b * rhs.e + self.d * rhs.f + self.f,
+        }
+    }
+
+    pub fn to_krilla(&self) -> krilla::geom::Transform {
+        krilla::geom::Transform::from_row(self.a, self.b, self.c, self.d, self.e, self.f)
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BreakBefore {
     Auto,
@@ -2446,5 +2553,77 @@ mod overflow_tests {
     fn test_needs_block_wrapper_default_is_false() {
         let style = BlockStyle::default();
         assert!(!style.needs_block_wrapper());
+    }
+}
+
+#[cfg(test)]
+mod affine_tests {
+    use super::*;
+    use std::f32::consts::FRAC_PI_2;
+
+    const EPS: f32 = 1e-5;
+
+    fn approx(a: f32, b: f32) -> bool {
+        (a - b).abs() < EPS
+    }
+
+    fn matrix_approx(a: &Affine2D, b: &Affine2D) -> bool {
+        approx(a.a, b.a)
+            && approx(a.b, b.b)
+            && approx(a.c, b.c)
+            && approx(a.d, b.d)
+            && approx(a.e, b.e)
+            && approx(a.f, b.f)
+    }
+
+    #[test]
+    fn identity_is_identity() {
+        assert!(Affine2D::IDENTITY.is_identity());
+        let m = Affine2D::translation(3.0, 4.0);
+        assert!(matrix_approx(&m.mul(&Affine2D::IDENTITY), &m));
+        assert!(matrix_approx(&Affine2D::IDENTITY.mul(&m), &m));
+    }
+
+    #[test]
+    fn rotation_90_maps_unit_vector() {
+        let r = Affine2D::rotation(FRAC_PI_2);
+        // Point (1, 0) transformed by pure rotation should land at (0, 1).
+        let x = r.a * 1.0 + r.c * 0.0 + r.e;
+        let y = r.b * 1.0 + r.d * 0.0 + r.f;
+        assert!(approx(x, 0.0), "x expected 0.0, got {x}");
+        assert!(approx(y, 1.0), "y expected 1.0, got {y}");
+    }
+
+    #[test]
+    fn translation_times_rotation_is_non_commutative() {
+        let t = Affine2D::translation(10.0, 0.0);
+        let r = Affine2D::rotation(FRAC_PI_2);
+        let tr = t.mul(&r);
+        let rt = r.mul(&t);
+        assert!(!matrix_approx(&tr, &rt), "expected non-commutative result");
+    }
+
+    #[test]
+    fn is_identity_tolerates_epsilon() {
+        let almost = Affine2D {
+            a: 1.0 + 1e-7,
+            b: 1e-7,
+            c: -1e-7,
+            d: 1.0 - 1e-7,
+            e: 1e-7,
+            f: -1e-7,
+        };
+        assert!(almost.is_identity());
+    }
+
+    #[test]
+    fn scale_matrix_has_correct_diagonal() {
+        let s = Affine2D::scale(2.0, 3.0);
+        assert!(approx(s.a, 2.0));
+        assert!(approx(s.d, 3.0));
+        assert!(approx(s.b, 0.0));
+        assert!(approx(s.c, 0.0));
+        assert!(approx(s.e, 0.0));
+        assert!(approx(s.f, 0.0));
     }
 }
