@@ -286,6 +286,17 @@ impl BlockStyle {
     pub fn has_overflow_clip(&self) -> bool {
         self.overflow_x == Overflow::Clip || self.overflow_y == Overflow::Clip
     }
+
+    /// Whether a node with this style must be wrapped in a `BlockPageable`.
+    ///
+    /// Wrapping is required when the node has any visual effect that must be
+    /// rendered on its own surface — backgrounds/borders/padding
+    /// (`has_visual_style`), a non-zero `border-radius` (`has_radius`), or
+    /// overflow clipping (`has_overflow_clip`, which uses the node's box as
+    /// the clip region).
+    pub fn needs_block_wrapper(&self) -> bool {
+        self.has_visual_style() || self.has_radius() || self.has_overflow_clip()
+    }
 }
 
 // ─── PositionedChild ─────────────────────────────────────
@@ -1930,9 +1941,27 @@ impl Pageable for TablePageable {
                 draw_block_border(canvas, &self.style, x, y, total_width, total_height);
             }
 
+            // overflow clipping: clip header + body cells to the padding box.
+            // Background and borders are drawn outside the clip so the
+            // table's border renders at its full border-box edge.
+            let clip_pushed = if let Some(clip_path) =
+                compute_overflow_clip_path(&self.style, x, y, total_width, total_height)
+            {
+                canvas
+                    .surface
+                    .push_clip_path(&clip_path, &krilla::paint::FillRule::default());
+                true
+            } else {
+                false
+            };
+
             for pc in self.header_cells.iter().chain(self.body_cells.iter()) {
                 pc.child
                     .draw(canvas, x + pc.x, y + pc.y, total_width, pc.child.height());
+            }
+
+            if clip_pushed {
+                canvas.surface.pop();
             }
         });
     }
@@ -2339,5 +2368,25 @@ mod overflow_tests {
         };
         assert!(style.has_overflow_clip());
         assert!(compute_overflow_clip_path(&style, 0.0, 0.0, 100.0, 100.0).is_some());
+    }
+
+    #[test]
+    fn test_needs_block_wrapper_for_overflow_only() {
+        // A bare overflow:hidden style (no background, border, padding,
+        // radius) must still require a BlockPageable wrapper.
+        let style = BlockStyle {
+            overflow_x: Overflow::Clip,
+            ..Default::default()
+        };
+        assert!(!style.has_visual_style());
+        assert!(!style.has_radius());
+        assert!(style.has_overflow_clip());
+        assert!(style.needs_block_wrapper());
+    }
+
+    #[test]
+    fn test_needs_block_wrapper_default_is_false() {
+        let style = BlockStyle::default();
+        assert!(!style.needs_block_wrapper());
     }
 }

@@ -248,7 +248,7 @@ fn convert_node_inner(
         let body: Box<dyn Pageable> = if node.flags.is_inline_root()
             && let Some(paragraph) = extract_paragraph(doc, node, ctx)
         {
-            if style.has_visual_style() {
+            if style.needs_block_wrapper() {
                 let (child_x, child_y) = style.content_inset();
                 let mut p = paragraph;
                 p.visible = visible;
@@ -317,7 +317,7 @@ fn convert_node_inner(
     {
         let style = extract_block_style(node, ctx.assets);
         let (opacity, visible) = extract_opacity_visible(node);
-        if style.has_visual_style() {
+        if style.needs_block_wrapper() {
             let (child_x, child_y) = style.content_inset();
             // Propagate visibility to the inner paragraph — it's not a real CSS child
             // but the node's own text content, so it must respect the node's visibility.
@@ -348,7 +348,7 @@ fn convert_node_inner(
 
     if children.is_empty() {
         let style = extract_block_style(node, ctx.assets);
-        if style.has_visual_style() || style.has_radius() {
+        if style.needs_block_wrapper() {
             let (opacity, visible) = extract_opacity_visible(node);
             let mut block = BlockPageable::with_positioned_children(vec![])
                 .with_style(style)
@@ -368,7 +368,7 @@ fn convert_node_inner(
     let positioned_children = collect_positioned_children(doc, children, ctx, depth);
 
     let style = extract_block_style(node, ctx.assets);
-    let has_style = style.has_visual_style() || style.has_radius();
+    let has_style = style.needs_block_wrapper();
     let (opacity, visible) = extract_opacity_visible(node);
     let mut block = BlockPageable::with_positioned_children(positioned_children)
         .with_style(style)
