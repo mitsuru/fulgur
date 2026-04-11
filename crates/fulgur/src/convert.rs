@@ -463,9 +463,16 @@ fn collect_positioned_children(
         // Zero-size leaf nodes (whitespace text, etc.) — skip, but first
         // harvest any string-set entries so `string-set: name attr(...)` on
         // an empty element still propagates into the page tree.
+        //
+        // Exception: if the 0x0 leaf has a block pseudo image, fall through
+        // to `convert_node` so `convert_node_inner`'s `children.is_empty()`
+        // branch can emit it. Without this, `<span class="icon"></span>`
+        // + `span::before { content: url(...); display: block }` silently
+        // drops the image even though the empty-children branch is wired up.
         if child_layout.size.height == 0.0
             && child_layout.size.width == 0.0
             && child_node.children.is_empty()
+            && !node_has_block_pseudo_image(doc, child_node)
         {
             emit_orphan_string_set_markers(
                 child_id,
@@ -707,6 +714,28 @@ fn is_block_pseudo(pseudo: &Node) -> bool {
     pseudo
         .primary_styles()
         .is_some_and(|s| s.clone_display().outside() == DisplayOutside::Block)
+}
+
+/// Cheap probe: does `node` have at least one `::before` / `::after` pseudo
+/// slot whose computed `content` resolves to a block-display image URL?
+///
+/// Used by `collect_positioned_children` to opt zero-sized leaves (e.g.
+/// `<span class="icon"></span>`) out of its zero-size skip, so the leaf can
+/// reach `convert_node_inner`'s `children.is_empty()` branch and emit its
+/// pseudo image. Does not resolve the AssetBundle or decode the image — if
+/// the asset is missing, `build_block_pseudo_images` later silently skips,
+/// which is harmless but slightly wasteful; that trade-off is fine because
+/// zero-size elements with `content: url()` are rare.
+fn node_has_block_pseudo_image(doc: &blitz_dom::BaseDocument, node: &Node) -> bool {
+    for pseudo_id in [node.before, node.after].into_iter().flatten() {
+        if let Some(pseudo) = doc.get_node(pseudo_id)
+            && is_block_pseudo(pseudo)
+            && crate::blitz_adapter::extract_pseudo_image_url(pseudo).is_some()
+        {
+            return true;
+        }
+    }
+    false
 }
 
 /// Geometry of a parent's content-box, used by the pseudo-image helpers so
@@ -1903,6 +1932,60 @@ mod tests {
         assert!(
             images.iter().any(|(w, h)| *w == 16.0 && *h == 16.0),
             "childless element ::before pseudo should emit a 16x16 image; got {:?}",
+            images
+        );
+    }
+
+    #[test]
+    fn test_dom_to_pageable_emits_pseudo_on_zero_size_block_leaf() {
+        // Regression for coderabbit follow-up on PR #70: a 0x0 block leaf
+        // was being skipped by the collect_positioned_children zero-size
+        // leaf filter BEFORE reaching the convert_node `children.is_empty()`
+        // branch. The pseudo probe (`node_has_block_pseudo_image`) now lets
+        // such leaves fall through.
+        //
+        // Scope note: this test specifically targets a BLOCK element with
+        // explicit width:0;height:0 that still has a ::before image — e.g.
+        // a decorative sentinel div a template sets to 0x0 with a pseudo
+        // icon. Inline `<span>` with a block ::before is a different
+        // edge case that requires Phase 2 inline-flow handling.
+        let icon_bytes = std::fs::read(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .parent()
+                .unwrap()
+                .parent()
+                .unwrap()
+                .join("examples/image/icon.png"),
+        )
+        .unwrap();
+        let mut bundle = AssetBundle::new();
+        bundle.add_image("icon.png", icon_bytes);
+
+        let html = r#"<!doctype html><html><head><style>
+            .zero { display: block; width: 0; height: 0; }
+            .zero::before {
+                content: url("icon.png");
+                display: block;
+                width: 18px;
+                height: 18px;
+            }
+        </style></head><body><section><div class="zero"></div></section></body></html>"#;
+        let mut doc = crate::blitz_adapter::parse(html, 800.0, &[]);
+        crate::blitz_adapter::resolve(&mut doc);
+        let running_store = crate::gcpm::running::RunningElementStore::new();
+        let mut ctx = ConvertContext {
+            running_store: &running_store,
+            assets: Some(&bundle),
+            font_cache: HashMap::new(),
+            string_set_by_node: HashMap::new(),
+            counter_ops_by_node: HashMap::new(),
+        };
+        let tree = super::dom_to_pageable(&doc, &mut ctx);
+        let mut images = Vec::new();
+        walk_all_children(&*tree, &mut |p| collect_images(p, &mut images));
+        assert!(
+            images.iter().any(|(w, h)| *w == 18.0 && *h == 18.0),
+            "zero-size block leaf with block pseudo should emit an 18x18 image; got {:?}",
             images
         );
     }
