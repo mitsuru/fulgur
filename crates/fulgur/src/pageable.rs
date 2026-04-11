@@ -123,7 +123,10 @@ impl std::ops::Mul for Affine2D {
     }
 }
 
-/// A 2D point in canvas (PDF) coordinates.
+/// A 2D point in user-space coordinates (Pt).
+///
+/// Used for both absolute draw positions and box-local offsets such as
+/// `transform-origin`; the interpretation depends on the call site.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Point2 {
     pub x: Pt,
@@ -2817,6 +2820,26 @@ mod transform_wrapper_tests {
         let y = m.b * 50.0 + m.d * 50.0 + m.f;
         assert!(approx(x, 50.0), "origin x should be fixed, got {x}");
         assert!(approx(y, 50.0), "origin y should be fixed, got {y}");
+    }
+
+    #[test]
+    fn rotate_with_center_origin_fixes_absolute_center_at_nonzero_draw_position() {
+        // Same property at a non-zero draw position. Catches regressions
+        // where effective_matrix() drops the (draw_x, draw_y) addition: the
+        // absolute fixed point in canvas coordinates must be (10+50, 20+50)
+        // = (60, 70).
+        let w = wrap(Affine2D::rotation(FRAC_PI_2), Point2::new(50.0, 50.0));
+        let m = w.effective_matrix(10.0, 20.0);
+        let x = m.a * 60.0 + m.c * 70.0 + m.e;
+        let y = m.b * 60.0 + m.d * 70.0 + m.f;
+        assert!(
+            approx(x, 60.0),
+            "absolute origin x should be fixed, got {x}"
+        );
+        assert!(
+            approx(y, 70.0),
+            "absolute origin y should be fixed, got {y}"
+        );
     }
 
     #[test]
