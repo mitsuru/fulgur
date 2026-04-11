@@ -64,5 +64,5 @@ cp /tmp/noto-jp/NotoSansJP-Bold.otf    examples/.fonts/
 When updating, remember to:
 
 1. Re-run `mise run update-examples` so `examples/*/index.pdf` is regenerated against the new fonts.
-2. Update the golden hashes in `crates/fulgur-cli/tests/examples_determinism.rs`.
+2. Run `cargo test -p fulgur-cli --test examples_determinism` to confirm the regenerated PDFs are still byte-stable (two-run determinism) and that `examples/svg/index.pdf` matches the freshly rendered output (staleness check).
 3. Bump the source tags in the table above.
