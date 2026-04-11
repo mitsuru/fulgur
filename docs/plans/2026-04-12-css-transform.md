@@ -20,7 +20,7 @@
 - `crates/fulgur/src/blitz_adapter.rs` — add `compute_transform()` helper that reads stylo's computed `transform` and `transform-origin` and returns a resolved `Affine2D` + origin in px.
 - `crates/fulgur/src/convert.rs` — add `maybe_wrap_transform()` alongside the existing `maybe_prepend_string_set` / `maybe_prepend_counter_ops` (lines 113–145), and call it from `convert_node()`.
 - `crates/fulgur/tests/transform_integration.rs` — new integration test file.
-- `examples/css/transform.html` — new visual snapshot source.
+- `examples/transform/index.html` — new visual snapshot source.
 
 ### Matrix convention (read carefully)
 
@@ -1137,8 +1137,8 @@ git commit -m "test(transform): end-to-end integration tests for CSS transform"
 
 **Files:**
 
-- Create: `examples/css/transform.html`
-- Create: `examples/css/transform.pdf` (generated)
+- Create: `examples/transform/index.html`
+- Create: `examples/transform/index.pdf` (generated)
 
 **Step 1: Write the example HTML**
 
@@ -1192,15 +1192,15 @@ git commit -m "test(transform): end-to-end integration tests for CSS transform"
 **Step 2: Generate the PDF**
 
 ```bash
-cargo run --bin fulgur -- render examples/css/transform.html -o examples/css/transform.pdf
+cargo run --bin fulgur -- render examples/transform/index.html -o examples/transform/index.pdf
 ```
 
-Verify the file opens (`xdg-open examples/css/transform.pdf` or `pdftotext examples/css/transform.pdf - | head`).
+Verify the file opens (`xdg-open examples/transform/index.pdf` or `pdftotext examples/transform/index.pdf - | head`).
 
 **Step 3: Commit**
 
 ```bash
-git add examples/css/transform.html examples/css/transform.pdf
+git add examples/transform/index.html examples/transform/index.pdf examples/transform/style.css
 git commit -m "docs(examples): add CSS transform example"
 ```
 

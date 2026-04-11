@@ -1676,6 +1676,13 @@ impl Pageable for TransformWrapperPageable {
         None
     }
 
+    /// The wrapper is atomic, so the boxed split path can move ownership
+    /// straight back to the caller instead of falling through the default
+    /// implementation, which would clone the entire subtree.
+    fn split_boxed(self: Box<Self>, _avail_width: Pt, _avail_height: Pt) -> SplitResult {
+        Err(self)
+    }
+
     fn draw(&self, canvas: &mut Canvas<'_, '_>, x: Pt, y: Pt, avail_width: Pt, avail_height: Pt) {
         let full = self.effective_matrix(x, y);
         canvas.surface.push_transform(&full.to_krilla());

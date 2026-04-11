@@ -857,7 +857,7 @@ fn op_to_matrix(
         Scale(sx, sy) => Affine2D::scale(*sx, *sy),
         ScaleX(sx) => Affine2D::scale(*sx, 1.0),
         ScaleY(sy) => Affine2D::scale(1.0, *sy),
-        Rotate(angle) => Affine2D::rotation(angle.radians()),
+        Rotate(angle) | RotateZ(angle) => Affine2D::rotation(angle.radians()),
         Skew(ax, ay) => Affine2D::skew(ax.radians(), ay.radians()),
         SkewX(ax) => Affine2D::skew(ax.radians(), 0.0),
         SkewY(ay) => Affine2D::skew(0.0, ay.radians()),
@@ -869,7 +869,6 @@ fn op_to_matrix(
         | Rotate3D(..)
         | RotateX(_)
         | RotateY(_)
-        | RotateZ(_)
         | Perspective(_)
         | InterpolateMatrix { .. }
         | AccumulateMatrix { .. } => {
@@ -1379,5 +1378,21 @@ mod transform_tests {
             <div style="transform: translate3d(0, 0, 50px)">hi</div>
         </body></html>"#;
         assert!(compute_for_div(html, 100.0, 100.0).is_none());
+    }
+
+    #[test]
+    fn rotate_z_is_treated_as_2d_rotation() {
+        // CSS spec: rotateZ(angle) is equivalent to rotate(angle).
+        // Both must produce the same 2D rotation matrix, not fall back
+        // to identity through the 3D arm.
+        let html = r#"<!DOCTYPE html><html><body>
+            <div style="transform: rotateZ(90deg); transform-origin: 0 0">hi</div>
+        </body></html>"#;
+        let (m, _) = compute_for_div(html, 100.0, 100.0).expect("rotateZ should produce a wrapper");
+        // 90° rotation: (1, 0) → (0, 1).
+        let x = m.a * 1.0 + m.c * 0.0 + m.e;
+        let y = m.b * 1.0 + m.d * 0.0 + m.f;
+        assert!(approx(x, 0.0), "x expected 0.0, got {x}");
+        assert!(approx(y, 1.0), "y expected 1.0, got {y}");
     }
 }
