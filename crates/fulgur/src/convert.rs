@@ -270,8 +270,14 @@ fn convert_node_inner(
             }
         } else {
             let children: &[usize] = &node.children;
-            let mut positioned_children = collect_positioned_children(doc, children, ctx, depth);
-            inject_block_pseudo_images(doc, node, ctx.assets, &mut positioned_children);
+            let positioned_children = collect_positioned_children(doc, children, ctx, depth);
+            let (before_pseudo, after_pseudo) = build_block_pseudo_images(doc, node, ctx.assets);
+            let positioned_children = wrap_with_block_pseudo_images(
+                before_pseudo,
+                after_pseudo,
+                node.final_layout.size.height,
+                positioned_children,
+            );
             let mut block = BlockPageable::with_positioned_children(positioned_children)
                 .with_style(style)
                 .with_visible(visible);
@@ -318,20 +324,26 @@ fn convert_node_inner(
     {
         let style = extract_block_style(node, ctx.assets);
         let (opacity, visible) = extract_opacity_visible(node);
-        let has_pseudo_image = has_block_pseudo_image(doc, node, ctx.assets);
-        if style.has_visual_style() || has_pseudo_image {
+        let (before_pseudo, after_pseudo) = build_block_pseudo_images(doc, node, ctx.assets);
+        let has_pseudo = before_pseudo.is_some() || after_pseudo.is_some();
+        if style.has_visual_style() || has_pseudo {
             let (child_x, child_y) = style.content_inset();
             // Propagate visibility to the inner paragraph — it's not a real CSS child
             // but the node's own text content, so it must respect the node's visibility.
             // Do NOT propagate opacity — the wrapping block handles it via push_opacity.
             let mut p = paragraph;
             p.visible = visible;
-            let mut children = vec![PositionedChild {
+            let paragraph_children = vec![PositionedChild {
                 child: Box::new(p),
                 x: child_x,
                 y: child_y,
             }];
-            inject_block_pseudo_images(doc, node, ctx.assets, &mut children);
+            let children = wrap_with_block_pseudo_images(
+                before_pseudo,
+                after_pseudo,
+                node.final_layout.size.height,
+                paragraph_children,
+            );
             let mut block = BlockPageable::with_positioned_children(children)
                 .with_style(style)
                 .with_opacity(opacity)
@@ -368,8 +380,14 @@ fn convert_node_inner(
     }
 
     // Container node — collect children with Taffy-computed positions
-    let mut positioned_children = collect_positioned_children(doc, children, ctx, depth);
-    inject_block_pseudo_images(doc, node, ctx.assets, &mut positioned_children);
+    let positioned_children = collect_positioned_children(doc, children, ctx, depth);
+    let (before_pseudo, after_pseudo) = build_block_pseudo_images(doc, node, ctx.assets);
+    let positioned_children = wrap_with_block_pseudo_images(
+        before_pseudo,
+        after_pseudo,
+        node.final_layout.size.height,
+        positioned_children,
+    );
 
     let style = extract_block_style(node, ctx.assets);
     let has_style = style.has_visual_style() || style.has_radius();
@@ -650,34 +668,6 @@ fn build_pseudo_image(
     ))
 }
 
-/// Cheap pre-check: does `node` have a `::before` or `::after` pseudo whose
-/// computed `content` is a block-display image URL that we would inject?
-///
-/// Used by the inline-root branch of `convert_node_inner` to decide whether
-/// to go through the `BlockPageable` wrapping path (needed to attach the
-/// pseudo image as a sibling of the paragraph).
-fn has_block_pseudo_image(
-    doc: &blitz_dom::BaseDocument,
-    node: &Node,
-    assets: Option<&AssetBundle>,
-) -> bool {
-    if assets.is_none() {
-        return false;
-    }
-    for pseudo_id in [node.before, node.after].into_iter().flatten() {
-        let Some(pseudo) = doc.get_node(pseudo_id) else {
-            continue;
-        };
-        if !is_block_pseudo(pseudo) {
-            continue;
-        }
-        if crate::blitz_adapter::extract_pseudo_image_url(pseudo).is_some() {
-            return true;
-        }
-    }
-    false
-}
-
 /// True iff the pseudo-element has `display: block` outside.
 ///
 /// Phase 1 only emits pseudo images for block-outside pseudos. Inline pseudos
@@ -685,17 +675,19 @@ fn has_block_pseudo_image(
 /// be injected into `ParagraphPageable`'s line layout.
 fn is_block_pseudo(pseudo: &Node) -> bool {
     use style::values::specified::box_::DisplayOutside;
-    let Some(styles) = pseudo.primary_styles() else {
-        return false;
-    };
-    styles.clone_display().outside() == DisplayOutside::Block
+    pseudo
+        .primary_styles()
+        .is_some_and(|s| s.clone_display().outside() == DisplayOutside::Block)
 }
 
-/// Inject `BlockPageable`-style pseudo image children for `::before` / `::after`
-/// on `parent`, mutating `children` in place.
+/// Build `ImagePageable` instances for `::before` and `::after` pseudos on
+/// `parent` when their `content` resolves to a single `url(...)` image and
+/// their `display` is block-outside. Returns `(before, after)`, either of
+/// which may be `None`.
 ///
-/// `::before` is inserted at index 0 with `(x, y) = (0, 0)`. `::after` is
-/// appended at the parent's content-box bottom.
+/// This is the single walk of the pseudo slots — callers use it both to
+/// decide whether to take the `BlockPageable` wrapping path in the
+/// inline-root branch and to materialize the children to inject.
 ///
 /// **Known limitation (fulgur-ai3 Phase 1):** Because Blitz assigns a
 /// zero-sized layout to text-less pseudo elements, the pseudo image does not
@@ -703,47 +695,53 @@ fn is_block_pseudo(pseudo: &Node) -> bool {
 /// adding `margin-top` / `margin-bottom` on the first / last real child to
 /// reserve space. Properly pushing content will be handled in a follow-up
 /// issue that round-trips the synthetic pseudo size through Taffy.
-fn inject_block_pseudo_images(
+fn build_block_pseudo_images(
     doc: &blitz_dom::BaseDocument,
     parent: &Node,
     assets: Option<&AssetBundle>,
-    children: &mut Vec<PositionedChild>,
-) {
-    let content_width = parent.final_layout.size.width;
-    let content_height = parent.final_layout.size.height;
-
-    // ::before
-    if let Some(before_id) = parent.before {
-        if let Some(pseudo) = doc.get_node(before_id) {
-            if is_block_pseudo(pseudo) {
-                if let Some(img) = build_pseudo_image(pseudo, content_width, assets) {
-                    children.insert(
-                        0,
-                        PositionedChild {
-                            child: Box::new(img),
-                            x: 0.0,
-                            y: 0.0,
-                        },
-                    );
-                }
-            }
-        }
+) -> (Option<ImagePageable>, Option<ImagePageable>) {
+    if assets.is_none() {
+        return (None, None);
     }
-
-    // ::after
-    if let Some(after_id) = parent.after {
-        if let Some(pseudo) = doc.get_node(after_id) {
-            if is_block_pseudo(pseudo) {
-                if let Some(img) = build_pseudo_image(pseudo, content_width, assets) {
-                    children.push(PositionedChild {
-                        child: Box::new(img),
-                        x: 0.0,
-                        y: content_height,
-                    });
-                }
-            }
+    let parent_width = parent.final_layout.size.width;
+    let load = |pseudo_id: Option<usize>| -> Option<ImagePageable> {
+        let pseudo = doc.get_node(pseudo_id?)?;
+        if !is_block_pseudo(pseudo) {
+            return None;
         }
+        build_pseudo_image(pseudo, parent_width, assets)
+    };
+    (load(parent.before), load(parent.after))
+}
+
+/// Prepend / append block pseudo images around `children`. `::before` lands
+/// at `(0, 0)` and `::after` at `(0, parent_content_height)`.
+///
+/// This returns a new vec instead of mutating in place so `::before` does
+/// not trigger an O(n) shift on large child lists.
+fn wrap_with_block_pseudo_images(
+    before: Option<ImagePageable>,
+    after: Option<ImagePageable>,
+    parent_content_height: f32,
+    children: Vec<PositionedChild>,
+) -> Vec<PositionedChild> {
+    let mut out = Vec::with_capacity(children.len() + 2);
+    if let Some(img) = before {
+        out.push(PositionedChild {
+            child: Box::new(img),
+            x: 0.0,
+            y: 0.0,
+        });
     }
+    out.extend(children);
+    if let Some(img) = after {
+        out.push(PositionedChild {
+            child: Box::new(img),
+            x: 0.0,
+            y: parent_content_height,
+        });
+    }
+    out
 }
 
 /// Resolve a stylo `Size` (i.e. `width` / `height`) to an absolute `f32` in
