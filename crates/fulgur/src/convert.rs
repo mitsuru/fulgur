@@ -6,7 +6,7 @@ use crate::gcpm::running::RunningElementStore;
 use crate::image::ImagePageable;
 use crate::pageable::{
     BackgroundLayer, BgBox, BgClip, BgLengthPercentage, BgRepeat, BgSize, BlockPageable,
-    BlockStyle, BorderStyleValue, CounterOpMarkerPageable, CounterOpWrapperPageable,
+    BlockStyle, BorderStyleValue, CounterOpMarkerPageable, CounterOpWrapperPageable, ImageMarker,
     ListItemMarker, ListItemPageable, Pageable, PositionedChild, RunningElementMarkerPageable,
     RunningElementWrapperPageable, Size, SpacerPageable, StringSetPageable,
     StringSetWrapperPageable, TablePageable,
@@ -241,6 +241,14 @@ fn convert_node_inner(
         let style = extract_block_style(node, ctx.assets);
         let (opacity, visible) = extract_opacity_visible(node);
 
+        // Try list-style-image first; fall back to text marker if unresolved.
+        let marker = resolve_list_marker(node, marker_line_height, ctx.assets).unwrap_or(
+            ListItemMarker::Text {
+                lines: marker_lines,
+                width: marker_width,
+            },
+        );
+
         // Build body WITHOUT opacity — ListItemPageable wraps everything in
         // a single opacity group. But DO propagate visibility to the body's
         // own content (paragraph/image), since those are synthetic children
@@ -278,10 +286,7 @@ fn convert_node_inner(
             Box::new(block)
         };
         let mut item = ListItemPageable {
-            marker: ListItemMarker::Text {
-                lines: marker_lines,
-                width: marker_width,
-            },
+            marker,
             marker_line_height,
             body,
             style: BlockStyle::default(),
@@ -1100,6 +1105,56 @@ fn is_non_visual_element(node: &Node) -> bool {
         )
     } else {
         false
+    }
+}
+
+/// Resolve a list-style-image marker from the node's computed styles.
+///
+/// Returns `Some(ListItemMarker::Image { ... })` when the node's
+/// `list-style-image` is a URL that resolves to a supported image
+/// (PNG/JPEG/GIF or SVG) inside `ctx.assets`. Returns `None` for any
+/// failure (no bundle, URL not found, unknown format, parse error),
+/// and the caller must then fall back to the text marker produced by
+/// `extract_marker_lines` — matching CSS spec fallback semantics.
+fn resolve_list_marker(
+    node: &Node,
+    line_height: f32,
+    assets: Option<&AssetBundle>,
+) -> Option<ListItemMarker> {
+    use crate::image::AssetKind;
+    use style::values::computed::image::Image;
+
+    let assets = assets?;
+    let styles = node.primary_styles()?;
+    let image = styles.clone_list_style_image();
+    let url = match image {
+        Image::Url(u) => u,
+        _ => return None,
+    };
+    let raw_src = match &url {
+        style::servo::url::ComputedUrl::Valid(u) => u.as_str(),
+        style::servo::url::ComputedUrl::Invalid(s) => s.as_str(),
+    };
+    let src = extract_asset_name(raw_src);
+    let data = assets.get_image(src)?;
+    match AssetKind::detect(data) {
+        AssetKind::Raster(format) => {
+            let (iw, ih) = ImagePageable::decode_dimensions(data, format).unwrap_or((1, 1));
+            // px → pt (1px = 0.75pt, matching the rest of the image pipeline)
+            let intrinsic_w = iw as f32 * 0.75;
+            let intrinsic_h = ih as f32 * 0.75;
+            let (width, height) =
+                crate::pageable::clamp_marker_size(intrinsic_w, intrinsic_h, line_height);
+            let img = ImagePageable::new(Arc::clone(data), format, width, height);
+            Some(ListItemMarker::Image {
+                marker: ImageMarker::Raster(img),
+                width,
+                height,
+            })
+        }
+        // SVG branch implemented in Task 6
+        AssetKind::Svg => None,
+        AssetKind::Unknown => None,
     }
 }
 

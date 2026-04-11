@@ -1507,6 +1507,13 @@ pub(crate) fn clamp_marker_size(
     }
 }
 
+/// Image marker contents — either a raster image or a parsed SVG tree.
+#[derive(Clone)]
+pub enum ImageMarker {
+    Raster(crate::image::ImagePageable),
+    Svg(crate::svg::SvgPageable),
+}
+
 /// Marker attached to a `ListItemPageable`.
 ///
 /// Exactly one variant holds valid content per list item, enforced by the
@@ -1518,6 +1525,14 @@ pub enum ListItemMarker {
     Text {
         lines: Vec<crate::paragraph::ShapedLine>,
         width: Pt,
+    },
+    /// Image marker (list-style-image: url(...)) — raster or SVG.
+    Image {
+        marker: ImageMarker,
+        /// Display width after clamp (pt).
+        width: Pt,
+        /// Display height after clamp (pt).
+        height: Pt,
     },
     /// No marker — split trailing fragment or list-style-type: none.
     None,
@@ -1624,6 +1639,22 @@ impl Pageable for ListItemPageable {
                     ListItemMarker::Text { lines, width } if !lines.is_empty() => {
                         let marker_x = x - width;
                         crate::paragraph::draw_shaped_lines(canvas, lines, marker_x, y);
+                    }
+                    ListItemMarker::Image {
+                        marker,
+                        width,
+                        height,
+                    } => {
+                        let marker_x = x - *width;
+                        let marker_y = y + (self.marker_line_height - *height) / 2.0;
+                        match marker {
+                            ImageMarker::Raster(img) => {
+                                img.draw(canvas, marker_x, marker_y, *width, *height);
+                            }
+                            ImageMarker::Svg(svg) => {
+                                svg.draw(canvas, marker_x, marker_y, *width, *height);
+                            }
+                        }
                     }
                     _ => {}
                 }
