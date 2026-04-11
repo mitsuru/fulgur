@@ -568,6 +568,46 @@ where
     }
 }
 
+/// Shared sizing / construction for `ImagePageable`, used by both the `<img>`
+/// element path and the `::before`/`::after` `content: url()` pseudo path.
+///
+/// Sizing rules match the CSS replaced-element spec:
+///
+/// - both css dims given → use them verbatim
+/// - one given → scale the other by the image's intrinsic aspect ratio
+/// - neither given → use intrinsic pixel dimensions (treated as 1px = 1pt
+///   since `ImagePageable` draws in PDF points; this matches the existing
+///   `<img>` behavior when Taffy has nothing to resolve the size from)
+///
+/// The intrinsic dimensions come from `ImagePageable::decode_dimensions`.
+/// A zero-height decode result silently degrades to a 1:1 aspect so width-only
+/// sizing does not produce NaN.
+fn make_image_pageable(
+    data: Arc<Vec<u8>>,
+    format: crate::image::ImageFormat,
+    css_w: Option<f32>,
+    css_h: Option<f32>,
+    opacity: f32,
+    visible: bool,
+) -> ImagePageable {
+    let (iw, ih) = ImagePageable::decode_dimensions(&data, format).unwrap_or((1, 1));
+    let iw = iw as f32;
+    let ih = ih as f32;
+    let aspect = if ih > 0.0 { iw / ih } else { 1.0 };
+
+    let (w, h) = match (css_w, css_h) {
+        (Some(w), Some(h)) => (w, h),
+        (Some(w), None) => (w, if aspect > 0.0 { w / aspect } else { w }),
+        (None, Some(h)) => (h * aspect, h),
+        (None, None) => (iw, ih),
+    };
+
+    let mut img = ImagePageable::new(data, format, w, h);
+    img.opacity = opacity;
+    img.visible = visible;
+    img
+}
+
 /// Convert an `<img>` element into an `ImagePageable`, wrapped in `BlockPageable` if styled.
 fn convert_image(node: &Node, assets: Option<&AssetBundle>) -> Option<Box<dyn Pageable>> {
     let elem = node.element_data()?;
@@ -580,9 +620,12 @@ fn convert_image(node: &Node, assets: Option<&AssetBundle>) -> Option<Box<dyn Pa
         node,
         assets,
         move |w, h, opacity, visible| {
-            let mut img = ImagePageable::new(data, format, w, h);
-            img.opacity = opacity;
-            img.visible = visible;
+            // `wrap_replaced_in_block_style` has already resolved (w, h) from
+            // Taffy's final layout, so we pass them as explicit css_w/css_h.
+            // The shared helper then applies the same `ImagePageable::new`
+            // construction path as the pseudo-content url() case, keeping
+            // sizing behavior byte-identical to the previous <img> path.
+            let img = make_image_pageable(data.clone(), format, Some(w), Some(h), opacity, visible);
             Box::new(img)
         },
     ))
@@ -1244,4 +1287,78 @@ fn get_text_decoration(doc: &blitz_dom::BaseDocument, node_id: usize) -> TextDec
         return TextDecoration { line, style, color };
     }
     TextDecoration::default()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::image::ImageFormat;
+
+    // Minimal 1x1 red PNG — matches crates/fulgur/src/image.rs tests but is
+    // duplicated here so convert.rs tests don't depend on image.rs internals.
+    const TEST_PNG_1X1: &[u8] = &[
+        0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44,
+        0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x02, 0x00, 0x00, 0x00, 0x90,
+        0x77, 0x53, 0xDE, 0x00, 0x00, 0x00, 0x0C, 0x49, 0x44, 0x41, 0x54, 0x78, 0x9C, 0x63, 0xF8,
+        0xCF, 0xC0, 0x00, 0x00, 0x03, 0x01, 0x01, 0x00, 0xC9, 0xFE, 0x92, 0xEF, 0x00, 0x00, 0x00,
+        0x00, 0x49, 0x45, 0x4E, 0x44, 0xAE, 0x42, 0x60, 0x82,
+    ];
+
+    fn sample_png_arc() -> Arc<Vec<u8>> {
+        Arc::new(TEST_PNG_1X1.to_vec())
+    }
+
+    #[test]
+    fn test_make_image_pageable_both_dimensions() {
+        let img = make_image_pageable(
+            sample_png_arc(),
+            ImageFormat::Png,
+            Some(100.0),
+            Some(50.0),
+            1.0,
+            true,
+        );
+        assert_eq!(img.width, 100.0);
+        assert_eq!(img.height, 50.0);
+        assert_eq!(img.opacity, 1.0);
+        assert!(img.visible);
+    }
+
+    #[test]
+    fn test_make_image_pageable_width_only_uses_intrinsic_aspect() {
+        // Intrinsic 1x1 → aspect 1.0 → width=40 produces height=40.
+        let img = make_image_pageable(
+            sample_png_arc(),
+            ImageFormat::Png,
+            Some(40.0),
+            None,
+            1.0,
+            true,
+        );
+        assert_eq!(img.width, 40.0);
+        assert_eq!(img.height, 40.0);
+    }
+
+    #[test]
+    fn test_make_image_pageable_height_only_uses_intrinsic_aspect() {
+        let img = make_image_pageable(
+            sample_png_arc(),
+            ImageFormat::Png,
+            None,
+            Some(25.0),
+            1.0,
+            true,
+        );
+        assert_eq!(img.width, 25.0);
+        assert_eq!(img.height, 25.0);
+    }
+
+    #[test]
+    fn test_make_image_pageable_intrinsic_fallback() {
+        let img = make_image_pageable(sample_png_arc(), ImageFormat::Png, None, None, 0.5, false);
+        assert_eq!(img.width, 1.0);
+        assert_eq!(img.height, 1.0);
+        assert_eq!(img.opacity, 0.5);
+        assert!(!img.visible);
+    }
 }
