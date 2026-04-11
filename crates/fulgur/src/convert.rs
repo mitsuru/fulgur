@@ -927,6 +927,18 @@ fn extract_block_style(node: &Node, assets: Option<&AssetBundle>) -> BlockStyle 
             convert_border_style(styles.clone_border_left_style()),
         ];
 
+        // Overflow (CSS3 axis-independent interpretation)
+        // PDF has no scroll concept: hidden/clip/scroll/auto all collapse to Clip.
+        let map_overflow = |o: style::values::computed::Overflow| -> crate::pageable::Overflow {
+            use style::values::computed::Overflow as S;
+            match o {
+                S::Visible => crate::pageable::Overflow::Visible,
+                S::Hidden | S::Clip | S::Scroll | S::Auto => crate::pageable::Overflow::Clip,
+            }
+        };
+        style.overflow_x = map_overflow(styles.clone_overflow_x());
+        style.overflow_y = map_overflow(styles.clone_overflow_y());
+
         // Background image layers
         if let Some(assets) = assets {
             let bg_images = styles.clone_background_image();

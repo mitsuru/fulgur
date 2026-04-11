@@ -29,3 +29,100 @@ fn test_render_colored_background() {
     let pdf = engine.render_html(html).unwrap();
     assert!(pdf.starts_with(b"%PDF"));
 }
+
+#[test]
+fn test_overflow_hidden_produces_different_pdf_than_visible() {
+    let engine = fulgur::engine::Engine::builder()
+        .page_size(fulgur::config::PageSize::A4)
+        .build();
+
+    // overflow:hidden parent with a large child that overflows
+    let html_hidden = r#"<html><body>
+        <div style="width:100px;height:100px;overflow:hidden;background:#eee">
+            <div style="width:300px;height:300px;background:red"></div>
+        </div>
+    </body></html>"#;
+    let pdf_hidden = engine.render_html(html_hidden).unwrap();
+    assert!(pdf_hidden.starts_with(b"%PDF"));
+
+    let html_visible = r#"<html><body>
+        <div style="width:100px;height:100px;overflow:visible;background:#eee">
+            <div style="width:300px;height:300px;background:red"></div>
+        </div>
+    </body></html>"#;
+    let pdf_visible = engine.render_html(html_visible).unwrap();
+    assert!(pdf_visible.starts_with(b"%PDF"));
+
+    // overflow:hidden emits a clip path in the content stream, so the PDF
+    // bytes must differ from the overflow:visible baseline.
+    assert_ne!(
+        pdf_hidden, pdf_visible,
+        "overflow:hidden should produce a different PDF than overflow:visible"
+    );
+}
+
+#[test]
+fn test_overflow_clip_keyword_renders() {
+    let engine = fulgur::engine::Engine::builder()
+        .page_size(fulgur::config::PageSize::A4)
+        .build();
+    let html = r#"<html><body>
+        <div style="width:100px;height:100px;overflow:clip">
+            <div style="width:300px;height:300px;background:blue"></div>
+        </div>
+    </body></html>"#;
+    let pdf = engine.render_html(html).unwrap();
+    assert!(pdf.starts_with(b"%PDF"));
+}
+
+#[test]
+fn test_overflow_scroll_and_auto_also_clip() {
+    let engine = fulgur::engine::Engine::builder()
+        .page_size(fulgur::config::PageSize::A4)
+        .build();
+    // scroll and auto should both collapse to Clip in PDF (no scroll concept)
+    let html_scroll = r#"<html><body>
+        <div style="width:100px;height:100px;overflow:scroll">
+            <div style="width:300px;height:300px;background:green"></div>
+        </div>
+    </body></html>"#;
+    let pdf_scroll = engine.render_html(html_scroll).unwrap();
+    assert!(pdf_scroll.starts_with(b"%PDF"));
+
+    let html_visible = r#"<html><body>
+        <div style="width:100px;height:100px;overflow:visible">
+            <div style="width:300px;height:300px;background:green"></div>
+        </div>
+    </body></html>"#;
+    let pdf_visible = engine.render_html(html_visible).unwrap();
+
+    assert_ne!(
+        pdf_scroll, pdf_visible,
+        "overflow:scroll should clip just like hidden in PDF output"
+    );
+}
+
+#[test]
+fn test_overflow_x_only_renders() {
+    let engine = fulgur::engine::Engine::builder()
+        .page_size(fulgur::config::PageSize::A4)
+        .build();
+    let html = r#"<html><body>
+        <div style="width:100px;height:100px;overflow-x:hidden;overflow-y:visible">
+            <div style="width:300px;height:300px;background:purple"></div>
+        </div>
+    </body></html>"#;
+    let pdf = engine.render_html(html).unwrap();
+    assert!(pdf.starts_with(b"%PDF"));
+
+    let html_visible = r#"<html><body>
+        <div style="width:100px;height:100px">
+            <div style="width:300px;height:300px;background:purple"></div>
+        </div>
+    </body></html>"#;
+    let pdf_visible = engine.render_html(html_visible).unwrap();
+    assert_ne!(
+        pdf, pdf_visible,
+        "overflow-x:hidden should emit a clip path different from default"
+    );
+}
