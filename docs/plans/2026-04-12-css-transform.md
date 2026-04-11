@@ -24,12 +24,14 @@
 
 ### Matrix convention (read carefully)
 
-- `Affine2D { a, b, c, d, e, f }` represents the 2×3 affine matrix
+- `Affine2D { a, b, c, d, e, f }` represents the 2×3 affine matrix:
+
   ```text
   | a  c  e |     | x |     | a*x + c*y + e |
   | b  d  f |  *  | y |  =  | b*x + d*y + f |
   | 0  0  1 |     | 1 |     |       1       |
   ```
+
 - This matches the convention of `krilla::geom::Transform::from_row(sx, ky, kx, sy, tx, ty)` where `(sx, ky, kx, sy, tx, ty) == (a, b, c, d, e, f)`. **Verify this against the krilla source before writing `to_krilla()`** — see `~/.cargo/registry/src/index.crates.io-*/krilla-0.7.0/src/geom.rs:186`.
 - Composition order in `Affine2D::mul`: `A.mul(&B)` should produce `A * B` (matrix product, `A` applied after `B` when transforming a point `p` via `A*B*p`). This matters because CSS transform lists apply **right-to-left** to the coordinate system. Confirm by writing the non-commutativity test in Task 3 before trusting the implementation.
 - CSS rule: the transform-origin formulation is `T(ox, oy) · M · T(-ox, -oy)`. In our `TransformWrapperPageable::draw()`, `ox` and `oy` are resolved to absolute PDF canvas coordinates (element's draw `(x, y)` + pre-resolved `origin_x`/`origin_y` in px).
@@ -50,6 +52,7 @@ CSS rule: `transform` does not affect layout. Taffy's `final_layout.size` is the
 ### Existing wrapper pattern to mirror
 
 `CounterOpWrapperPageable` in `pageable.rs:1304–1352` is the structural template. Mirror its `Clone` derive, `wrap`/`split`/`draw`/`clone_box`/`height`/`pagination`/`as_any` pattern. The only functional differences for `TransformWrapperPageable`:
+
 - `split()` returns `None` unconditionally (atomic).
 - `draw()` wraps the inner `draw` call in `push_transform` / `pop_transform`.
 
@@ -62,6 +65,7 @@ Matrix-level geometric assertions — no VRT. A dedicated `#[cfg(test)] pub(crat
 ## Task 1: Add `Affine2D` value type and unit tests
 
 **Files:**
+
 - Modify: `crates/fulgur/src/pageable.rs` — add `Affine2D` struct + impl near the top of the file (after `Size` around line 13).
 
 **Step 1: Write failing unit tests**
@@ -248,6 +252,7 @@ git commit -m "feat(transform): add Affine2D value type for CSS transform"
 ## Task 2: Add `TransformWrapperPageable` and its unit tests
 
 **Files:**
+
 - Modify: `crates/fulgur/src/pageable.rs` — add `TransformWrapperPageable` after the existing `CounterOpWrapperPageable` (around line 1352).
 
 **Step 1: Write failing tests**
@@ -471,6 +476,7 @@ git commit -m "feat(transform): add TransformWrapperPageable with atomic split"
 ## Task 3: Add `compute_transform` helper in `blitz_adapter.rs`
 
 **Files:**
+
 - Modify: `crates/fulgur/src/blitz_adapter.rs` — add helper near the bottom of the file, in the `pub fn` section.
 
 **Step 1: Write a unit test in `blitz_adapter.rs`**
@@ -734,6 +740,7 @@ git commit -m "feat(transform): compute_transform helper reading stylo transform
 ## Task 4: Hook `TransformWrapperPageable` into `convert_node`
 
 **Files:**
+
 - Modify: `crates/fulgur/src/convert.rs` — add `maybe_wrap_transform` helper and call it from `convert_node`.
 
 **Step 1: Add the helper**
@@ -820,6 +827,7 @@ git commit -m "feat(transform): wire TransformWrapperPageable into convert_node"
 ## Task 5: End-to-end integration tests
 
 **Files:**
+
 - Create: `crates/fulgur/tests/transform_integration.rs`
 
 **Step 1: Write the integration tests**
@@ -1128,6 +1136,7 @@ git commit -m "test(transform): end-to-end integration tests for CSS transform"
 ## Task 6: Example snapshot HTML/PDF
 
 **Files:**
+
 - Create: `examples/css/transform.html`
 - Create: `examples/css/transform.pdf` (generated)
 
