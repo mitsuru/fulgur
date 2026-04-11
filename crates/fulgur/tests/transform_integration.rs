@@ -6,20 +6,26 @@
 //! parsing live in-crate; this file is the only place where all three
 //! pieces (parser, converter, wrapper) are checked together.
 
-use fulgur::config::PageSize;
+use fulgur::config::{Margin, PageSize};
 use fulgur::engine::Engine;
 use fulgur::pageable::{
-    Affine2D, BlockPageable, Pageable, PositionedChild, TransformWrapperPageable,
+    Affine2D, BlockPageable, CounterOpWrapperPageable, Pageable, PositionedChild,
+    StringSetWrapperPageable, TransformWrapperPageable,
 };
 
 /// Walk a Pageable subtree looking for the first `TransformWrapperPageable`.
 ///
-/// Our test fixtures only produce `BlockPageable` containers around the
-/// transformed element, so the walker only needs to descend through
-/// `BlockPageable` and also look inside a `TransformWrapperPageable`'s inner
-/// child in case the wrapper is not the outermost match we want. Keep this
-/// minimal: adding more container types only matters if a test HTML starts
-/// producing them.
+/// Depth-first search that descends through every known container wrapper:
+///
+/// - `BlockPageable` (normal tree interior)
+/// - `TransformWrapperPageable` itself (so nested transforms are still
+///   reachable — the outermost one is returned because we return on the
+///   first hit before recursing into `inner`)
+/// - `CounterOpWrapperPageable` / `StringSetWrapperPageable` (defensive:
+///   GCPM wrappers can appear above a transformed element when the test
+///   HTML combines `transform` with counters or `string-set`)
+///
+/// Returns the first (outermost) `TransformWrapperPageable` found.
 fn find_transform_wrapper(root: &dyn Pageable) -> Option<&TransformWrapperPageable> {
     if let Some(w) = root.as_any().downcast_ref::<TransformWrapperPageable>() {
         return Some(w);
@@ -31,12 +37,18 @@ fn find_transform_wrapper(root: &dyn Pageable) -> Option<&TransformWrapperPageab
             }
         }
     }
+    if let Some(w) = root.as_any().downcast_ref::<CounterOpWrapperPageable>() {
+        return find_transform_wrapper(w.child.as_ref());
+    }
+    if let Some(w) = root.as_any().downcast_ref::<StringSetWrapperPageable>() {
+        return find_transform_wrapper(w.child.as_ref());
+    }
     None
 }
 
 fn build_tree(html: &str) -> Box<dyn Pageable> {
     let engine = Engine::builder().build();
-    engine.build_pageable_for_testing(html)
+    engine.build_pageable_for_testing_no_gcpm(html)
 }
 
 fn wrapper_from(html: &str) -> TransformWrapperPageable {
@@ -190,29 +202,48 @@ fn identity_transform_does_not_generate_wrapper() {
 
 #[test]
 fn transformed_element_produces_expected_pagination() {
-    // Small page, one transformed element. A TransformWrapperPageable is
-    // atomic — it never splits — so even if the inner element's pre-transform
-    // height exceeds the content area, pagination places the whole subtree on
-    // a single page. We assert the PDF bytes are well-formed and exactly one
-    // page is emitted.
+    // Small page (100×120pt, 10pt margin → 80×100pt content area) with one
+    // transformed element whose pre-transform height (150pt) exceeds the
+    // available content height (100pt). A `TransformWrapperPageable` is
+    // atomic — `split()` always returns `None` — so even though the element
+    // does not fit, the paginator forwards the whole subtree to a single
+    // page rather than slicing it. We assert the PDF bytes are well-formed
+    // and that exactly one page is emitted.
+    //
+    // NOTE: the small page size is configured on the `Engine` itself.
+    // A `@page { size: ... }` rule inside a `<style>` block would be
+    // overridden by the engine's default A4, in which case a 60×150pt box
+    // trivially fits on one page and the test becomes tautological.
     let html = r#"<!DOCTYPE html><html><head><style>
-        @page { size: 100pt 120pt; margin: 10pt; }
-        .t { width: 60pt; height: 200pt; background: red;
+        .t { width: 60pt; height: 150pt; background: red;
              transform: rotate(45deg); transform-origin: 0 0; }
         </style></head><body><div class="t">x</div></body></html>"#;
-    let engine = Engine::builder().page_size(PageSize::A4).build();
+    let engine = Engine::builder()
+        .page_size(PageSize {
+            width: 100.0,
+            height: 120.0,
+        })
+        .margin(Margin::uniform(10.0))
+        .build();
     let pdf = engine.render_html(html).expect("render should succeed");
     assert!(pdf.starts_with(b"%PDF-"), "PDF header missing");
 
-    // Count `/Type /Page` occurrences (excluding `/Type /Pages`). A simple
-    // substring scan is enough for this smoke test.
-    let needle = b"/Type /Page\n";
+    // Count `/Type /Page` occurrences, excluding `/Type /Pages`. Match the
+    // prefix `/Type /Page` followed by a terminator that is not another
+    // alphanumeric (so `/Pages` is rejected). This is still a substring
+    // scan, but it handles both `/Type /Page\n` and `/Type /Page ` style
+    // separators that different PDF writers emit.
+    let prefix = b"/Type /Page";
     let mut count = 0usize;
     let mut i = 0;
-    while i + needle.len() <= pdf.len() {
-        if &pdf[i..i + needle.len()] == needle {
-            count += 1;
-            i += needle.len();
+    while i + prefix.len() < pdf.len() {
+        if &pdf[i..i + prefix.len()] == prefix {
+            let next = pdf[i + prefix.len()];
+            // Reject `/Type /Pages` and any other identifier continuation.
+            if !next.is_ascii_alphanumeric() {
+                count += 1;
+            }
+            i += prefix.len();
         } else {
             i += 1;
         }

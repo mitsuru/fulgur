@@ -204,13 +204,26 @@ impl Engine {
 
     /// Build a Pageable tree from HTML for integration tests.
     ///
-    /// Runs the HTML → Blitz → convert pipeline without pagination or PDF
-    /// emission so tests can inspect the tree shape and the values inside
-    /// wrapper pageables (e.g. `TransformWrapperPageable`). GCPM constructs
-    /// are intentionally not resolved: this helper exists for geometry /
-    /// structural assertions, not end-to-end rendering.
+    /// This helper **skips** all GCPM passes (CSS Generated Content for
+    /// Paged Media — running elements, counters, string-set, `content:`
+    /// resolution). It is only appropriate for tests that do not depend on
+    /// GCPM-rendered content. For transform tests in particular, no GCPM
+    /// state is needed because `transform` is independent of content
+    /// generation.
+    ///
+    /// Concretely, the following are skipped relative to `render_html`:
+    ///
+    /// - `InjectCssPass` for CSS produced by the GCPM parser
+    /// - `RunningElementPass` / `StringSetPass` / `CounterPass`
+    /// - `content:` (`::before` / `::after`) resolution via
+    ///   counter-generated CSS injection
+    ///
+    /// The resulting tree can therefore **diverge from the production
+    /// tree** whenever the HTML uses counters, running elements, or
+    /// `content:` in a `<style>` block. Use this helper only for geometric
+    /// / structural assertions on constructs that do not touch GCPM.
     #[doc(hidden)]
-    pub fn build_pageable_for_testing(&self, html: &str) -> Box<dyn Pageable> {
+    pub fn build_pageable_for_testing_no_gcpm(&self, html: &str) -> Box<dyn Pageable> {
         let fonts = self
             .assets
             .as_ref()
