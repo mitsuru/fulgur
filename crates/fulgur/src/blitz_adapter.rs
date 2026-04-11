@@ -713,6 +713,48 @@ fn resolve_string_set_values(
 mod tests {
     use super::*;
 
+    #[test]
+    fn parse_html_with_local_resources_orders_imports_before_parent() {
+        // CSS cascade: `@import "child.css"` in parent.css must be
+        // treated as if child.css were inlined at the top of parent.css,
+        // so the parent's *own* rules override the imported ones when
+        // they have the same specificity. The merged `cleaned_css` that
+        // comes back from `parse_html_with_local_resources` feeds the
+        // Pass-2 margin-box renderer, so the ordering there must match:
+        // child rules first, parent rules last (so that later rules win).
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("parent.css"),
+            r#"@import "child.css"; .parent-rule { color: red; }"#,
+        )
+        .unwrap();
+        std::fs::write(
+            dir.path().join("child.css"),
+            r#".child-rule { color: blue; }"#,
+        )
+        .unwrap();
+
+        let html = r#"<!DOCTYPE html>
+<html><head><link rel="stylesheet" href="parent.css"></head>
+<body><p class="parent-rule child-rule">x</p></body></html>"#;
+
+        let (_doc, gcpm) = parse_html_with_local_resources(html, 400.0, &[], Some(dir.path()));
+
+        let cleaned = &gcpm.cleaned_css;
+        let child_pos = cleaned
+            .find(".child-rule")
+            .expect("child.css content should be in cleaned_css");
+        let parent_pos = cleaned
+            .find(".parent-rule")
+            .expect("parent.css content should be in cleaned_css");
+        assert!(
+            child_pos < parent_pos,
+            "child @import rules must come before parent's own rules in cleaned_css \
+             to preserve CSS cascade. child at {child_pos}, parent at {parent_pos}.\n\
+             cleaned_css:\n{cleaned}"
+        );
+    }
+
     struct NoOpPass;
     impl DomPass for NoOpPass {
         fn apply(&self, _doc: &mut HtmlDocument, _ctx: &PassContext<'_>) {}

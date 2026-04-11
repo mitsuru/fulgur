@@ -119,19 +119,18 @@ impl NetProvider<Resource> for FulgurNetProvider {
 
         // For CSS, hand Blitz the *cleaned* body so its style engine
         // never sees `@page` / `position: running(...)` constructs.
-        // The GCPM context goes into our buffer for the engine to
-        // merge after parse() returns.
-        let bytes_for_blitz = if Self::looks_like_css(&request, &canonical_path) {
+        // The GCPM context is pushed into our buffer *after* the
+        // handler returns (see below).
+        let (bytes_for_blitz, gcpm_to_push) = if Self::looks_like_css(&request, &canonical_path) {
             if let Ok(text) = std::str::from_utf8(&raw_bytes) {
                 let gcpm = parse_gcpm(text);
                 let cleaned = gcpm.cleaned_css.clone();
-                self.inner.lock().unwrap().gcpm_contexts.push(gcpm);
-                Bytes::from(cleaned.into_bytes())
+                (Bytes::from(cleaned.into_bytes()), Some(gcpm))
             } else {
-                Bytes::from(raw_bytes)
+                (Bytes::from(raw_bytes), None)
             }
         } else {
-            Bytes::from(raw_bytes)
+            (Bytes::from(raw_bytes), None)
         };
 
         let inner = self.inner.clone();
@@ -143,7 +142,23 @@ impl NetProvider<Resource> for FulgurNetProvider {
             },
         );
 
+        // `handler.bytes` parses the CSS via stylo, which synchronously
+        // triggers `fetch()` again for every `@import` before returning.
+        // When it does return, every imported child stylesheet has
+        // already pushed its own `GcpmContext`.
         handler.bytes(doc_id, bytes_for_blitz, callback);
+
+        // Post-order push: the parent context goes into the buffer
+        // *after* its children, so the eventual `cleaned_css`
+        // concatenation is `child_rules + parent_rules`. This matches
+        // CSS cascade ordering — `@import` is semantically equivalent
+        // to inlining the child stylesheet at the top of the parent,
+        // so the parent's own declarations must override the imported
+        // ones in the margin-box mini-documents rendered from
+        // `gcpm.cleaned_css`.
+        if let Some(gcpm) = gcpm_to_push {
+            self.inner.lock().unwrap().gcpm_contexts.push(gcpm);
+        }
     }
 }
 
