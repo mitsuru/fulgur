@@ -1139,8 +1139,8 @@ fn resolve_list_marker(
     let data = assets.get_image(src)?;
     match AssetKind::detect(data) {
         AssetKind::Raster(format) => {
-            let (iw, ih) = ImagePageable::decode_dimensions(data, format).unwrap_or((1, 1));
-            // px → pt (1px = 0.75pt, matching the rest of the image pipeline)
+            let (iw, ih) = ImagePageable::decode_dimensions(data, format)?;
+            // px → pt (1px = 0.75pt)
             let intrinsic_w = iw as f32 * 0.75;
             let intrinsic_h = ih as f32 * 0.75;
             let (width, height) =
@@ -1155,8 +1155,9 @@ fn resolve_list_marker(
         AssetKind::Svg => {
             let tree = usvg::Tree::from_data(data, &usvg::Options::default()).ok()?;
             let size = tree.size();
-            let intrinsic_w = size.width();
-            let intrinsic_h = size.height();
+            // SVG user units = CSS px → PDF pt (1px = 0.75pt)
+            let intrinsic_w = size.width() * 0.75;
+            let intrinsic_h = size.height() * 0.75;
             let (width, height) =
                 crate::pageable::clamp_marker_size(intrinsic_w, intrinsic_h, line_height);
             let svg = SvgPageable::new(Arc::new(tree), width, height);
