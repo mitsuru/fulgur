@@ -13,7 +13,7 @@ use crate::pageable::{
 };
 use crate::paragraph::{
     InlineImage, LineFontMetrics, LineItem, ParagraphPageable, ShapedGlyph, ShapedGlyphRun,
-    ShapedLine, TextDecoration, TextDecorationLine, TextDecorationStyle,
+    ShapedLine, TextDecoration, TextDecorationLine, TextDecorationStyle, VerticalAlign,
 };
 use crate::svg::SvgPageable;
 use blitz_dom::{Node, NodeData};
@@ -573,6 +573,21 @@ fn convert_node_inner(
             });
 
         if let Some(mut paragraph) = paragraph_opt {
+            // Inject inside list-style-image as inline image at start of first line
+            if !paragraph.lines.is_empty() {
+                let first_line_height = paragraph.lines[0].height;
+                if let Some(inline_img) =
+                    resolve_inside_image_marker(node, first_line_height, ctx.assets)
+                {
+                    paragraph.lines[0]
+                        .items
+                        .insert(0, LineItem::Image(inline_img));
+                    recalculate_paragraph_line_boxes(&mut paragraph.lines);
+                    paragraph.cached_height =
+                        paragraph.lines.iter().map(|l| l.height).sum();
+                }
+            }
+
             // Existing path: inject inline pseudo images into real paragraph
             if before_inline.is_some() || after_inline.is_some() {
                 inject_inline_pseudo_images(&mut paragraph.lines, before_inline, after_inline);
@@ -2021,6 +2036,69 @@ fn resolve_list_marker(
             })
         }
         AssetKind::Unknown => None,
+    }
+}
+
+/// For `list-style-position: inside` with `list-style-image`, resolve
+/// the image and return it as an `InlineImage` sized to match the
+/// paragraph's first line height. Only supports raster images (PNG/JPEG/GIF).
+/// Returns `None` when the node is not an inside list item, the image URL
+/// cannot be resolved, or the image is SVG.
+fn resolve_inside_image_marker(
+    node: &Node,
+    first_line_height: f32,
+    assets: Option<&AssetBundle>,
+) -> Option<InlineImage> {
+    use crate::image::AssetKind;
+    use style::values::computed::image::Image;
+
+    let elem_data = node.element_data()?;
+    let list_data = elem_data.list_item_data.as_ref()?;
+    if !matches!(
+        list_data.position,
+        blitz_dom::node::ListItemLayoutPosition::Inside
+    ) {
+        return None;
+    }
+    if first_line_height <= 0.0 {
+        return None;
+    }
+
+    let styles = node.primary_styles()?;
+    let image = styles.clone_list_style_image();
+    let url = match image {
+        Image::Url(u) => u,
+        _ => return None,
+    };
+    let raw_src = match &url {
+        style::servo::url::ComputedUrl::Valid(u) => u.as_str(),
+        style::servo::url::ComputedUrl::Invalid(s) => s.as_str(),
+    };
+    let src = extract_asset_name(raw_src);
+    let bundle = assets?;
+    let data = bundle.get_image(src)?;
+
+    match AssetKind::detect(data) {
+        AssetKind::Raster(format) => {
+            let (iw, ih) = ImagePageable::decode_dimensions(data, format)?;
+            let intrinsic_w = iw as f32 * 0.75;
+            let intrinsic_h = ih as f32 * 0.75;
+            let (width, height) =
+                crate::pageable::clamp_marker_size(intrinsic_w, intrinsic_h, first_line_height);
+            Some(InlineImage {
+                data: Arc::clone(data),
+                format,
+                width,
+                height,
+                x_offset: 0.0,
+                vertical_align: VerticalAlign::Baseline,
+                opacity: 1.0,
+                visible: true,
+                computed_y: 0.0,
+            })
+        }
+        // SVG inline images are not yet supported in LineItem::Image
+        AssetKind::Svg | AssetKind::Unknown => None,
     }
 }
 
