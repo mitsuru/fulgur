@@ -1353,7 +1353,7 @@ Expected: 全パス (ベースライン 231 + 新規 ≥13)。
 **Step 4: markdownlint**
 
 ```bash
-npx markdownlint-cli2 'docs/plans/2026-04-12-list-style-image.md' 'examples/list-style-image/**/*.md' 2>&1 | tail -10
+npx markdownlint-cli2 '**/*.md' 2>&1 | tail -10
 ```
 
 Expected: exit 0。存在しない html ファイルはスキップされる。
