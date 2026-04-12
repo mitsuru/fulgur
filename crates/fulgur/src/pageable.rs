@@ -1541,7 +1541,7 @@ pub enum ListItemMarker {
 /// A list item with an outside-positioned marker.
 #[derive(Clone)]
 pub struct ListItemPageable {
-    /// Marker (text or none; image variant added in a follow-up step).
+    /// Marker (text, image, or none).
     pub marker: ListItemMarker,
     /// Line-height of the first shaped line — used to vertically center
     /// image markers. Zero for `ListItemMarker::None`.
