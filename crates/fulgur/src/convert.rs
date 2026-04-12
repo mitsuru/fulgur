@@ -479,10 +479,20 @@ fn convert_node_inner(
         let style = extract_block_style(node, ctx.assets);
         let (opacity, visible) = extract_opacity_visible(node);
 
-        // Derive line_height from font-size since there is no Parley layout
+        // Derive line_height from computed styles since there is no Parley layout.
+        // Honour explicit line-height first; fall back to font-size * 1.2 for
+        // `normal`, matching the same heuristic Blitz uses internally.
         let line_height = node
             .primary_styles()
-            .map(|s| s.clone_font_size().used_size().px() * PX_TO_PT * DEFAULT_LINE_HEIGHT_RATIO)
+            .map(|s| {
+                use style::values::computed::font::LineHeight;
+                let font_size_pt = s.clone_font_size().used_size().px() * PX_TO_PT;
+                match s.clone_line_height() {
+                    LineHeight::Normal => font_size_pt * DEFAULT_LINE_HEIGHT_RATIO,
+                    LineHeight::Number(num) => font_size_pt * num.0,
+                    LineHeight::Length(value) => value.0.px() * PX_TO_PT,
+                }
+            })
             .unwrap_or(FALLBACK_LINE_HEIGHT_PT);
 
         if let Some(marker) = resolve_list_marker(node, line_height, ctx.assets) {
