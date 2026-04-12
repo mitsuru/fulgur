@@ -323,6 +323,10 @@ pub fn extract_vertical_align(node: &blitz_dom::Node) -> crate::paragraph::Verti
             if let Some(pct) = lp.to_percentage() {
                 VerticalAlign::Percent(pct.0)
             } else {
+                // Note: for calc() mixed values like `calc(10px + 50%)`,
+                // to_percentage() returns None and we resolve with basis=0,
+                // which drops the percentage component. This is a known
+                // limitation — calc() in vertical-align is extremely rare.
                 VerticalAlign::Length(lp.resolve(style::values::computed::Length::new(0.0)).px())
             }
         }

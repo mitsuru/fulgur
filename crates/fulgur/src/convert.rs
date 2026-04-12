@@ -298,7 +298,7 @@ fn convert_node_inner(
 
             if before_inline.is_some() || after_inline.is_some() {
                 inject_inline_pseudo_images(&mut paragraph.lines, before_inline, after_inline);
-                let font_metrics = extract_line_font_metrics(doc, node);
+                let font_metrics = extract_line_font_metrics(node);
                 for line in &mut paragraph.lines {
                     crate::paragraph::recalculate_line_box(line, &font_metrics);
                 }
@@ -410,7 +410,7 @@ fn convert_node_inner(
 
         if before_inline.is_some() || after_inline.is_some() {
             inject_inline_pseudo_images(&mut paragraph.lines, before_inline, after_inline);
-            let font_metrics = extract_line_font_metrics(doc, node);
+            let font_metrics = extract_line_font_metrics(node);
             for line in &mut paragraph.lines {
                 crate::paragraph::recalculate_line_box(line, &font_metrics);
             }
@@ -716,6 +716,25 @@ where
 /// The intrinsic dimensions come from `ImagePageable::decode_dimensions`.
 /// A zero-height decode result silently degrades to a 1:1 aspect so width-only
 /// sizing does not produce NaN.
+/// Resolve CSS width/height against intrinsic image dimensions + aspect ratio.
+fn resolve_image_dimensions(
+    data: &[u8],
+    format: crate::image::ImageFormat,
+    css_w: Option<f32>,
+    css_h: Option<f32>,
+) -> (f32, f32) {
+    let (iw, ih) = ImagePageable::decode_dimensions(data, format).unwrap_or((1, 1));
+    let iw = iw as f32;
+    let ih = ih as f32;
+    let aspect = if ih > 0.0 { iw / ih } else { 1.0 };
+    match (css_w, css_h) {
+        (Some(w), Some(h)) => (w, h),
+        (Some(w), None) => (w, if aspect > 0.0 { w / aspect } else { w }),
+        (None, Some(h)) => (h * aspect, h),
+        (None, None) => (iw, ih),
+    }
+}
+
 fn make_image_pageable(
     data: Arc<Vec<u8>>,
     format: crate::image::ImageFormat,
@@ -724,18 +743,7 @@ fn make_image_pageable(
     opacity: f32,
     visible: bool,
 ) -> ImagePageable {
-    let (iw, ih) = ImagePageable::decode_dimensions(&data, format).unwrap_or((1, 1));
-    let iw = iw as f32;
-    let ih = ih as f32;
-    let aspect = if ih > 0.0 { iw / ih } else { 1.0 };
-
-    let (w, h) = match (css_w, css_h) {
-        (Some(w), Some(h)) => (w, h),
-        (Some(w), None) => (w, if aspect > 0.0 { w / aspect } else { w }),
-        (None, Some(h)) => (h * aspect, h),
-        (None, None) => (iw, ih),
-    };
-
+    let (w, h) = resolve_image_dimensions(&data, format, css_w, css_h);
     let mut img = ImagePageable::new(data, format, w, h);
     img.opacity = opacity;
     img.visible = visible;
@@ -945,16 +953,7 @@ fn build_inline_pseudo_image(
     let styles = pseudo_node.primary_styles()?;
     let css_w = resolve_pseudo_size(&styles.clone_width(), parent_content_width);
     let css_h = resolve_pseudo_size(&styles.clone_height(), parent_content_height);
-    let (iw, ih) = ImagePageable::decode_dimensions(&data, format).unwrap_or((1, 1));
-    let iw = iw as f32;
-    let ih = ih as f32;
-    let aspect = if ih > 0.0 { iw / ih } else { 1.0 };
-    let (w, h) = match (css_w, css_h) {
-        (Some(w), Some(h)) => (w, h),
-        (Some(w), None) => (w, if aspect > 0.0 { w / aspect } else { w }),
-        (None, Some(h)) => (h * aspect, h),
-        (None, None) => (iw, ih),
-    };
+    let (w, h) = resolve_image_dimensions(&data, format, css_w, css_h);
     let (opacity, visible) = extract_opacity_visible(pseudo_node);
     let vertical_align = crate::blitz_adapter::extract_vertical_align(pseudo_node);
     Some(InlineImage {
@@ -1017,7 +1016,7 @@ fn inject_inline_pseudo_images(
 
 /// Extract font metrics from the first glyph run in the node's text layout.
 /// Falls back to reasonable defaults when no text is available.
-fn extract_line_font_metrics(_doc: &blitz_dom::BaseDocument, node: &Node) -> LineFontMetrics {
+fn extract_line_font_metrics(node: &Node) -> LineFontMetrics {
     let default = LineFontMetrics {
         ascent: 12.0,
         descent: 4.0,
@@ -1036,6 +1035,10 @@ fn extract_line_font_metrics(_doc: &blitz_dom::BaseDocument, node: &Node) -> Lin
             if let parley::PositionedLayoutItem::GlyphRun(gr) = item {
                 let run = gr.run();
                 let metrics = run.metrics();
+                // Parley's RunMetrics only exposes ascent/descent.
+                // x_height, subscript, and superscript offsets are
+                // approximated from ascent since the OS/2 table values
+                // are not available through this API.
                 return LineFontMetrics {
                     ascent: metrics.ascent,
                     descent: metrics.descent.abs(),
@@ -2503,7 +2506,7 @@ mod tests {
     }
 
     #[test]
-    fn test_build_inline_pseudo_image_returns_none_for_block_pseudo() {
+    fn test_build_inline_pseudo_image_does_not_filter_display() {
         let icon_bytes = std::fs::read(
             std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
                 .parent()
