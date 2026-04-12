@@ -200,7 +200,7 @@ fn test_overflow_x_only_renders() {
 #[test]
 fn test_overflow_hidden_page_spanning_clip() {
     // Small page: 100pt × 120pt with 10pt margins → content area = 80pt × 100pt
-    // overflow:hidden block is 80pt wide, 250pt tall → must split across 3 pages
+    // overflow:hidden block is 80pt wide, 250pt tall → should span multiple pages
     let engine = fulgur::engine::Engine::builder()
         .page_size(fulgur::config::PageSize {
             width: 100.0,
