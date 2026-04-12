@@ -930,7 +930,7 @@ pub fn rewrite_marker_content_url(css: &str) -> String {
 
     // We'll collect "rewrites" — each is (insert_position, extra_css_text).
     // After scanning we splice them in (back-to-front so offsets stay valid).
-    let mut rewrites: Vec<(usize, String)> = Vec::new();
+    let mut rewrites: Vec<String> = Vec::new();
 
     // Track at-rule wrappers (e.g. @media print) so we can re-wrap the
     // generated rule in the same at-rule context.
@@ -1064,7 +1064,7 @@ pub fn rewrite_marker_content_url(css: &str) -> String {
                 format!("\n{at_header}{{{stripped}{{list-style-image:url({url})}}}}")
             };
 
-            rewrites.push((i, new_rule));
+            rewrites.push(new_rule);
         }
     }
 
@@ -1072,13 +1072,11 @@ pub fn rewrite_marker_content_url(css: &str) -> String {
         return css.to_string();
     }
 
-    // Build the result by inserting rewrites (they're in forward order).
+    // Append all generated rules at the end of the CSS text so they are
+    // never accidentally nested inside an existing at-rule block.
     let mut result = css.to_string();
-    // Insert back-to-front so byte offsets remain valid.
-    // But our positions are char-based; convert to byte positions.
-    for (char_pos, extra) in rewrites.into_iter().rev() {
-        let byte_pos: usize = chars[..char_pos].iter().map(|c| c.len_utf8()).sum();
-        result.insert_str(byte_pos, &extra);
+    for extra in rewrites {
+        result.push_str(&extra);
     }
 
     result
@@ -1676,7 +1674,32 @@ mod marker_rewrite_tests {
     fn test_rewrite_marker_content_url_at_media() {
         let css = r#"@media print { li::marker { content: url("print-bullet.png"); } }"#;
         let result = rewrite_marker_content_url(css);
-        assert!(result.contains("@media print") && result.contains("list-style-image"));
+
+        // The original @media block must remain intact.
+        assert!(
+            result.starts_with(css),
+            "original CSS must be preserved at the start, got:\n{result}"
+        );
+
+        // The generated list-style-image rule must appear AFTER the
+        // original @media block, wrapped in its own @media print { }.
+        let suffix = &result[css.len()..];
+        assert!(
+            suffix.contains("@media print"),
+            "generated rule must be wrapped in @media print, suffix:\n{suffix}"
+        );
+        assert!(
+            suffix.contains("li{list-style-image:url("),
+            "generated rule must contain li{{list-style-image:...}}, suffix:\n{suffix}"
+        );
+
+        // There must be exactly two @media print occurrences — the original
+        // and the generated one — proving there is no double-wrapping.
+        let count = result.matches("@media print").count();
+        assert_eq!(
+            count, 2,
+            "expected exactly 2 @media print occurrences (original + generated), got {count}\nresult:\n{result}"
+        );
     }
 
     #[test]
