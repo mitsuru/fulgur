@@ -422,10 +422,12 @@ fn convert_node_inner(
     // Inside-positioned markers are already injected into Parley's inline layout by Blitz,
     // so they fall through to the normal paragraph path below.
     if let Some(elem_data) = node.element_data()
-        && elem_data
-            .list_item_data
-            .as_ref()
-            .is_some_and(|d| matches!(d.position, blitz_dom::node::ListItemLayoutPosition::Outside(_)))
+        && elem_data.list_item_data.as_ref().is_some_and(|d| {
+            matches!(
+                d.position,
+                blitz_dom::node::ListItemLayoutPosition::Outside(_)
+            )
+        })
     {
         let (marker_lines, marker_width, marker_line_height) = extract_marker_lines(doc, node, ctx);
         let style = extract_block_style(node, ctx.assets);
@@ -583,8 +585,7 @@ fn convert_node_inner(
                         .items
                         .insert(0, LineItem::Image(inline_img));
                     recalculate_paragraph_line_boxes(&mut paragraph.lines);
-                    paragraph.cached_height =
-                        paragraph.lines.iter().map(|l| l.height).sum();
+                    paragraph.cached_height = paragraph.lines.iter().map(|l| l.height).sum();
                 }
             }
 

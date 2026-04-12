@@ -34,7 +34,11 @@ fn test_list_style_position_inside_text_marker_renders() {
     </body></html>"#;
     let pdf = engine.render_html(html).unwrap();
     assert!(pdf.starts_with(b"%PDF"));
-    assert!(pdf.len() > 500, "PDF should have non-trivial content, got {} bytes", pdf.len());
+    assert!(
+        pdf.len() > 500,
+        "PDF should have non-trivial content, got {} bytes",
+        pdf.len()
+    );
 }
 
 #[test]
@@ -49,7 +53,11 @@ fn test_list_style_position_inside_ordered_list() {
     </body></html>"#;
     let pdf = engine.render_html(html).unwrap();
     assert!(pdf.starts_with(b"%PDF"));
-    assert!(pdf.len() > 500, "PDF should have non-trivial content, got {} bytes", pdf.len());
+    assert!(
+        pdf.len() > 500,
+        "PDF should have non-trivial content, got {} bytes",
+        pdf.len()
+    );
 }
 
 #[test]
@@ -71,5 +79,46 @@ fn test_list_style_position_inside_image_marker() {
     assert!(
         pdf_contains(&pdf, b"/Subtype /Image") || pdf_contains(&pdf, b"/Subtype/Image"),
         "PDF should embed an Image XObject for the inside-position image marker"
+    );
+}
+
+#[test]
+fn test_outside_markers_still_work_after_inside_changes() {
+    let engine = build_engine();
+    let html = r#"<html><body>
+        <ul style="list-style-position: outside">
+            <li>Outside one</li>
+            <li>Outside two</li>
+            <li>Outside three</li>
+        </ul>
+    </body></html>"#;
+    let pdf = engine.render_html(html).unwrap();
+    assert!(pdf.starts_with(b"%PDF"));
+    assert!(
+        pdf.len() > 500,
+        "PDF should have non-trivial content, got {} bytes",
+        pdf.len()
+    );
+}
+
+#[test]
+fn test_inside_and_outside_in_same_document() {
+    let engine = build_engine();
+    let html = r#"<html><body>
+        <ul style="list-style-position: outside">
+            <li>Outside item A</li>
+            <li>Outside item B</li>
+        </ul>
+        <ul style="list-style-position: inside">
+            <li>Inside item A</li>
+            <li>Inside item B</li>
+        </ul>
+    </body></html>"#;
+    let pdf = engine.render_html(html).unwrap();
+    assert!(pdf.starts_with(b"%PDF"));
+    assert!(
+        pdf.len() > 500,
+        "PDF should have non-trivial content, got {} bytes",
+        pdf.len()
     );
 }
