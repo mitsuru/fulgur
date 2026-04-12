@@ -126,9 +126,7 @@ fn test_background_image_svg_renders() {
         .page_size(PageSize::A4)
         .margin(Margin::uniform(72.0))
         .build()
-        .render_html(
-            r#"<html><body><div style="width:100px;height:100px"></div></body></html>"#,
-        )
+        .render_html(r#"<html><body><div style="width:100px;height:100px"></div></body></html>"#)
         .unwrap();
     assert!(
         pdf.len() > pdf_no_bg.len(),
