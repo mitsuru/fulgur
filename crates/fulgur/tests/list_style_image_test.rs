@@ -68,6 +68,39 @@ fn test_list_style_image_unresolved_url_falls_back_to_text() {
     assert!(pdf.starts_with(b"%PDF"));
 }
 
+#[test]
+fn test_list_style_none_with_image_url_embeds_xobject() {
+    let engine = build_engine();
+    let html = r#"<html><body>
+        <ul style="list-style: none url(bullet.png)">
+            <li>Item one</li>
+            <li>Item two</li>
+        </ul>
+    </body></html>"#;
+    let pdf = engine.render_html(html).unwrap();
+    assert!(pdf.starts_with(b"%PDF"));
+    assert!(
+        pdf_contains(&pdf, b"/Subtype /Image") || pdf_contains(&pdf, b"/Subtype/Image"),
+        "PDF should embed an Image XObject when list-style: none url(bullet.png)"
+    );
+}
+
+#[test]
+fn test_list_style_image_only_embeds_xobject() {
+    let engine = build_engine();
+    let html = r#"<html><body>
+        <ul>
+            <li style="list-style-image: url(bullet.png)">Item</li>
+        </ul>
+    </body></html>"#;
+    let pdf = engine.render_html(html).unwrap();
+    assert!(pdf.starts_with(b"%PDF"));
+    assert!(
+        pdf_contains(&pdf, b"/Subtype /Image") || pdf_contains(&pdf, b"/Subtype/Image"),
+        "PDF should embed an Image XObject when list-style-image is set alone"
+    );
+}
+
 const MINIMAL_SVG: &[u8] = br#"<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10"><rect width="10" height="10" fill="red"/></svg>"#;
 
 #[test]

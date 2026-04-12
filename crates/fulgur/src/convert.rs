@@ -425,6 +425,79 @@ fn convert_node_inner(
         return Box::new(item);
     }
 
+    // Fallback: display: list-item with list-style-image but no list_item_data
+    // (Blitz 0.2.4 skips list_item_data when list-style-type: none)
+    if node
+        .element_data()
+        .is_some_and(|d| d.list_item_data.is_none())
+        && has_image_only_list_marker(node, ctx.assets)
+    {
+        let style = extract_block_style(node, ctx.assets);
+        let (opacity, visible) = extract_opacity_visible(node);
+
+        // Derive line_height from font-size since there is no Parley layout
+        let line_height = node
+            .primary_styles()
+            .map(|s| s.clone_font_size().used_size().px() * 0.75 * 1.2)
+            .unwrap_or(12.0);
+
+        if let Some(marker) = resolve_list_marker(node, line_height, ctx.assets) {
+            let content_box = compute_content_box(node, &style);
+            let body: Box<dyn Pageable> = if node.flags.is_inline_root() {
+                let paragraph_opt = extract_paragraph(doc, node, ctx);
+                if let Some(mut p) = paragraph_opt {
+                    p.visible = visible;
+                    Box::new(p)
+                } else {
+                    let children: &[usize] = &node.children;
+                    let positioned_children =
+                        collect_positioned_children(doc, children, ctx, depth);
+                    let (before_pseudo, after_pseudo) =
+                        build_block_pseudo_images(doc, node, content_box, ctx.assets);
+                    let positioned_children = wrap_with_block_pseudo_images(
+                        before_pseudo,
+                        after_pseudo,
+                        content_box,
+                        positioned_children,
+                    );
+                    let mut block = BlockPageable::with_positioned_children(positioned_children)
+                        .with_style(style.clone())
+                        .with_visible(visible);
+                    block.wrap(width, 10000.0);
+                    Box::new(block)
+                }
+            } else {
+                let children: &[usize] = &node.children;
+                let positioned_children = collect_positioned_children(doc, children, ctx, depth);
+                let (before_pseudo, after_pseudo) =
+                    build_block_pseudo_images(doc, node, content_box, ctx.assets);
+                let positioned_children = wrap_with_block_pseudo_images(
+                    before_pseudo,
+                    after_pseudo,
+                    content_box,
+                    positioned_children,
+                );
+                let mut block = BlockPageable::with_positioned_children(positioned_children)
+                    .with_style(style.clone())
+                    .with_visible(visible);
+                block.wrap(width, 10000.0);
+                Box::new(block)
+            };
+            let mut item = ListItemPageable {
+                marker,
+                marker_line_height: line_height,
+                body,
+                style: BlockStyle::default(),
+                width,
+                height: 0.0,
+                opacity,
+                visible,
+            };
+            item.wrap(width, 10000.0);
+            return Box::new(item);
+        }
+    }
+
     // Check if this is a table element
     if let Some(elem_data) = node.element_data() {
         let tag = elem_data.name.local.as_ref();
@@ -1825,6 +1898,34 @@ fn is_non_visual_element(node: &Node) -> bool {
     } else {
         false
     }
+}
+
+/// Returns `true` when the node has `display: list-item` and a non-`none`
+/// `list-style-image` value, regardless of whether Blitz populated
+/// `list_item_data` (which it skips when `list-style-type: none`).
+fn has_image_only_list_marker(node: &Node, assets: Option<&AssetBundle>) -> bool {
+    let styles = match node.primary_styles() {
+        Some(s) => s,
+        None => return false,
+    };
+    if !styles.get_box().display.is_list_item() {
+        return false;
+    }
+    let assets = match assets {
+        Some(a) => a,
+        None => return false,
+    };
+    use style::values::computed::image::Image;
+    let url = match styles.clone_list_style_image() {
+        Image::Url(u) => u,
+        _ => return false,
+    };
+    let raw_src = match &url {
+        style::servo::url::ComputedUrl::Valid(u) => u.as_str(),
+        style::servo::url::ComputedUrl::Invalid(s) => s.as_str(),
+    };
+    let src = extract_asset_name(raw_src);
+    assets.get_image(src).is_some()
 }
 
 /// Resolve a list-style-image marker from the node's computed styles.
