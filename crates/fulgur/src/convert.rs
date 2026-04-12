@@ -32,9 +32,6 @@ const PX_TO_PT: f32 = 0.75;
 /// unavailable (CSS 2 §10.8.1 initial value for `line-height: normal`).
 const DEFAULT_LINE_HEIGHT_RATIO: f32 = 1.2;
 
-/// Fallback line-height in pt when no style information is available at all.
-const FALLBACK_LINE_HEIGHT_PT: f32 = 12.0;
-
 /// Context for DOM-to-Pageable conversion, bundling all shared state.
 pub struct ConvertContext<'a> {
     pub running_store: &'a RunningElementStore,
@@ -468,13 +465,11 @@ fn convert_node_inner(
     }
 
     // Fallback: display: list-item with list-style-image but no list_item_data
-    // (Blitz 0.2.4 skips list_item_data when list-style-type: none)
-    if node
-        .element_data()
-        .is_some_and(|d| d.list_item_data.is_none())
-        && node
-            .primary_styles()
-            .is_some_and(|s| s.get_box().display.is_list_item())
+    // (Blitz 0.2.4 skips list_item_data when list-style-type: none).
+    // The primary path's guard already consumed `list_item_data.is_some()`,
+    // so reaching here means list_item_data is None — only check display.
+    if let Some(styles) = node.primary_styles()
+        && styles.get_box().display.is_list_item()
     {
         let style = extract_block_style(node, ctx.assets);
         let (opacity, visible) = extract_opacity_visible(node);
@@ -482,18 +477,15 @@ fn convert_node_inner(
         // Derive line_height from computed styles since there is no Parley layout.
         // Honour explicit line-height first; fall back to font-size * 1.2 for
         // `normal`, matching the same heuristic Blitz uses internally.
-        let line_height = node
-            .primary_styles()
-            .map(|s| {
-                use style::values::computed::font::LineHeight;
-                let font_size_pt = s.clone_font_size().used_size().px() * PX_TO_PT;
-                match s.clone_line_height() {
-                    LineHeight::Normal => font_size_pt * DEFAULT_LINE_HEIGHT_RATIO,
-                    LineHeight::Number(num) => font_size_pt * num.0,
-                    LineHeight::Length(value) => value.0.px() * PX_TO_PT,
-                }
-            })
-            .unwrap_or(FALLBACK_LINE_HEIGHT_PT);
+        let line_height = {
+            use style::values::computed::font::LineHeight;
+            let font_size_pt = styles.clone_font_size().used_size().px() * PX_TO_PT;
+            match styles.clone_line_height() {
+                LineHeight::Normal => font_size_pt * DEFAULT_LINE_HEIGHT_RATIO,
+                LineHeight::Number(num) => font_size_pt * num.0,
+                LineHeight::Length(value) => value.0.px() * PX_TO_PT,
+            }
+        };
 
         if let Some(marker) = resolve_list_marker(node, line_height, ctx.assets) {
             let content_box = compute_content_box(node, &style);
@@ -1964,9 +1956,8 @@ fn resolve_list_marker(
     match AssetKind::detect(data) {
         AssetKind::Raster(format) => {
             let (iw, ih) = ImagePageable::decode_dimensions(data, format)?;
-            // px → pt (1px = 0.75pt)
-            let intrinsic_w = iw as f32 * 0.75;
-            let intrinsic_h = ih as f32 * 0.75;
+            let intrinsic_w = iw as f32 * PX_TO_PT;
+            let intrinsic_h = ih as f32 * PX_TO_PT;
             let (width, height) =
                 crate::pageable::clamp_marker_size(intrinsic_w, intrinsic_h, line_height);
             let img = ImagePageable::new(Arc::clone(data), format, width, height);
@@ -1979,9 +1970,8 @@ fn resolve_list_marker(
         AssetKind::Svg => {
             let tree = usvg::Tree::from_data(data, &usvg::Options::default()).ok()?;
             let size = tree.size();
-            // SVG user units = CSS px → PDF pt (1px = 0.75pt)
-            let intrinsic_w = size.width() * 0.75;
-            let intrinsic_h = size.height() * 0.75;
+            let intrinsic_w = size.width() * PX_TO_PT;
+            let intrinsic_h = size.height() * PX_TO_PT;
             let (width, height) =
                 crate::pageable::clamp_marker_size(intrinsic_w, intrinsic_h, line_height);
             let svg = SvgPageable::new(Arc::new(tree), width, height);
