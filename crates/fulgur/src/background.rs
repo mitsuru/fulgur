@@ -446,6 +446,30 @@ mod tests {
     }
 
     #[test]
+    fn test_svg_layer_resolve_size_contain() {
+        let svg_data = br#"<svg xmlns="http://www.w3.org/2000/svg" width="200" height="100"><rect width="200" height="100" fill="blue"/></svg>"#;
+        let opts = usvg::Options::default();
+        let tree = usvg::Tree::from_data(svg_data, &opts).unwrap();
+        let layer = BackgroundLayer {
+            content: BgImageContent::Svg {
+                tree: std::sync::Arc::new(tree),
+            },
+            intrinsic_width: 200.0,
+            intrinsic_height: 100.0,
+            size: BgSize::Contain,
+            position_x: BgLengthPercentage::Percentage(0.0),
+            position_y: BgLengthPercentage::Percentage(0.0),
+            repeat_x: BgRepeat::NoRepeat,
+            repeat_y: BgRepeat::NoRepeat,
+            origin: BgBox::PaddingBox,
+            clip: BgClip::BorderBox,
+        };
+        let (w, h) = resolve_size(&layer, 300.0, 300.0);
+        assert_eq!(w, 300.0);
+        assert_eq!(h, 150.0);
+    }
+
+    #[test]
     fn test_repeat_alignment_with_offset_position() {
         // Tiles must align with position: tiles at position ± n*image_size.
         // position=25, clip_start=10, image_size=20 → tiles at 5, 25, 45, ...
