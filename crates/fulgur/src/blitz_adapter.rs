@@ -1099,6 +1099,62 @@ pub fn rewrite_marker_content_url(css: &str) -> String {
     result
 }
 
+/// Rewrite `::marker { content: url(...) }` inside `<style>` blocks in HTML.
+///
+/// Finds all `<style>...</style>` regions in the HTML string and applies
+/// [`rewrite_marker_content_url`] to each one's contents. Non-style
+/// content is passed through unchanged.
+pub fn rewrite_marker_content_url_in_html(html: &str) -> String {
+    let lower = html.to_ascii_lowercase();
+    // Quick check: bail early if no <style tag at all.
+    if !lower.contains("<style") {
+        return html.to_string();
+    }
+
+    let mut result = String::with_capacity(html.len());
+    let mut cursor = 0;
+
+    loop {
+        // Find <style (case-insensitive) from cursor.
+        let search = lower[cursor..].find("<style");
+        let Some(rel_start) = search else {
+            // No more <style tags; copy remainder.
+            result.push_str(&html[cursor..]);
+            break;
+        };
+        let tag_start = cursor + rel_start;
+
+        // Find the end of the opening tag `>`.
+        let Some(rel_gt) = html[tag_start..].find('>') else {
+            // Malformed — no closing `>`; copy remainder as-is.
+            result.push_str(&html[cursor..]);
+            break;
+        };
+        let content_start = tag_start + rel_gt + 1;
+
+        // Find </style (case-insensitive).
+        let Some(rel_end) = lower[content_start..].find("</style") else {
+            // No closing tag; copy remainder as-is.
+            result.push_str(&html[cursor..]);
+            break;
+        };
+        let content_end = content_start + rel_end;
+
+        // Copy everything before the CSS content (including the <style> tag).
+        result.push_str(&html[cursor..content_start]);
+
+        // Rewrite the CSS content.
+        let css_content = &html[content_start..content_end];
+        let rewritten = rewrite_marker_content_url(css_content);
+        result.push_str(&rewritten);
+
+        // Advance cursor past the CSS content.
+        cursor = content_end;
+    }
+
+    result
+}
+
 /// Extract the URL from a `content: url(...)` declaration, if present.
 /// Returns the inner URL string (without the `url()` wrapper).
 fn extract_content_url(declarations: &str) -> Option<String> {
@@ -1755,6 +1811,42 @@ mod marker_rewrite_tests {
         assert!(
             result.contains("list-style-image"),
             "should work with @import prefix, got: {result}"
+        );
+    }
+
+    #[test]
+    fn test_rewrite_marker_content_url_in_html_rewrites_style() {
+        let html = r#"<html><head><style>
+li::marker { content: url("star.png"); }
+</style></head><body><ul><li>x</li></ul></body></html>"#;
+        let result = rewrite_marker_content_url_in_html(html);
+        assert!(
+            result.contains("list-style-image"),
+            "should rewrite inside <style>, got: {result}"
+        );
+    }
+
+    #[test]
+    fn test_rewrite_marker_content_url_in_html_no_style_passthrough() {
+        let html = "<html><body><p>Hello</p></body></html>";
+        let result = rewrite_marker_content_url_in_html(html);
+        assert_eq!(result, html);
+    }
+
+    #[test]
+    fn test_rewrite_marker_content_url_in_html_multiple_style_blocks() {
+        let html = r#"<html><head>
+<style>p { color: red; }</style>
+<style>li::marker { content: url("a.png"); }</style>
+</head><body><ul><li>x</li></ul></body></html>"#;
+        let result = rewrite_marker_content_url_in_html(html);
+        assert!(
+            result.contains("list-style-image"),
+            "second style block rewritten"
+        );
+        assert!(
+            result.contains("p { color: red; }"),
+            "first style block preserved"
         );
     }
 

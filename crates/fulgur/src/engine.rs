@@ -50,11 +50,14 @@ impl Engine {
     /// a 2-pass rendering pipeline is used: pass 1 paginates body content, pass 2
     /// renders each page with resolved margin boxes.
     pub fn render_html(&self, html: &str) -> Result<Vec<u8>> {
+        let html = crate::blitz_adapter::rewrite_marker_content_url_in_html(html);
+
         let combined_css = self
             .assets
             .as_ref()
             .map(|a| a.combined_css())
             .unwrap_or_default();
+        let combined_css = crate::blitz_adapter::rewrite_marker_content_url(&combined_css);
 
         let mut gcpm = crate::gcpm::parser::parse_gcpm(&combined_css);
         let css_to_inject = gcpm.cleaned_css.clone();
@@ -80,7 +83,7 @@ impl Engine {
         // default browser styles even though their content resolved
         // correctly.
         let (mut doc, link_gcpm) = crate::blitz_adapter::parse_html_with_local_resources(
-            html,
+            &html,
             self.config.content_width(),
             fonts,
             self.base_path.as_deref(),
@@ -515,6 +518,18 @@ mod tests {
 
         let engine = Engine::builder().base_path(&base).build();
         let pdf = engine.render_html(html).expect("render");
+        assert!(!pdf.is_empty());
+    }
+
+    #[test]
+    fn test_render_html_marker_content_url_does_not_panic() {
+        let html = r#"<!doctype html>
+<html><head><style>
+li::marker { content: url("bullet.png"); }
+</style></head>
+<body><ul><li>Item</li></ul></body></html>"#;
+        let engine = Engine::builder().build();
+        let pdf = engine.render_html(html).expect("render should not panic");
         assert!(!pdf.is_empty());
     }
 }
