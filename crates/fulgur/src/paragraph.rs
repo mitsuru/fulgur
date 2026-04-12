@@ -4,6 +4,7 @@ use std::sync::Arc;
 
 use skrifa::MetadataProvider;
 
+use crate::image::ImageFormat;
 use crate::pageable::{Canvas, Pageable, Pagination, Pt, Size};
 
 /// Which decoration lines to draw (bitflags).
@@ -44,7 +45,7 @@ pub enum TextDecorationStyle {
 }
 
 /// All text-decoration info for a glyph run.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Copy, Debug, Default)]
 pub struct TextDecoration {
     pub line: TextDecorationLine,
     pub style: TextDecorationStyle,
@@ -69,7 +70,7 @@ pub struct ShapedGlyph {
 }
 
 /// A pre-extracted glyph run (single font + style).
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct ShapedGlyphRun {
     pub font_data: Arc<Vec<u8>>,
     pub font_index: u32,
@@ -82,7 +83,7 @@ pub struct ShapedGlyphRun {
 }
 
 /// Vertical alignment for inline replaced elements (images).
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub enum VerticalAlign {
     #[default]
     Baseline,
@@ -98,10 +99,10 @@ pub enum VerticalAlign {
 }
 
 /// An inline image run within a shaped line.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct InlineImage {
     pub data: Arc<Vec<u8>>,
-    pub format: crate::image::ImageFormat,
+    pub format: ImageFormat,
     pub width: f32,
     pub height: f32,
     pub x_offset: f32,
@@ -113,7 +114,7 @@ pub struct InlineImage {
 }
 
 /// A single item in a shaped line: either a text glyph run or an inline image.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub enum LineItem {
     Text(ShapedGlyphRun),
     Image(InlineImage),
@@ -404,11 +405,7 @@ fn draw_line_decorations(canvas: &mut Canvas<'_, '_>, items: &[LineItem], x: Pt,
         spans.push(DecorationSpan {
             x: run_x,
             width: run_width,
-            decoration: TextDecoration {
-                line: run.decoration.line,
-                style: run.decoration.style,
-                color: run.decoration.color,
-            },
+            decoration: run.decoration,
             font_data: Arc::clone(&run.font_data),
             font_index: run.font_index,
             font_size: run.font_size,
