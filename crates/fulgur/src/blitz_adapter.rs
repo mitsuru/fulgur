@@ -1859,4 +1859,16 @@ li::marker { content: url("star.png"); }
             "should handle parentheses inside quoted URL"
         );
     }
+
+    #[test]
+    fn test_rewrite_marker_content_url_in_html_uppercase_style_with_attrs() {
+        let html = r#"<html><head><STYLE type="text/css">
+li::marker { content: url("star.png"); }
+</STYLE></head><body></body></html>"#;
+        let result = rewrite_marker_content_url_in_html(html);
+        assert!(
+            result.contains("list-style-image"),
+            "should handle uppercase STYLE with attributes, got: {result}"
+        );
+    }
 }
