@@ -493,7 +493,7 @@ fn convert_node_inner(
         && styles.get_box().display.is_list_item()
         && node
             .element_data()
-            .map_or(true, |e| e.list_item_data.is_none())
+            .is_none_or(|e| e.list_item_data.is_none())
     {
         let style = extract_block_style(node, ctx.assets);
         let (opacity, visible) = extract_opacity_visible(node);
