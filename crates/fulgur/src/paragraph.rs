@@ -516,8 +516,29 @@ pub fn draw_shaped_lines(canvas: &mut Canvas<'_, '_>, lines: &[ShapedLine], x: P
                         false,
                     );
                 }
-                LineItem::Image(_) => {
-                    // Inline image drawing will be implemented in a later task.
+                LineItem::Image(img) => {
+                    if !img.visible {
+                        continue;
+                    }
+                    crate::pageable::draw_with_opacity(canvas, img.opacity, |canvas| {
+                        let data: krilla::Data = Arc::clone(&img.data).into();
+                        let Ok(image) = img.format.to_krilla_image(data) else {
+                            return;
+                        };
+                        let Some(size) =
+                            krilla::geom::Size::from_wh(img.width, img.height)
+                        else {
+                            return;
+                        };
+                        let img_y = y + img.computed_y;
+                        let transform = krilla::geom::Transform::from_translate(
+                            x + img.x_offset,
+                            img_y,
+                        );
+                        canvas.surface.push_transform(&transform);
+                        canvas.surface.draw_image(image, size);
+                        canvas.surface.pop();
+                    });
                 }
             }
         }
