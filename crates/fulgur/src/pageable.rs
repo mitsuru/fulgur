@@ -688,7 +688,7 @@ pub fn build_rounded_rect_path(
 ///   (`±1e6`) so only the clipped axis is effectively bounded.
 /// - `border-radius` is honored **only** when both axes are clipped. With
 ///   single-axis clipping, a plain rectangle is used (simplification).
-pub fn compute_overflow_clip_path(
+pub(crate) fn compute_overflow_clip_path(
     style: &BlockStyle,
     x: f32,
     y: f32,
