@@ -2826,4 +2826,65 @@ mod tests {
             images
         );
     }
+
+    #[test]
+    fn test_convert_content_url_no_content_falls_through() {
+        // A normal div without content: url() should NOT produce an ImagePageable.
+        let html = r#"<!doctype html><html><head><style>
+            div { width: 100px; height: 50px; background: red; }
+        </style></head><body><div>Normal text</div></body></html>"#;
+
+        let mut doc = crate::blitz_adapter::parse(html, 800.0, &[]);
+        crate::blitz_adapter::resolve(&mut doc);
+
+        let running_store = crate::gcpm::running::RunningElementStore::new();
+        let mut ctx = ConvertContext {
+            running_store: &running_store,
+            assets: None,
+            font_cache: HashMap::new(),
+            string_set_by_node: HashMap::new(),
+            counter_ops_by_node: HashMap::new(),
+        };
+        let tree = super::dom_to_pageable(&doc, &mut ctx);
+
+        let mut images = Vec::new();
+        collect_images(&*tree, &mut images);
+        assert!(
+            images.is_empty(),
+            "normal div without content: url() should not produce images, got {:?}",
+            images
+        );
+    }
+
+    #[test]
+    fn test_convert_content_url_missing_asset_falls_through() {
+        // content: url("missing.png") where the asset is not in the bundle
+        // should silently fall through to the normal conversion path.
+        let bundle = AssetBundle::new(); // empty bundle
+
+        let html = r#"<!doctype html><html><head><style>
+            .replaced { content: url("missing.png"); width: 24px; height: 24px; }
+        </style></head><body><div class="replaced">fallback text</div></body></html>"#;
+
+        let mut doc = crate::blitz_adapter::parse(html, 800.0, &[]);
+        crate::blitz_adapter::resolve(&mut doc);
+
+        let running_store = crate::gcpm::running::RunningElementStore::new();
+        let mut ctx = ConvertContext {
+            running_store: &running_store,
+            assets: Some(&bundle),
+            font_cache: HashMap::new(),
+            string_set_by_node: HashMap::new(),
+            counter_ops_by_node: HashMap::new(),
+        };
+        let tree = super::dom_to_pageable(&doc, &mut ctx);
+
+        let mut images = Vec::new();
+        collect_images(&*tree, &mut images);
+        assert!(
+            images.is_empty(),
+            "missing asset should not produce images, got {:?}",
+            images
+        );
+    }
 }
