@@ -581,6 +581,13 @@ fn convert_node_inner(
                 if let Some(inline_img) =
                     resolve_inside_image_marker(node, first_line_height, ctx.assets)
                 {
+                    let shift = inline_img.width;
+                    for item in &mut paragraph.lines[0].items {
+                        match item {
+                            LineItem::Text(run) => run.x_offset += shift,
+                            LineItem::Image(i) => i.x_offset += shift,
+                        }
+                    }
                     paragraph.lines[0]
                         .items
                         .insert(0, LineItem::Image(inline_img));
