@@ -18,6 +18,7 @@ use crate::paragraph::{
 use crate::svg::SvgPageable;
 use blitz_dom::{Node, NodeData};
 use blitz_html::HtmlDocument;
+use skrifa::MetadataProvider;
 use std::collections::HashMap;
 use std::ops::Deref;
 use std::sync::Arc;
@@ -299,8 +300,7 @@ fn convert_node_inner(
             if let Some(mut paragraph) = paragraph_opt {
                 if before_inline.is_some() || after_inline.is_some() {
                     inject_inline_pseudo_images(&mut paragraph.lines, before_inline, after_inline);
-                    let font_metrics = extract_line_font_metrics(node);
-                    recalculate_paragraph_line_boxes(&mut paragraph.lines, &font_metrics);
+                    recalculate_paragraph_line_boxes(&mut paragraph.lines);
                 }
 
                 let (before_pseudo, after_pseudo) =
@@ -344,7 +344,7 @@ fn convert_node_inner(
                     before_inline,
                     after_inline,
                 );
-                let font_metrics = extract_line_font_metrics(node);
+                let font_metrics = metrics_from_line(&line);
                 crate::paragraph::recalculate_line_box(&mut line, &font_metrics);
                 let mut paragraph = ParagraphPageable::new(vec![line]);
                 paragraph.visible = visible;
@@ -471,8 +471,7 @@ fn convert_node_inner(
             // Existing path: inject inline pseudo images into real paragraph
             if before_inline.is_some() || after_inline.is_some() {
                 inject_inline_pseudo_images(&mut paragraph.lines, before_inline, after_inline);
-                let font_metrics = extract_line_font_metrics(node);
-                recalculate_paragraph_line_boxes(&mut paragraph.lines, &font_metrics);
+                recalculate_paragraph_line_boxes(&mut paragraph.lines);
             }
 
             // Then existing block pseudo check
@@ -523,7 +522,7 @@ fn convert_node_inner(
                 before_inline,
                 after_inline,
             );
-            let font_metrics = extract_line_font_metrics(node);
+            let font_metrics = metrics_from_line(&line);
             crate::paragraph::recalculate_line_box(&mut line, &font_metrics);
             let mut paragraph = ParagraphPageable::new(vec![line]);
             paragraph.opacity = opacity;
@@ -1140,6 +1139,42 @@ fn inject_inline_pseudo_images(
     }
 }
 
+/// Extract `LineFontMetrics` from a `ShapedLine`'s Text items using skrifa.
+/// Returns per-line accurate metrics instead of reusing a single set from the
+/// first glyph run in the paragraph. Falls back to defaults if no text items.
+fn metrics_from_line(line: &ShapedLine) -> LineFontMetrics {
+    let default = LineFontMetrics {
+        ascent: 12.0,
+        descent: 4.0,
+        x_height: 8.0,
+        subscript_offset: 4.0,
+        superscript_offset: 6.0,
+    };
+    for item in &line.items {
+        let run = match item {
+            LineItem::Text(r) => r,
+            LineItem::Image(_) => continue,
+        };
+        if let Ok(font_ref) = skrifa::FontRef::from_index(&run.font_data, run.font_index) {
+            let metrics = font_ref.metrics(
+                skrifa::instance::Size::new(run.font_size),
+                skrifa::instance::LocationRef::default(),
+            );
+            // skrifa Metrics exposes x_height but not subscript/superscript
+            // offsets directly. Approximate from ascent (same ratios as CSS
+            // typographic conventions).
+            return LineFontMetrics {
+                ascent: metrics.ascent,
+                descent: metrics.descent.abs(),
+                x_height: metrics.x_height.unwrap_or(metrics.ascent * 0.5),
+                subscript_offset: metrics.ascent * 0.3,
+                superscript_offset: metrics.ascent * 0.4,
+            };
+        }
+    }
+    default
+}
+
 /// Recalculate line boxes for all lines in a paragraph, correctly handling
 /// the coordinate system difference between paragraph-absolute baselines and
 /// line-local coordinates expected by `recalculate_line_box`.
@@ -1152,12 +1187,16 @@ fn inject_inline_pseudo_images(
 /// back to paragraph-absolute and promotes `computed_y` to paragraph-absolute
 /// so `draw_shaped_lines` can use `y + img.computed_y` directly (matching the
 /// `y + line.baseline` pattern used for text).
-fn recalculate_paragraph_line_boxes(lines: &mut [ShapedLine], font_metrics: &LineFontMetrics) {
+///
+/// Font metrics are extracted per-line from the line's own Text items via
+/// skrifa, so lines with different font sizes get accurate vertical-align.
+fn recalculate_paragraph_line_boxes(lines: &mut [ShapedLine]) {
     let mut y_acc: f32 = 0.0;
     for line in lines.iter_mut() {
+        let font_metrics = metrics_from_line(line);
         // Convert baseline from paragraph-absolute to line-local
         line.baseline -= y_acc;
-        crate::paragraph::recalculate_line_box(line, font_metrics);
+        crate::paragraph::recalculate_line_box(line, &font_metrics);
         // Convert computed_y from line-local to paragraph-absolute
         for item in &mut line.items {
             if let LineItem::Image(img) = item {
@@ -1168,44 +1207,6 @@ fn recalculate_paragraph_line_boxes(lines: &mut [ShapedLine], font_metrics: &Lin
         line.baseline += y_acc;
         y_acc += line.height;
     }
-}
-
-/// Extract font metrics from the first glyph run in the node's text layout.
-/// Falls back to reasonable defaults when no text is available.
-fn extract_line_font_metrics(node: &Node) -> LineFontMetrics {
-    let default = LineFontMetrics {
-        ascent: 12.0,
-        descent: 4.0,
-        x_height: 8.0,
-        subscript_offset: 4.0,
-        superscript_offset: 6.0,
-    };
-    let Some(elem_data) = node.element_data() else {
-        return default;
-    };
-    let Some(text_layout) = elem_data.inline_layout_data.as_ref() else {
-        return default;
-    };
-    for line in text_layout.layout.lines() {
-        for item in line.items() {
-            if let parley::PositionedLayoutItem::GlyphRun(gr) = item {
-                let run = gr.run();
-                let metrics = run.metrics();
-                // Parley's RunMetrics only exposes ascent/descent.
-                // x_height, subscript, and superscript offsets are
-                // approximated from ascent since the OS/2 table values
-                // are not available through this API.
-                return LineFontMetrics {
-                    ascent: metrics.ascent,
-                    descent: metrics.descent.abs(),
-                    x_height: metrics.ascent * 0.5,
-                    subscript_offset: metrics.ascent * 0.3,
-                    superscript_offset: metrics.ascent * 0.4,
-                };
-            }
-        }
-    }
-    default
 }
 
 /// Resolve a stylo `Size` (i.e. `width` / `height`) to an absolute `f32` in
