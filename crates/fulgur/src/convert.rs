@@ -1124,6 +1124,13 @@ fn resolve_list_marker(
     use crate::image::AssetKind;
     use style::values::computed::image::Image;
 
+    // Zero or negative line-height (e.g. list-style-position: inside where
+    // extract_marker_lines returns 0.0) would clamp image size to 0x0.
+    // Return None so the caller falls back to the text marker instead of
+    // creating an invisible image marker that suppresses the fallback.
+    if line_height <= 0.0 {
+        return None;
+    }
     let assets = assets?;
     let styles = node.primary_styles()?;
     let image = styles.clone_list_style_image();
