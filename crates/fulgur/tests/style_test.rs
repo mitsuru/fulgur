@@ -196,3 +196,65 @@ fn test_overflow_x_only_renders() {
         "overflow-x:hidden should emit a clip path different from default"
     );
 }
+
+#[test]
+fn test_overflow_hidden_page_spanning_clip() {
+    // Small page: 100pt × 120pt with 10pt margins → content area = 80pt × 100pt
+    // overflow:hidden block is 80pt wide, 250pt tall → must split across 3 pages
+    let engine = fulgur::engine::Engine::builder()
+        .page_size(fulgur::config::PageSize {
+            width: 100.0,
+            height: 120.0,
+        })
+        .margin(fulgur::config::Margin::uniform(10.0))
+        .build();
+
+    let html_hidden = r#"<!DOCTYPE html><html><body>
+        <div style="width:80pt;height:250pt;overflow:hidden;background:#eee">
+            <div style="width:200pt;height:80pt;background:red"></div>
+            <div style="width:200pt;height:80pt;background:blue"></div>
+            <div style="width:200pt;height:80pt;background:green"></div>
+            <div style="width:200pt;height:80pt;background:orange"></div>
+            <div style="width:200pt;height:80pt;background:purple"></div>
+        </div>
+    </body></html>"#;
+    let pdf_hidden = engine.render_html(html_hidden).unwrap();
+    assert!(pdf_hidden.starts_with(b"%PDF"));
+
+    // Count pages using /Type /Page (exclude /Type /Pages)
+    let prefix = b"/Type /Page";
+    let mut page_count = 0usize;
+    let mut i = 0;
+    while i + prefix.len() < pdf_hidden.len() {
+        if &pdf_hidden[i..i + prefix.len()] == prefix {
+            let next = pdf_hidden[i + prefix.len()];
+            if !next.is_ascii_alphanumeric() {
+                page_count += 1;
+            }
+            i += prefix.len();
+        } else {
+            i += 1;
+        }
+    }
+    assert!(
+        page_count >= 2,
+        "expected at least 2 pages for a tall overflow:hidden block, got {page_count}"
+    );
+
+    // Compare with overflow:visible — the clip path must make the PDF differ
+    let html_visible = r#"<!DOCTYPE html><html><body>
+        <div style="width:80pt;height:250pt;overflow:visible;background:#eee">
+            <div style="width:200pt;height:80pt;background:red"></div>
+            <div style="width:200pt;height:80pt;background:blue"></div>
+            <div style="width:200pt;height:80pt;background:green"></div>
+            <div style="width:200pt;height:80pt;background:orange"></div>
+            <div style="width:200pt;height:80pt;background:purple"></div>
+        </div>
+    </body></html>"#;
+    let pdf_visible = engine.render_html(html_visible).unwrap();
+
+    assert_ne!(
+        pdf_hidden, pdf_visible,
+        "page-spanning overflow:hidden should produce different PDF than overflow:visible"
+    );
+}
