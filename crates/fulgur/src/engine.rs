@@ -50,11 +50,14 @@ impl Engine {
     /// a 2-pass rendering pipeline is used: pass 1 paginates body content, pass 2
     /// renders each page with resolved margin boxes.
     pub fn render_html(&self, html: &str) -> Result<Vec<u8>> {
+        let html = crate::blitz_adapter::rewrite_marker_content_url_in_html(html);
+
         let combined_css = self
             .assets
             .as_ref()
             .map(|a| a.combined_css())
             .unwrap_or_default();
+        let combined_css = crate::blitz_adapter::rewrite_marker_content_url(&combined_css);
 
         let mut gcpm = crate::gcpm::parser::parse_gcpm(&combined_css);
         let css_to_inject = gcpm.cleaned_css.clone();
@@ -80,7 +83,7 @@ impl Engine {
         // default browser styles even though their content resolved
         // correctly.
         let (mut doc, link_gcpm) = crate::blitz_adapter::parse_html_with_local_resources(
-            html,
+            &html,
             self.config.content_width(),
             fonts,
             self.base_path.as_deref(),
@@ -516,5 +519,42 @@ mod tests {
         let engine = Engine::builder().base_path(&base).build();
         let pdf = engine.render_html(html).expect("render");
         assert!(!pdf.is_empty());
+    }
+
+    #[test]
+    fn test_render_html_marker_content_url_does_not_panic() {
+        let html = r#"<!doctype html>
+<html><head><style>
+li::marker { content: url("bullet.png"); }
+</style></head>
+<body><ul><li>Item</li></ul></body></html>"#;
+        let engine = Engine::builder().build();
+        let pdf = engine.render_html(html).expect("render should not panic");
+        assert!(!pdf.is_empty());
+    }
+
+    #[test]
+    fn test_render_html_marker_content_url_with_image() {
+        // 1x1 red PNG (valid, generated with correct CRC checksums)
+        let png_data: Vec<u8> = vec![
+            0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x48,
+            0x44, 0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x02, 0x00, 0x00,
+            0x00, 0x90, 0x77, 0x53, 0xDE, 0x00, 0x00, 0x00, 0x0C, 0x49, 0x44, 0x41, 0x54, 0x78,
+            0x9C, 0x63, 0xF8, 0xCF, 0xC0, 0x00, 0x00, 0x03, 0x01, 0x01, 0x00, 0xC9, 0xFE, 0x92,
+            0xEF, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4E, 0x44, 0xAE, 0x42, 0x60, 0x82,
+        ];
+
+        let mut bundle = AssetBundle::default();
+        bundle.add_css(r#"li::marker { content: url("bullet.png"); }"#);
+        bundle.add_image("bullet.png", png_data);
+
+        let html = r#"<!doctype html>
+<html><body><ul><li>Item 1</li><li>Item 2</li></ul></body></html>"#;
+
+        let engine = Engine::builder().assets(bundle).build();
+        let pdf = engine
+            .render_html(html)
+            .expect("render should succeed with marker image");
+        assert!(!pdf.is_empty(), "PDF should be non-empty");
     }
 }
