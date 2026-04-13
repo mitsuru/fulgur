@@ -28,5 +28,5 @@ Not yet supported:
   and shadows are not drawn today. Use `display: block` to get shadows on
   generic boxes.
 
-See the `feature/box-shadow` branch history and
-`docs/plans/2026-04-14-box-shadow.md` for implementation details.
+See PR `#83` and `docs/plans/2026-04-14-box-shadow.md`
+for implementation details.
