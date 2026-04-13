@@ -262,9 +262,14 @@ pub fn render_to_pdf_with_gcpm(
             c.set_current_page(page_idx);
         }
 
+        // Margin boxes use a Canvas with no heading collector — running
+        // elements promoted into margin boxes may contain h1-h6, but their
+        // bookmark entry must come from the source position in the body,
+        // not from each margin-box repetition. The body Canvas (created
+        // after this scope) carries the collector instead.
         let mut canvas = Canvas {
             surface: &mut surface,
-            heading_collector: collector.as_mut(),
+            heading_collector: None,
         };
 
         // Resolve margin boxes: for each position, pick the most specific
@@ -445,7 +450,15 @@ pub fn render_to_pdf_with_gcpm(
             }
         }
 
-        // Draw body content with resolved per-page margin
+        // Draw body content with resolved per-page margin. Reuse `canvas`
+        // by overwriting it so the previous (collector-less) Canvas's
+        // borrow on `surface` is released, then reborrow with the heading
+        // collector so h1-h6 markers in body content can record their
+        // (page_idx, y) for the PDF outline.
+        canvas = Canvas {
+            surface: &mut surface,
+            heading_collector: collector.as_mut(),
+        };
         let page_content_width = page_size.width - resolved_margin.left - resolved_margin.right;
         let page_content_height = page_size.height - resolved_margin.top - resolved_margin.bottom;
         page_content.draw(
