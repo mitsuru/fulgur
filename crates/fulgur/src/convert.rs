@@ -113,27 +113,6 @@ fn heading_level(node: &Node) -> Option<u8> {
     }
 }
 
-/// Extract plain text content from a DOM subtree, collapsing whitespace and
-/// trimming. Used for outline/bookmark labels.
-fn extract_text_content(doc: &blitz_dom::BaseDocument, node_id: usize) -> String {
-    let mut buf = String::new();
-    walk_text(doc, node_id, &mut buf);
-    buf.split_whitespace().collect::<Vec<_>>().join(" ")
-}
-
-fn walk_text(doc: &blitz_dom::BaseDocument, node_id: usize, buf: &mut String) {
-    let Some(node) = doc.get_node(node_id) else {
-        return;
-    };
-    if let NodeData::Text(t) = &node.data {
-        buf.push_str(&t.content);
-        return;
-    }
-    for &c in &node.children {
-        walk_text(doc, c, buf);
-    }
-}
-
 fn convert_node(
     doc: &blitz_dom::BaseDocument,
     node_id: usize,
@@ -164,7 +143,7 @@ fn maybe_wrap_heading(
     let Some(level) = heading_level(node) else {
         return result;
     };
-    let text = extract_text_content(doc, node_id);
+    let text = crate::gcpm::string_set::extract_text_content(doc, node_id);
     if text.is_empty() {
         return result;
     }
