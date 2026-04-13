@@ -73,25 +73,21 @@ fn draw_single_box_shadow(
 }
 
 /// Expand border radii by `spread`. Negative `spread` clamps to zero per CSS spec
-/// (shadow corners become sharp when spread < -radius).
+/// (shadow corners become sharp when spread < -radius). Corners with zero radius
+/// stay sharp regardless of spread, per CSS Backgrounds and Borders Level 3.
 fn expand_radii(outer: &[[f32; 2]; 4], spread: f32) -> [[f32; 2]; 4] {
+    let expand = |r: f32| {
+        if r == 0.0 {
+            0.0
+        } else {
+            f32::max(r + spread, 0.0)
+        }
+    };
     [
-        [
-            f32::max(outer[0][0] + spread, 0.0),
-            f32::max(outer[0][1] + spread, 0.0),
-        ],
-        [
-            f32::max(outer[1][0] + spread, 0.0),
-            f32::max(outer[1][1] + spread, 0.0),
-        ],
-        [
-            f32::max(outer[2][0] + spread, 0.0),
-            f32::max(outer[2][1] + spread, 0.0),
-        ],
-        [
-            f32::max(outer[3][0] + spread, 0.0),
-            f32::max(outer[3][1] + spread, 0.0),
-        ],
+        [expand(outer[0][0]), expand(outer[0][1])],
+        [expand(outer[1][0]), expand(outer[1][1])],
+        [expand(outer[2][0]), expand(outer[2][1])],
+        [expand(outer[3][0]), expand(outer[3][1])],
     ]
 }
 

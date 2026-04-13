@@ -1775,10 +1775,10 @@ fn extract_block_style(node: &Node, assets: Option<&AssetBundle>) -> BlockStyle 
                 );
             }
             let color_abs = shadow.base.color.resolve_to_absolute(&current_color);
-            let r = (color_abs.components.0.clamp(0.0, 1.0) * 255.0) as u8;
-            let g = (color_abs.components.1.clamp(0.0, 1.0) * 255.0) as u8;
-            let b = (color_abs.components.2.clamp(0.0, 1.0) * 255.0) as u8;
-            let a = (color_abs.alpha.clamp(0.0, 1.0) * 255.0) as u8;
+            let r = (color_abs.components.0.clamp(0.0, 1.0) * 255.0).round() as u8;
+            let g = (color_abs.components.1.clamp(0.0, 1.0) * 255.0).round() as u8;
+            let b = (color_abs.components.2.clamp(0.0, 1.0) * 255.0).round() as u8;
+            let a = (color_abs.alpha.clamp(0.0, 1.0) * 255.0).round() as u8;
             if a == 0 {
                 continue; // fully transparent — skip
             }
