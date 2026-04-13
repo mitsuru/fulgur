@@ -614,6 +614,23 @@ pub fn build_rounded_rect_path(
     h: f32,
     radii: &[[f32; 2]; 4],
 ) -> Option<krilla::geom::Path> {
+    let mut pb = krilla::geom::PathBuilder::new();
+    append_rounded_rect_subpath(&mut pb, x, y, w, h, radii);
+    pb.finish()
+}
+
+/// Append a rounded rectangle as a subpath to an existing `PathBuilder`.
+///
+/// Useful for composing compound paths (e.g., ring shapes for box-shadow clipping).
+/// The subpath is self-closing; the caller can continue adding subpaths after this returns.
+pub(crate) fn append_rounded_rect_subpath(
+    pb: &mut krilla::geom::PathBuilder,
+    x: f32,
+    y: f32,
+    w: f32,
+    h: f32,
+    radii: &[[f32; 2]; 4],
+) {
     // Bézier approximation constant for quarter circle
     const KAPPA: f32 = 0.552_284_8;
 
@@ -638,8 +655,6 @@ pub fn build_rounded_rect_path(
         [radii[2][0] * f, radii[2][1] * f],
         [radii[3][0] * f, radii[3][1] * f],
     ];
-
-    let mut pb = krilla::geom::PathBuilder::new();
 
     // Start at top-left corner (after radius)
     pb.move_to(x + r[0][0], y);
@@ -697,7 +712,6 @@ pub fn build_rounded_rect_path(
     }
 
     pb.close();
-    pb.finish()
 }
 
 /// Build a clip path for `overflow` based on the padding box.
@@ -2685,6 +2699,18 @@ mod background_tests {
             ..Default::default()
         };
         assert!(style.has_visual_style());
+    }
+
+    /// Pin BoxShadow default values to guard against accidental derive changes.
+    #[test]
+    fn box_shadow_default_values() {
+        let d = BoxShadow::default();
+        assert_eq!(d.offset_x, 0.0);
+        assert_eq!(d.offset_y, 0.0);
+        assert_eq!(d.blur, 0.0);
+        assert_eq!(d.spread, 0.0);
+        assert_eq!(d.color, [0, 0, 0, 0]);
+        assert!(!d.inset);
     }
 }
 

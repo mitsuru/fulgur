@@ -21,7 +21,7 @@ Not yet supported:
 - `blur-radius > 0`: currently rendered as `blur=0` (hard shadow) with a
   `log::warn!` diagnostic. True gaussian blur requires rasterization and
   is planned for a follow-up release.
-- `inset` shadows: silently skipped with a `log::warn!` diagnostic.
+- `inset` shadows: skipped with a `log::warn!` diagnostic.
 - `box-shadow` on inline-level elements (including `display: inline-block`):
   fulgur's drawing pipeline currently reaches `draw_box_shadows` only from
   `BlockPageable` and `TablePageable`, so inline-level backgrounds, borders,

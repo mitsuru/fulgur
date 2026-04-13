@@ -53,13 +53,43 @@ fn draw_single_box_shadow(
         return;
     }
 
-    let path = if style.has_radius() {
+    // Build the (expanded) shadow shape.
+    let shadow_path = if style.has_radius() {
         let radii = expand_radii(&style.border_radii, shadow.spread);
         crate::pageable::build_rounded_rect_path(sx, sy, sw, sh, &radii)
     } else {
         build_rect_path(sx, sy, sw, sh)
     };
-    let Some(path) = path else { return };
+    let Some(shadow_path) = shadow_path else {
+        return;
+    };
+
+    // Per CSS Backgrounds §7.2, outer shadows are only visible *outside* the
+    // element's border-box. If we painted the expanded shape directly, elements
+    // with transparent or semi-transparent backgrounds would show the shadow
+    // bleeding through the interior. To prevent this we clip the shadow by
+    // excluding the border-box using an EvenOdd clip path: the clip region
+    // covers the shadow's bounding box minus the border-box.
+    let clip_path = {
+        let mut pb = krilla::geom::PathBuilder::new();
+        let Some(bbox) = krilla::geom::Rect::from_xywh(sx, sy, sw, sh) else {
+            return;
+        };
+        pb.push_rect(bbox);
+        if style.has_radius() {
+            crate::pageable::append_rounded_rect_subpath(&mut pb, x, y, w, h, &style.border_radii);
+        } else if let Some(box_rect) = krilla::geom::Rect::from_xywh(x, y, w, h) {
+            pb.push_rect(box_rect);
+        } else {
+            return;
+        }
+        pb.finish()
+    };
+    let Some(clip_path) = clip_path else { return };
+
+    canvas
+        .surface
+        .push_clip_path(&clip_path, &krilla::paint::FillRule::EvenOdd);
 
     let [r, g, b, a] = shadow.color;
     canvas.surface.set_fill(Some(krilla::paint::Fill {
@@ -69,7 +99,9 @@ fn draw_single_box_shadow(
         rule: Default::default(),
     }));
     canvas.surface.set_stroke(None);
-    canvas.surface.draw_path(&path);
+    canvas.surface.draw_path(&shadow_path);
+
+    canvas.surface.pop();
 }
 
 /// Expand border radii by `spread`. Negative `spread` clamps to zero per CSS spec
@@ -583,6 +615,18 @@ mod tests {
     fn expand_radii_negative_spread_clamps_to_zero() {
         let outer = [[2.0, 2.0]; 4];
         let got = expand_radii(&outer, -5.0);
+        for corner in &got {
+            assert_eq!(corner[0], 0.0);
+            assert_eq!(corner[1], 0.0);
+        }
+    }
+
+    /// Sharp corners (r == 0) must stay sharp even when spread is positive,
+    /// per CSS Backgrounds and Borders Level 3 §7.2.
+    #[test]
+    fn expand_radii_zero_radii_unchanged() {
+        let outer = [[0.0, 0.0]; 4];
+        let got = expand_radii(&outer, 5.0);
         for corner in &got {
             assert_eq!(corner[0], 0.0);
             assert_eq!(corner[1], 0.0);

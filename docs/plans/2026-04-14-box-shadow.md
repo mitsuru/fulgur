@@ -105,7 +105,7 @@ git commit -m "feat(pageable): add BoxShadow type and BlockStyle.box_shadows fie
 
 - Modify: `crates/fulgur/src/convert.rs:1684-1790` (extract_block_style 関数)
 
-**Step 2.1: 失敗する統合テストを書く**
+**Step 2.1: スモーク統合テストを書く（panic 防止確認）**
 
 新規ファイル `crates/fulgur/tests/box_shadow_test.rs` を作成：
 
@@ -585,7 +585,7 @@ Expected: PDF が生成される（ファイルサイズ > 0）
 
 1. **stylo の `clone_box_shadow()` API 名**: 実際は `clone_box_shadow()` 以外の名前
    （例: `get_box_shadow()`）になっている可能性。ビルドエラーが出たら `cargo doc` や
-   `grep -rn "box_shadow" /home/ubuntu/.cargo/registry/src/index.crates.io-*/stylo-0.8.0/`
+   `grep -rn "box_shadow" "${CARGO_HOME:-$HOME/.cargo}/registry/src/"*/stylo-0.8.0/`
    で探索する。
 
 2. **BoxShadowList の構造**: `.0` フィールドでない可能性。`Deref` 実装を持つかも。
