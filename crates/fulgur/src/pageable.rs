@@ -1508,6 +1508,61 @@ impl Pageable for HeadingMarkerPageable {
     }
 }
 
+// ─── HeadingMarkerWrapperPageable ──────────────────────────
+
+/// Wraps a Pageable with a `HeadingMarkerPageable`, keeping the marker
+/// attached to the first fragment on `split()` so outline anchors land on
+/// the page where the heading visually starts.
+#[derive(Clone)]
+pub struct HeadingMarkerWrapperPageable {
+    pub marker: HeadingMarkerPageable,
+    pub child: Box<dyn Pageable>,
+}
+
+impl HeadingMarkerWrapperPageable {
+    pub fn new(marker: HeadingMarkerPageable, child: Box<dyn Pageable>) -> Self {
+        Self { marker, child }
+    }
+}
+
+impl Pageable for HeadingMarkerWrapperPageable {
+    fn wrap(&mut self, avail_width: Pt, avail_height: Pt) -> Size {
+        self.child.wrap(avail_width, avail_height)
+    }
+
+    fn split(
+        &self,
+        avail_width: Pt,
+        avail_height: Pt,
+    ) -> Option<(Box<dyn Pageable>, Box<dyn Pageable>)> {
+        let (first, second) = self.child.split(avail_width, avail_height)?;
+        let first_wrapped = HeadingMarkerWrapperPageable {
+            marker: self.marker.clone(),
+            child: first,
+        };
+        // Second fragment does NOT carry the marker — the heading started on
+        // the previous page.
+        Some((Box::new(first_wrapped), second))
+    }
+
+    fn draw(&self, canvas: &mut Canvas<'_, '_>, x: Pt, y: Pt, aw: Pt, ah: Pt) {
+        self.marker.draw(canvas, x, y, aw, ah);
+        self.child.draw(canvas, x, y, aw, ah);
+    }
+
+    fn clone_box(&self) -> Box<dyn Pageable> {
+        Box::new(self.clone())
+    }
+
+    fn height(&self) -> Pt {
+        self.child.height()
+    }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+}
+
 // ─── StringSetPageable ──────────────────────────────────
 
 /// Zero-size marker for named string values.
@@ -3136,6 +3191,44 @@ mod transform_wrapper_tests {
         assert_eq!(m.height(), 0.0);
         assert_eq!(m.level, 1);
         assert_eq!(m.text, "Chapter 1");
+    }
+
+    #[test]
+    fn heading_wrapper_keeps_marker_with_first_fragment() {
+        // Build a splittable block: two 500pt spacers stacked so the
+        // boundary at y=500 is inside the available 500pt window.
+        let mut top = SpacerPageable::new(500.0);
+        top.wrap(500.0, 1000.0);
+        let mut bot = SpacerPageable::new(500.0);
+        bot.wrap(500.0, 1000.0);
+        let mut block = BlockPageable::with_positioned_children(vec![
+            PositionedChild {
+                child: Box::new(top),
+                x: 0.0,
+                y: 0.0,
+            },
+            PositionedChild {
+                child: Box::new(bot),
+                x: 0.0,
+                y: 500.0,
+            },
+        ]);
+        block.wrap(500.0, 1000.0);
+
+        let child: Box<dyn Pageable> = Box::new(block);
+        let marker = HeadingMarkerPageable::new(1, "Title".into());
+        let wrapper = HeadingMarkerWrapperPageable::new(marker, child);
+
+        // Split at 500pt.
+        let split = wrapper.split(500.0, 500.0);
+        let (first, _second) = split.expect("tall child must split");
+
+        // First must contain the HeadingMarkerPageable.
+        let any = first.as_any();
+        let w = any
+            .downcast_ref::<HeadingMarkerWrapperPageable>()
+            .expect("first fragment wraps marker");
+        assert_eq!(w.marker.text, "Title");
     }
 
     #[test]
