@@ -1325,6 +1325,14 @@ impl Pageable for BlockPageable {
 
             // visibility: hidden skips own rendering but children still draw
             if self.visible {
+                crate::background::draw_box_shadows(
+                    canvas,
+                    &self.style,
+                    x,
+                    y,
+                    total_width,
+                    total_height,
+                );
                 crate::background::draw_background(
                     canvas,
                     &self.style,
@@ -2255,6 +2263,14 @@ impl Pageable for TablePageable {
                 .unwrap_or(self.cached_height);
 
             if self.visible {
+                crate::background::draw_box_shadows(
+                    canvas,
+                    &self.style,
+                    x,
+                    y,
+                    total_width,
+                    total_height,
+                );
                 crate::background::draw_background(
                     canvas,
                     &self.style,
