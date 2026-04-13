@@ -261,6 +261,23 @@ impl Clone for Box<dyn Pageable> {
 
 // ─── BlockStyle ──────────────────────────────────────────
 
+/// A resolved single box-shadow value.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct BoxShadow {
+    /// Horizontal offset in points.
+    pub offset_x: f32,
+    /// Vertical offset in points.
+    pub offset_y: f32,
+    /// Blur radius in points. Currently unused for rendering (v0.4.5 draws blur=0).
+    pub blur: f32,
+    /// Spread radius in points. Negative values shrink the shadow.
+    pub spread: f32,
+    /// Shadow color as RGBA.
+    pub color: [u8; 4],
+    /// Whether this is an inset shadow. Currently unsupported (skipped at draw time).
+    pub inset: bool,
+}
+
 /// Visual style for a block element.
 #[derive(Clone, Debug, Default)]
 pub struct BlockStyle {
@@ -282,6 +299,8 @@ pub struct BlockStyle {
     pub overflow_x: Overflow,
     /// `overflow-y` value
     pub overflow_y: Overflow,
+    /// Box shadows in CSS declaration order (first = top-most in paint stack).
+    pub box_shadows: Vec<BoxShadow>,
 }
 
 /// CSS border-style values supported by fulgur.
@@ -410,6 +429,7 @@ impl BlockStyle {
             || !self.background_layers.is_empty()
             || self.border_widths.iter().any(|&w| w > 0.0)
             || self.padding.iter().any(|&p| p > 0.0)
+            || !self.box_shadows.is_empty()
     }
 
     /// Returns (left_inset, top_inset) for content positioning inside border+padding.
@@ -2632,6 +2652,22 @@ mod background_tests {
             origin: BgBox::PaddingBox,
             clip: BgClip::BorderBox,
         });
+        assert!(style.has_visual_style());
+    }
+
+    #[test]
+    fn has_visual_style_with_only_box_shadow() {
+        let style = BlockStyle {
+            box_shadows: vec![BoxShadow {
+                offset_x: 2.0,
+                offset_y: 2.0,
+                blur: 0.0,
+                spread: 0.0,
+                color: [0, 0, 0, 255],
+                inset: false,
+            }],
+            ..Default::default()
+        };
         assert!(style.has_visual_style());
     }
 }
