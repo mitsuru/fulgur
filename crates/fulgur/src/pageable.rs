@@ -1558,6 +1558,10 @@ impl Pageable for HeadingMarkerWrapperPageable {
         self.child.height()
     }
 
+    fn pagination(&self) -> Pagination {
+        self.child.pagination()
+    }
+
     fn as_any(&self) -> &dyn std::any::Any {
         self
     }
@@ -3229,6 +3233,19 @@ mod transform_wrapper_tests {
             .downcast_ref::<HeadingMarkerWrapperPageable>()
             .expect("first fragment wraps marker");
         assert_eq!(w.marker.text, "Title");
+    }
+
+    #[test]
+    fn heading_wrapper_forwards_pagination() {
+        let block = BlockPageable::with_positioned_children(vec![]).with_pagination(Pagination {
+            break_before: BreakBefore::Page,
+            ..Pagination::default()
+        });
+        let wrapper = HeadingMarkerWrapperPageable::new(
+            HeadingMarkerPageable::new(1, "T".into()),
+            Box::new(block),
+        );
+        assert_eq!(wrapper.pagination().break_before, BreakBefore::Page);
     }
 
     #[test]
