@@ -1788,7 +1788,7 @@ fn extract_block_style(node: &Node, assets: Option<&AssetBundle>) -> BlockStyle 
                 blur: blur_px,
                 spread: shadow.spread.px(),
                 color: [r, g, b, a],
-                inset: shadow.inset,
+                inset: false,
             });
         }
 
