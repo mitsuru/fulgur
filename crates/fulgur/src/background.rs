@@ -42,6 +42,9 @@ fn draw_single_box_shadow(
     w: f32,
     h: f32,
 ) {
+    // NOTE: when blur rendering is implemented (fulgur-4ie follow-up), this rect
+    // must also be expanded by the blur radius, and the blur extent drawn via
+    // rasterization + gaussian blur + image embed.
     let sx = x + shadow.offset_x - shadow.spread;
     let sy = y + shadow.offset_y - shadow.spread;
     let sw = w + 2.0 * shadow.spread;
