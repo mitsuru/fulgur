@@ -26,17 +26,27 @@ pub fn render_to_pdf(root: Box<dyn Pageable>, config: &Config) -> Result<Vec<u8>
         config.page_size
     };
 
-    for page_content in &pages {
+    let mut collector = if config.bookmarks {
+        Some(crate::pageable::HeadingCollector::new())
+    } else {
+        None
+    };
+
+    for (page_idx, page_content) in pages.iter().enumerate() {
         let settings = krilla::page::PageSettings::from_wh(page_size.width, page_size.height)
             .ok_or_else(|| Error::PdfGeneration("Invalid page dimensions".into()))?;
 
         let mut page = document.start_page_with(settings);
         let mut surface = page.surface();
 
+        if let Some(c) = collector.as_mut() {
+            c.set_current_page(page_idx);
+        }
+
         // Pass margin offsets as x/y origin to draw
         let mut canvas = Canvas {
             surface: &mut surface,
-            heading_collector: None,
+            heading_collector: collector.as_mut(),
         };
         page_content.draw(
             &mut canvas,
@@ -46,6 +56,13 @@ pub fn render_to_pdf(root: Box<dyn Pageable>, config: &Config) -> Result<Vec<u8>
             content_height,
         );
         // Surface::finish is handled by Drop
+    }
+
+    if let Some(c) = collector {
+        let entries = c.into_entries();
+        if !entries.is_empty() {
+            document.set_outline(crate::outline::build_outline(&entries));
+        }
     }
 
     document.set_metadata(build_metadata(config));
@@ -212,6 +229,12 @@ pub fn render_to_pdf_with_gcpm(
 
     let mut document = krilla::Document::new();
 
+    let mut collector = if config.bookmarks {
+        Some(crate::pageable::HeadingCollector::new())
+    } else {
+        None
+    };
+
     // Pass 2: render each page with margin boxes
     for (page_idx, page_content) in pages.iter().enumerate() {
         let page_num = page_idx + 1;
@@ -234,9 +257,14 @@ pub fn render_to_pdf_with_gcpm(
             .ok_or_else(|| Error::PdfGeneration("Invalid page dimensions".into()))?;
         let mut page = document.start_page_with(settings);
         let mut surface = page.surface();
+
+        if let Some(c) = collector.as_mut() {
+            c.set_current_page(page_idx);
+        }
+
         let mut canvas = Canvas {
             surface: &mut surface,
-            heading_collector: None,
+            heading_collector: collector.as_mut(),
         };
 
         // Resolve margin boxes: for each position, pick the most specific
@@ -427,6 +455,13 @@ pub fn render_to_pdf_with_gcpm(
             page_content_width,
             page_content_height,
         );
+    }
+
+    if let Some(c) = collector {
+        let entries = c.into_entries();
+        if !entries.is_empty() {
+            document.set_outline(crate::outline::build_outline(&entries));
+        }
     }
 
     document.set_metadata(build_metadata(config));
