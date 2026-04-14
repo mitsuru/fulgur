@@ -1,9 +1,8 @@
-//! FAILING tests (pre-implementation): `<link rel="stylesheet" media="...">`
-//! must honour the media query. Until `LinkMediaRewritePass` lands,
-//! blitz-dom 0.2.4's CssHandler hardcodes `MediaList::empty()` and media-restricted
-//! linked stylesheets are applied unconditionally — so
-//! `link_media_print_does_not_apply_on_screen` fails today and passes
-//! after Task 6 wires the rewrite in.
+//! Integration tests for `<link rel="stylesheet" media="...">` handling.
+//! fulgur renders as print media (see blitz_adapter::parse_inner), so
+//! `media="print"` stylesheets apply and `media="screen"` stylesheets are
+//! excluded. These tests pin that behaviour via the link-media rewrite
+//! pipeline (fulgur-2ai) layered on top of blitz's print-mode device.
 
 use std::fs;
 use std::path::Path;
@@ -50,7 +49,7 @@ fn render_contains_red(html: &str, base: &Path) -> Option<bool> {
 }
 
 #[test]
-fn link_media_print_does_not_apply_on_screen() {
+fn link_media_print_applies_under_print() {
     let dir = tempdir().unwrap();
     let root = dir.path();
 
@@ -70,8 +69,8 @@ fn link_media_print_does_not_apply_on_screen() {
         None => return, // pdftocairo unavailable; harmless skip
     };
     assert!(
-        !result,
-        "print.css must not be applied during screen rendering"
+        result,
+        "print.css must be applied under fulgur's print-mode rendering"
     );
 }
 
@@ -101,14 +100,14 @@ fn link_without_media_still_applies() {
     );
 }
 
-/// Rewrite-path liveness: fulgur renders with `media=screen`, so a
-/// `<link media=screen>` triggers the LinkMediaRewrite pipeline AND
-/// should still end up applying its rules. If the synthetic
-/// `<style>@import url() screen;</style>` is never registered with
-/// Stylo, the red background would be silently dropped even though
-/// the media query matches. This test catches that regression.
+/// Rewrite-path liveness: fulgur renders with `media=print`, so a
+/// `<link media=screen>` must be excluded by the LinkMediaRewrite
+/// pipeline. If the synthetic `<style>@import url() screen;</style>`
+/// were registered unconditionally, the red background would leak in
+/// even though the media query does not match the print device. This
+/// test catches that regression.
 #[test]
-fn link_media_matching_screen_still_loads_via_rewrite() {
+fn link_media_screen_excluded_under_print() {
     let dir = tempdir().unwrap();
     let root = dir.path();
 
@@ -128,8 +127,8 @@ fn link_media_matching_screen_still_loads_via_rewrite() {
         None => return,
     };
     assert!(
-        result,
-        "media=screen matches fulgur's screen device; rewritten stylesheet must still apply"
+        !result,
+        "media=screen does not match fulgur's print device; rewritten stylesheet must be excluded"
     );
 }
 
@@ -211,7 +210,7 @@ fn link_media_print_does_not_duplicate_gcpm_context() {
 }
 
 #[test]
-fn link_media_print_nested_import_also_excluded_on_screen() {
+fn link_media_print_nested_import_applies_under_print() {
     let dir = tempdir().unwrap();
     let root = dir.path();
 
@@ -232,7 +231,7 @@ fn link_media_print_nested_import_also_excluded_on_screen() {
         None => return, // pdftocairo unavailable; skip
     };
     assert!(
-        !result,
-        "nested @import under a print-only <link> must also be excluded on screen"
+        result,
+        "nested @import under a print-only <link> must also apply under fulgur's print-mode rendering"
     );
 }
