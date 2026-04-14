@@ -169,8 +169,7 @@ fn decode_woff2(data: &[u8]) -> Result<Vec<u8>> {
             data.len()
         )));
     }
-    let total_sfnt_size =
-        u32::from_be_bytes([data[16], data[17], data[18], data[19]]) as usize;
+    let total_sfnt_size = u32::from_be_bytes([data[16], data[17], data[18], data[19]]) as usize;
     if total_sfnt_size > MAX_DECODED_FONT_BYTES {
         return Err(Error::WoffDecode(format!(
             "WOFF2 header declares uncompressed size {total_sfnt_size} which exceeds {MAX_DECODED_FONT_BYTES} byte limit"
@@ -357,10 +356,9 @@ mod tests {
             .add_font_bytes(header)
             .expect_err("declared-oversized WOFF2 must be rejected");
         match err {
-            Error::WoffDecode(msg) => assert!(
-                msg.contains("declares uncompressed size"),
-                "msg: {msg}"
-            ),
+            Error::WoffDecode(msg) => {
+                assert!(msg.contains("declares uncompressed size"), "msg: {msg}")
+            }
             other => panic!("wrong variant: {other:?}"),
         }
         assert_eq!(bundle.fonts.len(), 0);
