@@ -88,6 +88,8 @@ pub fn parse_html_with_local_resources(
     font_data: &[Arc<Vec<u8>>],
     base_path: Option<&Path>,
 ) -> (HtmlDocument, crate::gcpm::GcpmContext) {
+    use std::collections::HashSet;
+
     let net_provider = Arc::new(crate::net::FulgurNetProvider::new(
         base_path.map(|p| p.to_path_buf()),
     ));
@@ -99,9 +101,33 @@ pub fn parse_html_with_local_resources(
 
     let mut doc = parse_inner(html, viewport_width, font_data, Some(provider), base_url);
 
-    // Replay every Resource (= parsed stylesheet) that the provider
-    // captured during HTML parsing into the document so the stylist
-    // sees them before `resolve()`.
+    // Identify <link rel=stylesheet media=X> nodes *before* mutating so
+    // their attributes are stable, and before loading so we can filter
+    // out the (wrong-media) resources that blitz's parser already
+    // triggered for them.
+    let rewrites = collect_link_media_rewrites(&doc);
+    let rewrite_node_ids: HashSet<usize> = rewrites.iter().map(|r| r.link_node_id).collect();
+
+    // First drain: load resources that correspond to <link> elements
+    // WITHOUT a media rewrite. Discard resources for nodes we are about
+    // to rewrite — their @import replacements will re-fetch with the
+    // correct MediaList.
+    for resource in net_provider.drain_pending_resources() {
+        if let Resource::Css(node_id, _) = &resource {
+            if rewrite_node_ids.contains(node_id) {
+                continue;
+            }
+        }
+        doc.load_resource(resource);
+    }
+
+    // Apply the DOM rewrite. Mutator's `drop` synchronously triggers
+    // `process_style_element` for each new <style>, which parses the
+    // @import, calls StylesheetLoader → NetProvider::fetch → CssHandler
+    // with `MediaList` properly propagated, and pushes new Resources.
+    apply_link_media_rewrites(&mut doc, &rewrites);
+
+    // Second drain: load the correctly-fetched stylesheets.
     for resource in net_provider.drain_pending_resources() {
         doc.load_resource(resource);
     }
@@ -1225,7 +1251,6 @@ pub(crate) struct LinkMediaRewrite {
 /// `<style>` elements keep the same cascade order as the original
 /// `<link>` elements — insertion order matters for stylo's origin
 /// sorting.
-#[allow(dead_code)]
 pub(crate) fn collect_link_media_rewrites(doc: &HtmlDocument) -> Vec<LinkMediaRewrite> {
     fn walk(doc: &HtmlDocument, node_id: usize, depth: usize, out: &mut Vec<LinkMediaRewrite>) {
         if depth >= MAX_DOM_DEPTH {
@@ -1302,7 +1327,6 @@ fn escape_css_url(raw: &str) -> String {
 /// integration) must filter any stylesheet resources that blitz already
 /// fetched for the `<link>` node before DOM mutation, otherwise the
 /// empty-media copy would also apply.
-#[allow(dead_code)]
 pub(crate) fn apply_link_media_rewrites(doc: &mut HtmlDocument, rewrites: &[LinkMediaRewrite]) {
     for rw in rewrites {
         let css = format!(
