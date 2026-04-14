@@ -145,14 +145,35 @@ const MAX_DECODED_FONT_BYTES: usize = 64 * 1024 * 1024;
 
 /// Decode a WOFF2 byte stream into an uncompressed TTF/OTF font.
 ///
-/// Enforces `MAX_WOFF2_INPUT_BYTES` on the compressed input and
-/// `MAX_DECODED_FONT_BYTES` on the decompressed output as defense against
-/// decompression-bomb inputs. `woff2_patched` itself does not cap output size.
+/// Three layered defenses against decompression-bomb inputs, since
+/// `woff2_patched` itself caps neither input nor output:
+///
+/// 1. `MAX_WOFF2_INPUT_BYTES` rejects oversized compressed inputs up front.
+/// 2. The WOFF2 header's `totalSfntSize` field (bytes 16-19, big-endian
+///    u32) is inspected *before* invoking brotli so an adversarial header
+///    declaring a huge output cannot drive the decoder into OOM.
+/// 3. `MAX_DECODED_FONT_BYTES` is re-checked after decode as a belt-and-
+///    suspenders guard against a liar header.
 fn decode_woff2(data: &[u8]) -> Result<Vec<u8>> {
     if data.len() > MAX_WOFF2_INPUT_BYTES {
         return Err(Error::WoffDecode(format!(
             "WOFF2 input exceeds {MAX_WOFF2_INPUT_BYTES} byte limit (got {} bytes)",
             data.len()
+        )));
+    }
+    // WOFF2 header: bytes 16..20 are totalSfntSize (big-endian u32).
+    // See https://www.w3.org/TR/WOFF2/#woff20Header.
+    if data.len() < 20 {
+        return Err(Error::WoffDecode(format!(
+            "WOFF2 header truncated: expected >= 20 bytes, got {}",
+            data.len()
+        )));
+    }
+    let total_sfnt_size =
+        u32::from_be_bytes([data[16], data[17], data[18], data[19]]) as usize;
+    if total_sfnt_size > MAX_DECODED_FONT_BYTES {
+        return Err(Error::WoffDecode(format!(
+            "WOFF2 header declares uncompressed size {total_sfnt_size} which exceeds {MAX_DECODED_FONT_BYTES} byte limit"
         )));
     }
     let mut buf: &[u8] = data;
@@ -316,6 +337,48 @@ mod tests {
             .expect_err("oversized WOFF2 must error before decoding");
         match err {
             Error::WoffDecode(msg) => assert!(msg.contains("limit"), "msg: {msg}"),
+            other => panic!("wrong variant: {other:?}"),
+        }
+        assert_eq!(bundle.fonts.len(), 0);
+    }
+
+    #[test]
+    fn test_add_font_bytes_woff2_header_declares_oversized_output() {
+        // Craft a minimal 20-byte WOFF2 header where totalSfntSize
+        // (bytes 16..20, big-endian u32) declares an uncompressed size
+        // that exceeds MAX_DECODED_FONT_BYTES. Must be rejected before
+        // the decoder runs.
+        let mut header = vec![0u8; 20];
+        header[0..4].copy_from_slice(b"wOF2");
+        let declared = (MAX_DECODED_FONT_BYTES as u64 + 1) as u32;
+        header[16..20].copy_from_slice(&declared.to_be_bytes());
+        let mut bundle = AssetBundle::new();
+        let err = bundle
+            .add_font_bytes(header)
+            .expect_err("declared-oversized WOFF2 must be rejected");
+        match err {
+            Error::WoffDecode(msg) => assert!(
+                msg.contains("declares uncompressed size"),
+                "msg: {msg}"
+            ),
+            other => panic!("wrong variant: {other:?}"),
+        }
+        assert_eq!(bundle.fonts.len(), 0);
+    }
+
+    #[test]
+    fn test_add_font_bytes_woff2_truncated_header() {
+        let mut bundle = AssetBundle::new();
+        // Only 8 bytes: long enough to pass the 4-byte magic detection
+        // (FontFormat::Woff2) but too short to read totalSfntSize.
+        let truncated = b"wOF2\x00\x00\x00\x00".to_vec();
+        let err = bundle
+            .add_font_bytes(truncated)
+            .expect_err("truncated WOFF2 header must be rejected");
+        match err {
+            Error::WoffDecode(msg) => {
+                assert!(msg.contains("header truncated"), "msg: {msg}")
+            }
             other => panic!("wrong variant: {other:?}"),
         }
         assert_eq!(bundle.fonts.len(), 0);

@@ -19,6 +19,7 @@
 ## Task 1: woff2 依存追加と Error バリアント追加
 
 **Files:**
+
 - Modify: `crates/fulgur/Cargo.toml`
 - Modify: `crates/fulgur/src/error.rs`
 
@@ -64,6 +65,7 @@ git commit -m "deps(fulgur): add woff2 crate and error variants for WOFF support
 ## Task 2: `detect_font_format` ヘルパーを追加（TDD）
 
 **Files:**
+
 - Modify: `crates/fulgur/src/asset.rs`
 
 **Step 1: failing test を書く**
@@ -160,6 +162,7 @@ git commit -m "feat(asset): add detect_font_format helper with magic byte detect
 ## Task 3: `add_font_bytes` API 実装（TTF passthrough、TDD）
 
 **Files:**
+
 - Modify: `crates/fulgur/src/asset.rs`
 
 **Step 1: failing test を書く**
@@ -261,6 +264,7 @@ git commit -m "feat(asset): add add_font_bytes API with format auto-detection"
 ## Task 4: WOFF2 デコーダ統合（TDD、実フィクスチャ）
 
 **Files:**
+
 - Create: `crates/fulgur/tests/fixtures/fonts/NotoSans-Regular.woff2`（詳細は Step 1）
 - Modify: `crates/fulgur/src/asset.rs`
 
@@ -367,6 +371,7 @@ git commit -m "feat(asset): decode WOFF2 fonts to TTF at ingestion"
 ## Task 5: Integration test（PDF 生成 end-to-end）
 
 **Files:**
+
 - Create: `crates/fulgur/tests/woff2_integration.rs`
 
 **Step 1: Integration test を書く**
@@ -397,6 +402,14 @@ fn woff2_font_renders_to_pdf() {
     let pdf = engine.render_html(html).expect("PDF render must succeed");
     assert!(pdf.len() > 1000, "PDF should be non-trivial, got {} bytes", pdf.len());
     assert_eq!(&pdf[0..5], b"%PDF-", "output must be a PDF");
+    // Verify the WOFF2 font was actually decoded and embedded, not silently
+    // replaced with a system fallback. Krilla emits a 6-letter subset prefix
+    // followed by the PostScript name (e.g. `KGTYZU+NotoSans-Regular`).
+    let needle = b"NotoSans-Regular";
+    assert!(
+        pdf.windows(needle.len()).any(|w| w == needle),
+        "PDF must contain embedded font name"
+    );
 }
 ```
 
@@ -419,6 +432,7 @@ git commit -m "test(asset): add WOFF2 integration test via PDF render"
 ## Task 6: CLI / README / docs の更新
 
 **Files:**
+
 - Modify: `README.md` （フォント対応形式セクション）
 - Modify: `docs/css-support.md` もしくは該当する機能一覧ドキュメント（あれば）
 
