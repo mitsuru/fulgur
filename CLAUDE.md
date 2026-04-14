@@ -14,7 +14,8 @@ cargo build
 cargo build --release
 
 # Test
-cargo test --lib
+cargo test --lib                   # note: in the workspace root this runs only fulgur-vrt
+cargo test -p fulgur --lib         # fulgur unit tests (~340)
 cargo test -p fulgur
 cargo test -p fulgur --test gcpm_integration
 
@@ -95,3 +96,5 @@ callers don't get this guarantee by default — see the tracking issue
 - Use `BTreeMap` (not `HashMap`) for iteration that affects PDF output (determinism)
 - Blitz: `!important` unreliable, `padding-top` on inline roots ignored (use `margin-top`)
 - `cargo fmt --check` enforced by CI
+- **`Engine` is a builder**: `Engine::builder().page_size(PageSize::A4).base_path(root).build()` + single-arg `render_html(html)`. There is no `Engine::new().with_*()`.
+- **PDF → PNG for visual tests**: `pdftocairo -png -r 100 -f 1 -l 1 <pdf> <prefix>` (poppler-utils). Installed in CI; gate with skip-if-missing for local dev. `fulgur-vrt::pdf_render::render_html_to_rgba` wraps this but does not accept `base_path`, so integration tests that load local CSS must inline the call.
