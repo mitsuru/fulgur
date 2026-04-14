@@ -9,6 +9,7 @@
 **Tech Stack:** Rust, Blitz (blitz-dom 0.2.4), Stylo, 既存の `FulgurNetProvider` と `DomPass` 基盤。
 
 **Scope:**
+
 - In: `<link rel="stylesheet" media="X" href="Y">` の rewrite
 - Out: `<style media>` 対応、blitz 本家への upstream PR、`disabled` 属性の再評価
 
@@ -21,6 +22,7 @@
 **なぜ最初にやるか**: 現状は NetProvider 移行により既にこの挙動が動いているはずだが、テストが無いので将来の回帰検知のために先に入れる。リファクタリング前に動いていたことを証明するベースライン。
 
 **Files:**
+
 - Create: `crates/fulgur/tests/link_stylesheet_url_resolution.rs`
 
 **Step 1: Write the test**
@@ -117,6 +119,7 @@ git commit -m "test(link): pin CSS-relative url() resolution against stylesheet 
 ## Task 2: 失敗テスト — `<link media="print">` が screen レンダリング時に適用されない
 
 **Files:**
+
 - Create: `crates/fulgur/tests/link_media_attribute.rs`
 
 **Step 1: Write the failing test**
@@ -247,6 +250,7 @@ git commit -m "test(link-media): add failing test for <link media=print> exclusi
 ## Task 3: 書換対象の収集 — `collect_link_media_rewrites`
 
 **Files:**
+
 - Modify: `crates/fulgur/src/blitz_adapter.rs` (新しい helper を `inject_style_node` の近くに追加)
 
 **Step 1: Write unit test for the collector**
@@ -378,6 +382,7 @@ git commit -m "feat(link-media): collect <link rel=stylesheet media=X> candidate
 `@import url("...")` の URL 文字列中に `"` や `\` が含まれると CSS パーサを壊すため、最小のエスケープを行う。
 
 **Files:**
+
 - Modify: `crates/fulgur/src/blitz_adapter.rs`
 
 **Step 1: Write unit tests**
@@ -444,6 +449,7 @@ git commit -m "feat(link-media): add escape_css_url helper for @import URL safet
 ## Task 5: DOM 書換の適用 — `apply_link_media_rewrites`
 
 **Files:**
+
 - Modify: `crates/fulgur/src/blitz_adapter.rs`
 
 **Step 1: Write an integration-level unit test** (verifies the replacement actually happens and produces a `<style>` node with the expected text content):
@@ -570,6 +576,7 @@ git commit -m "feat(link-media): rewrite <link media=X> to <style>@import url() 
 ## Task 6: `parse_html_with_local_resources` に組み込み、リソースフィルタ実装
 
 **Files:**
+
 - Modify: `crates/fulgur/src/blitz_adapter.rs` (`parse_html_with_local_resources` 本体)
 
 **Step 1: Inspect `Resource::Css` node id access**
@@ -671,6 +678,7 @@ git commit -m "feat(link-media): wire LinkMediaRewrite into parse_html_with_loca
 Verify that a `<link rel=stylesheet media=print href=a.css>` whose `a.css` itself contains `@import url(b.css);` still works (b.css should be loaded and scoped to print).
 
 **Files:**
+
 - Modify: `crates/fulgur/tests/link_media_attribute.rs`
 
 **Step 1: Add the test**
@@ -726,6 +734,7 @@ git commit -m "test(link-media): cover nested @import under a print-only <link>"
 ## Task 8: Example fixture
 
 **Files:**
+
 - Create: `examples/link-media/`
 
 Add a tiny example demonstrating a print-only `<link>`. This is consumed by the `examples/` workflow and keeps documentation in sync with behaviour.
@@ -768,7 +777,7 @@ body { color: #064e3b; }
 
 Create `examples/link-media/README.md`:
 
-```markdown
+````markdown
 # link-media
 
 Demonstrates that `<link rel="stylesheet" media="print">` is honoured:
@@ -780,7 +789,7 @@ the browser sees black text, the PDF (print media) shows dark green.
 cargo run --bin fulgur -- render examples/link-media/index.html \
     -o examples/link-media/link-media.pdf
 ```
-```
+````
 
 **Step 2: Regenerate the PDF**
 
@@ -807,6 +816,7 @@ git commit -m "docs(examples): add link-media example for <link media=print>"
 ## Task 9: CHANGELOG
 
 **Files:**
+
 - Modify: `CHANGELOG.md`
 
 **Step 1: Add entry under Unreleased (or next version heading)**
