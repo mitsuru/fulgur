@@ -82,6 +82,21 @@ pub fn parse(html: &str, viewport_width: f32, font_data: &[Arc<Vec<u8>>]) -> Htm
 /// `base_path → file://` URL derivation, and resource draining,
 /// keeping the Blitz API surface fully encapsulated in
 /// `blitz_adapter.rs` (CLAUDE.md adapter-isolation rule).
+///
+/// # Known limitation (tracked as beads fulgur-owa)
+///
+/// Each `<link rel=stylesheet media=X>` that is rewritten to
+/// `<style>@import url(Y) X;</style>` triggers two fetches of `Y`
+/// through [`crate::net::FulgurNetProvider`]: once during the initial
+/// HTML parse (discarded at the resource level here) and once when the
+/// synthetic `<style>` is processed. The second fetch pushes a fresh
+/// [`crate::gcpm::GcpmContext`] into the provider's buffer, but the
+/// first fetch's context is still there because this function cannot
+/// currently tell them apart. As a result, `@page` margin boxes,
+/// running elements, and counters declared in media-restricted
+/// stylesheets get registered twice. Fixing this requires
+/// URL-tagged GCPM drain semantics in `FulgurNetProvider`; see
+/// `bd show fulgur-owa`.
 pub fn parse_html_with_local_resources(
     html: &str,
     viewport_width: f32,
