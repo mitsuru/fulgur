@@ -40,7 +40,6 @@ fn css_internal_url_resolves_against_stylesheet_directory() {
             <link rel="stylesheet" href="css/style.css">
         </head><body><p>x</p></body></html>
     "#;
-    fs::write(root.join("index.html"), html).unwrap();
 
     let engine = Engine::builder()
         .page_size(PageSize::A4)

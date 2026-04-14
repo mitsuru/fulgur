@@ -168,8 +168,6 @@ fn link_media_all_still_applies() {
 #[test]
 #[ignore = "fulgur-owa: GCPM contexts double-counted by <link media> rewrite"]
 fn link_media_print_does_not_duplicate_gcpm_context() {
-    use std::fs;
-
     let dir = tempdir().unwrap();
     let root = dir.path();
 
@@ -214,8 +212,6 @@ fn link_media_print_does_not_duplicate_gcpm_context() {
 
 #[test]
 fn link_media_print_nested_import_also_excluded_on_screen() {
-    use std::fs;
-
     let dir = tempdir().unwrap();
     let root = dir.path();
 
