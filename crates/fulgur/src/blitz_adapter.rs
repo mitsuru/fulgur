@@ -1205,6 +1205,67 @@ fn extract_content_url(declarations: &str) -> Option<String> {
     None
 }
 
+/// Description of a `<link rel="stylesheet" media=...>` node that needs
+/// to be rewritten into `<style>@import url("...") media;</style>`.
+///
+/// Collected by [`collect_link_media_rewrites`] before DOM mutation so
+/// the href and media values remain borrowed from a stable document
+/// state (no interleaved mutation concerns).
+#[derive(Debug, Clone)]
+#[allow(dead_code)]
+pub(crate) struct LinkMediaRewrite {
+    pub link_node_id: usize,
+    pub href: String,
+    pub media: String,
+}
+
+/// Walk the parsed document and return every `<link rel=... stylesheet ...>`
+/// element that carries a non-empty `media` attribute other than `all`.
+///
+/// Returned entries follow pre-order DOM traversal so the resulting
+/// `<style>` elements keep the same cascade order as the original
+/// `<link>` elements — insertion order matters for stylo's origin
+/// sorting.
+#[allow(dead_code)]
+pub(crate) fn collect_link_media_rewrites(doc: &HtmlDocument) -> Vec<LinkMediaRewrite> {
+    fn walk(doc: &HtmlDocument, node_id: usize, depth: usize, out: &mut Vec<LinkMediaRewrite>) {
+        if depth >= MAX_DOM_DEPTH {
+            return;
+        }
+        let Some(node) = doc.get_node(node_id) else {
+            return;
+        };
+        if let Some(el) = node.element_data() {
+            if el.name.local.as_ref() == "link" {
+                let rel_ok = get_attr(el, "rel")
+                    .map(|rel| {
+                        rel.split_ascii_whitespace()
+                            .any(|t| t.eq_ignore_ascii_case("stylesheet"))
+                    })
+                    .unwrap_or(false);
+                let href = get_attr(el, "href").unwrap_or("").trim();
+                let media = get_attr(el, "media").unwrap_or("").trim();
+                let media_active = !media.is_empty() && !media.eq_ignore_ascii_case("all");
+                if rel_ok && !href.is_empty() && media_active {
+                    out.push(LinkMediaRewrite {
+                        link_node_id: node_id,
+                        href: href.to_string(),
+                        media: media.to_string(),
+                    });
+                }
+            }
+        }
+        for &child in &node.children {
+            walk(doc, child, depth + 1, out);
+        }
+    }
+
+    let mut out = Vec::new();
+    let root = doc.root_element().id;
+    walk(doc, root, 0, &mut out);
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1612,6 +1673,35 @@ mod tests {
         assert!(
             url.unwrap().ends_with("hi.png"),
             "image-set should resolve to the selected url"
+        );
+    }
+
+    #[test]
+    fn collect_link_media_rewrites_picks_only_linked_sheets_with_non_empty_media() {
+        let html = r#"
+            <html><head>
+                <link rel="stylesheet" href="a.css" media="print">
+                <link rel="stylesheet" href="b.css">
+                <link rel="stylesheet" href="c.css" media="all">
+                <link rel="stylesheet" href="d.css" media="">
+                <link rel="stylesheet" href="e.css" media="screen and (min-width: 600px)">
+                <link rel="alternate stylesheet" href="f.css" media="print">
+                <link rel="icon" href="favicon.ico" media="print">
+            </head><body><p>hi</p></body></html>
+        "#;
+        let doc = parse(html, 800.0, &[]);
+        let rewrites = collect_link_media_rewrites(&doc);
+
+        // a.css and e.css should be rewritten. f.css has `rel="alternate stylesheet"`
+        // which tokenizes to ["alternate", "stylesheet"]; since "stylesheet" is a
+        // token, include it. `media="all"` and `media=""` are treated as identity
+        // (skipped). favicon is not a stylesheet.
+        let hrefs: Vec<&str> = rewrites.iter().map(|r| r.href.as_str()).collect();
+        assert_eq!(hrefs, vec!["a.css", "e.css", "f.css"]);
+        let medias: Vec<&str> = rewrites.iter().map(|r| r.media.as_str()).collect();
+        assert_eq!(
+            medias,
+            vec!["print", "screen and (min-width: 600px)", "print"]
         );
     }
 }
