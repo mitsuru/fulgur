@@ -1,5 +1,6 @@
 //! AssetBundle for managing CSS, fonts, and images.
 
+use crate::error::Error;
 use crate::error::Result;
 use std::collections::HashMap;
 use std::path::Path;
@@ -33,7 +34,31 @@ impl AssetBundle {
 
     pub fn add_font_file(&mut self, path: impl AsRef<Path>) -> Result<()> {
         let data = std::fs::read(path)?;
-        self.fonts.push(Arc::new(data));
+        self.add_font_bytes(data)
+    }
+
+    /// バイト列からフォントを登録する。
+    ///
+    /// マジックバイトで形式を自動判定する:
+    /// - TTF / OTF / TTC: そのまま登録
+    /// - WOFF2: `woff2_patched` で TTF にデコードしてから登録
+    /// - WOFF1: `Error::UnsupportedFontFormat` を返す（未対応）
+    /// - その他: 警告ログを出してそのまま登録（caller が正しい形式を渡している可能性）
+    pub fn add_font_bytes(&mut self, data: Vec<u8>) -> Result<()> {
+        let decoded = match detect_font_format(&data) {
+            FontFormat::Woff2 => decode_woff2(&data)?,
+            FontFormat::Woff1 => {
+                return Err(Error::UnsupportedFontFormat(
+                    "WOFF1 is not supported; convert to WOFF2 or TTF/OTF".into(),
+                ));
+            }
+            FontFormat::Unknown => {
+                log::warn!("add_font_bytes: unknown font magic bytes; passing through as-is");
+                data
+            }
+            FontFormat::Ttf | FontFormat::Otf | FontFormat::Ttc => data,
+        };
+        self.fonts.push(Arc::new(decoded));
         Ok(())
     }
 
@@ -108,6 +133,13 @@ pub(crate) fn detect_font_format(bytes: &[u8]) -> FontFormat {
     }
 }
 
+/// Decode a WOFF2 byte stream into an uncompressed TTF/OTF font.
+fn decode_woff2(data: &[u8]) -> Result<Vec<u8>> {
+    let mut buf: &[u8] = data;
+    woff2_patched::decode::convert_woff2_to_ttf(&mut buf)
+        .map_err(|e| Error::WoffDecode(format!("WOFF2 decode failed: {e:?}")))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -174,5 +206,43 @@ mod tests {
     fn test_detect_font_format_old_mac_ttf() {
         assert_eq!(detect_font_format(b"true\x00\x00"), FontFormat::Ttf);
         assert_eq!(detect_font_format(b"typ1\x00\x00"), FontFormat::Ttf);
+    }
+
+    #[test]
+    fn test_add_font_bytes_ttf_passthrough() {
+        let mut bundle = AssetBundle::new();
+        let mut data = vec![0x00, 0x01, 0x00, 0x00];
+        data.extend_from_slice(&[0xAA; 100]);
+        bundle
+            .add_font_bytes(data.clone())
+            .expect("should accept TTF");
+        assert_eq!(bundle.fonts.len(), 1);
+        assert_eq!(&bundle.fonts[0][..], &data[..]);
+    }
+
+    #[test]
+    fn test_add_font_bytes_unknown_passthrough() {
+        let mut bundle = AssetBundle::new();
+        let data = vec![0xDE, 0xAD, 0xBE, 0xEF, 0x00];
+        bundle
+            .add_font_bytes(data.clone())
+            .expect("unknown format should pass through");
+        assert_eq!(bundle.fonts.len(), 1);
+        assert_eq!(&bundle.fonts[0][..], &data[..]);
+    }
+
+    #[test]
+    fn test_add_font_bytes_woff1_rejected() {
+        use crate::error::Error;
+        let mut bundle = AssetBundle::new();
+        let data = b"wOFF\x00\x01\x00\x00".to_vec();
+        let err = bundle
+            .add_font_bytes(data)
+            .expect_err("WOFF1 must be rejected");
+        match err {
+            Error::UnsupportedFontFormat(s) => assert!(s.contains("WOFF1"), "msg: {s}"),
+            other => panic!("wrong variant: {other:?}"),
+        }
+        assert_eq!(bundle.fonts.len(), 0);
     }
 }
