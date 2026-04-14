@@ -33,6 +33,21 @@ impl AssetBundle {
     }
 
     pub fn add_font_file(&mut self, path: impl AsRef<Path>) -> Result<()> {
+        let path = path.as_ref();
+        // Gate on file size *before* reading the entire file into memory so
+        // a malicious multi-gigabyte font cannot drive the process into OOM
+        // via `std::fs::read`. `MAX_DECODED_FONT_BYTES` is the generous
+        // upper bound used across the font pipeline; WOFF2-specific input
+        // capping happens later in `decode_woff2`.
+        let len = std::fs::metadata(path)?.len();
+        if len > MAX_DECODED_FONT_BYTES as u64 {
+            return Err(Error::Asset(format!(
+                "font file {} exceeds {} byte limit (got {} bytes)",
+                path.display(),
+                MAX_DECODED_FONT_BYTES,
+                len
+            )));
+        }
         let data = std::fs::read(path)?;
         self.add_font_bytes(data)
     }
@@ -359,6 +374,28 @@ mod tests {
             Error::WoffDecode(msg) => {
                 assert!(msg.contains("declares uncompressed size"), "msg: {msg}")
             }
+            other => panic!("wrong variant: {other:?}"),
+        }
+        assert_eq!(bundle.fonts.len(), 0);
+    }
+
+    #[test]
+    fn test_add_font_file_rejects_oversized_before_reading() {
+        use std::io::Seek;
+        let mut tmp = tempfile::NamedTempFile::new().expect("tempfile");
+        // Create a sparse file larger than the cap. `set_len` extends the
+        // file without actually allocating blocks, so the test is cheap.
+        let oversized = (MAX_DECODED_FONT_BYTES as u64) + 1;
+        tmp.as_file_mut()
+            .set_len(oversized)
+            .expect("extend tempfile");
+        tmp.as_file_mut().rewind().expect("rewind");
+        let mut bundle = AssetBundle::new();
+        let err = bundle
+            .add_font_file(tmp.path())
+            .expect_err("oversized font file must be rejected");
+        match err {
+            Error::Asset(msg) => assert!(msg.contains("limit"), "msg: {msg}"),
             other => panic!("wrong variant: {other:?}"),
         }
         assert_eq!(bundle.fonts.len(), 0);
