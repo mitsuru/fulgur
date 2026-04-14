@@ -101,6 +101,38 @@ fn link_without_media_still_applies() {
     );
 }
 
+/// Rewrite-path liveness: fulgur renders with `media=screen`, so a
+/// `<link media=screen>` triggers the LinkMediaRewrite pipeline AND
+/// should still end up applying its rules. If the synthetic
+/// `<style>@import url() screen;</style>` is never registered with
+/// Stylo, the red background would be silently dropped even though
+/// the media query matches. This test catches that regression.
+#[test]
+fn link_media_matching_screen_still_loads_via_rewrite() {
+    let dir = tempdir().unwrap();
+    let root = dir.path();
+
+    fs::write(root.join("matching.css"), "body { background: red; }\n").unwrap();
+
+    let html = r#"
+        <!DOCTYPE html>
+        <html><head>
+            <link rel="stylesheet" href="matching.css" media="screen">
+        </head><body>
+            <p>hello</p>
+        </body></html>
+    "#;
+
+    let result = match render_contains_red(html, root) {
+        Some(v) => v,
+        None => return,
+    };
+    assert!(
+        result,
+        "media=screen matches fulgur's screen device; rewritten stylesheet must still apply"
+    );
+}
+
 #[test]
 fn link_media_all_still_applies() {
     let dir = tempdir().unwrap();
