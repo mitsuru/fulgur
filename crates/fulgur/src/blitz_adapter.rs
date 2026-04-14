@@ -1212,7 +1212,6 @@ fn extract_content_url(declarations: &str) -> Option<String> {
 /// the href and media values remain borrowed from a stable document
 /// state (no interleaved mutation concerns).
 #[derive(Debug, Clone)]
-#[allow(dead_code)]
 pub(crate) struct LinkMediaRewrite {
     pub link_node_id: usize,
     pub href: String,
@@ -1273,9 +1272,6 @@ pub(crate) fn collect_link_media_rewrites(doc: &HtmlDocument) -> Vec<LinkMediaRe
 /// quoted strings but can be expressed as a numeric escape `\a`
 /// (followed by a single space that the tokenizer consumes) — we do
 /// the same for carriage return (`\d`).
-// Consumer `apply_link_media_rewrites` is added in Task 5 of the
-// fulgur-2ai link-media-url series; suppress dead-code until then.
-#[allow(dead_code)]
 fn escape_css_url(raw: &str) -> String {
     let mut out = String::with_capacity(raw.len());
     for ch in raw.chars() {
@@ -1288,6 +1284,40 @@ fn escape_css_url(raw: &str) -> String {
         }
     }
     out
+}
+
+/// Replace every collected `<link rel=stylesheet media=X href=Y>` with
+/// a `<style>@import url("Y") X;</style>` element inserted in the same
+/// document position.
+///
+/// Why this shape: blitz-dom 0.2.4's `CssHandler` hardcodes
+/// `MediaList::empty()` when loading `<link>` stylesheets, so the
+/// `media` attribute is silently dropped. However the `@import`
+/// resolution path (`StylesheetLoaderInner::request_stylesheet`) does
+/// propagate the media query into stylo's `ImportRule`, so routing the
+/// load through `@import` re-activates the media restriction.
+///
+/// The `<style>` is inserted *before* the original `<link>` to preserve
+/// cascade order; the `<link>` is then removed. The caller (Task 6
+/// integration) must filter any stylesheet resources that blitz already
+/// fetched for the `<link>` node before DOM mutation, otherwise the
+/// empty-media copy would also apply.
+#[allow(dead_code)]
+pub(crate) fn apply_link_media_rewrites(doc: &mut HtmlDocument, rewrites: &[LinkMediaRewrite]) {
+    for rw in rewrites {
+        let css = format!(
+            r#"@import url("{}") {};"#,
+            escape_css_url(&rw.href),
+            rw.media
+        );
+
+        let mut mutator = doc.mutate();
+        let style_id = mutator.create_element(make_qual_name("style"), vec![]);
+        let text_id = mutator.create_text_node(&css);
+        mutator.append_children(style_id, &[text_id]);
+        mutator.insert_nodes_before(rw.link_node_id, &[style_id]);
+        mutator.remove_and_drop_node(rw.link_node_id);
+    }
 }
 
 #[cfg(test)]
@@ -1741,6 +1771,54 @@ mod tests {
         assert_eq!(escape_css_url(r#"a"b.css"#), r#"a\"b.css"#);
         assert_eq!(escape_css_url(r"a\b.css"), r"a\\b.css");
         assert_eq!(escape_css_url("a\nb.css"), r"a\a b.css");
+    }
+
+    #[test]
+    fn apply_link_media_rewrites_replaces_link_with_style_import() {
+        let html = r#"
+            <html><head>
+                <link rel="stylesheet" href="a.css" media="print">
+                <link rel="stylesheet" href="b.css">
+            </head><body><p>hi</p></body></html>
+        "#;
+        let mut doc = parse(html, 800.0, &[]);
+        let rewrites = collect_link_media_rewrites(&doc);
+        assert_eq!(rewrites.len(), 1);
+
+        apply_link_media_rewrites(&mut doc, &rewrites);
+
+        let head = find_element_by_tag(&doc, "head").expect("head exists");
+        let head_node = doc.get_node(head).unwrap();
+
+        let mut style_text_found: Option<String> = None;
+        let mut a_css_link_found = false;
+        let mut b_css_link_found = false;
+        for &cid in &head_node.children {
+            let child = doc.get_node(cid).unwrap();
+            if let Some(el) = child.element_data() {
+                match el.name.local.as_ref() {
+                    "style" => {
+                        for &gc in &child.children {
+                            let gnode = doc.get_node(gc).unwrap();
+                            if let blitz_dom::node::NodeData::Text(t) = &gnode.data {
+                                style_text_found = Some(t.content.clone());
+                            }
+                        }
+                    }
+                    "link" => match get_attr(el, "href") {
+                        Some("a.css") => a_css_link_found = true,
+                        Some("b.css") => b_css_link_found = true,
+                        _ => {}
+                    },
+                    _ => {}
+                }
+            }
+        }
+
+        assert!(!a_css_link_found, "<link href=a.css> must be removed");
+        assert!(b_css_link_found, "<link href=b.css> must be preserved");
+        let text = style_text_found.expect("<style> with @import must exist");
+        assert_eq!(text, r#"@import url("a.css") print;"#);
     }
 }
 
