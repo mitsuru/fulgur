@@ -133,11 +133,38 @@ pub(crate) fn detect_font_format(bytes: &[u8]) -> FontFormat {
     }
 }
 
+/// Upper bound on accepted WOFF2 input size (32 MiB). Rejects obviously
+/// oversized or adversarial payloads before invoking the brotli decoder,
+/// limiting decompression-bomb exposure.
+const MAX_WOFF2_INPUT_BYTES: usize = 32 * 1024 * 1024;
+
+/// Upper bound on accepted decompressed TTF/OTF output size (64 MiB).
+/// A single real-world font family tops out well below this; anything larger
+/// is likely a decompression bomb.
+const MAX_DECODED_FONT_BYTES: usize = 64 * 1024 * 1024;
+
 /// Decode a WOFF2 byte stream into an uncompressed TTF/OTF font.
+///
+/// Enforces `MAX_WOFF2_INPUT_BYTES` on the compressed input and
+/// `MAX_DECODED_FONT_BYTES` on the decompressed output as defense against
+/// decompression-bomb inputs. `woff2_patched` itself does not cap output size.
 fn decode_woff2(data: &[u8]) -> Result<Vec<u8>> {
+    if data.len() > MAX_WOFF2_INPUT_BYTES {
+        return Err(Error::WoffDecode(format!(
+            "WOFF2 input exceeds {MAX_WOFF2_INPUT_BYTES} byte limit (got {} bytes)",
+            data.len()
+        )));
+    }
     let mut buf: &[u8] = data;
-    woff2_patched::decode::convert_woff2_to_ttf(&mut buf)
-        .map_err(|e| Error::WoffDecode(format!("WOFF2 decode failed: {e:?}")))
+    let decoded = woff2_patched::decode::convert_woff2_to_ttf(&mut buf)
+        .map_err(|e| Error::WoffDecode(format!("WOFF2 decode failed: {e:?}")))?;
+    if decoded.len() > MAX_DECODED_FONT_BYTES {
+        return Err(Error::WoffDecode(format!(
+            "WOFF2 decoded output exceeds {MAX_DECODED_FONT_BYTES} byte limit (got {} bytes)",
+            decoded.len()
+        )));
+    }
+    Ok(decoded)
 }
 
 #[cfg(test)]
@@ -274,6 +301,21 @@ mod tests {
             .expect_err("bad WOFF2 must error");
         match err {
             Error::WoffDecode(_) => {}
+            other => panic!("wrong variant: {other:?}"),
+        }
+        assert_eq!(bundle.fonts.len(), 0);
+    }
+
+    #[test]
+    fn test_add_font_bytes_woff2_input_size_cap() {
+        let mut bundle = AssetBundle::new();
+        let mut oversized = b"wOF2".to_vec();
+        oversized.resize(MAX_WOFF2_INPUT_BYTES + 1, 0);
+        let err = bundle
+            .add_font_bytes(oversized)
+            .expect_err("oversized WOFF2 must error before decoding");
+        match err {
+            Error::WoffDecode(msg) => assert!(msg.contains("limit"), "msg: {msg}"),
             other => panic!("wrong variant: {other:?}"),
         }
         assert_eq!(bundle.fonts.len(), 0);

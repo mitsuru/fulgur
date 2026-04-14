@@ -30,4 +30,14 @@ fn woff2_font_renders_to_pdf() {
         "PDF should be non-trivial, got {} bytes",
         pdf.len()
     );
+    // Verify the WOFF2 font was actually decoded and embedded, not silently
+    // replaced with a system fallback. Krilla embeds fonts with a 6-letter
+    // subset prefix followed by the PostScript name (e.g. `KGTYZU+NotoSans-Regular`).
+    let needle = b"NotoSans-Regular";
+    assert!(
+        pdf.windows(needle.len()).any(|w| w == needle),
+        "PDF must contain embedded font name {:?}; got {} bytes without it",
+        std::str::from_utf8(needle).unwrap(),
+        pdf.len()
+    );
 }
