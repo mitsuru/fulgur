@@ -1718,7 +1718,14 @@ fn resolve_enclosing_anchor(
     start_id: usize,
 ) -> Option<(usize, LinkSpan)> {
     let mut cur = Some(start_id);
+    let mut depth: usize = 0;
     while let Some(id) = cur {
+        // Defense-in-depth against pathological / malformed parent chains,
+        // matching the bounds applied in `debug_print_tree`,
+        // `collect_positioned_children`, and `blitz_adapter::element_text`.
+        if depth >= MAX_DOM_DEPTH {
+            return None;
+        }
         let node = doc.get_node(id)?;
         if let NodeData::Element(el) = &node.data {
             if el.name.local.as_ref() == "a" {
@@ -1737,6 +1744,7 @@ fn resolve_enclosing_anchor(
             }
         }
         cur = node.parent;
+        depth += 1;
     }
     None
 }
