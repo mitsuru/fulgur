@@ -253,6 +253,40 @@ fn emit_counter_op_markers(
     }
 }
 
+/// Emit a bare `BookmarkMarkerPageable` for a node that is about to be
+/// skipped or flattened by pagination (zero-size leaf / flattened container).
+///
+/// Without this, an element that carries CSS `bookmark-level` / `bookmark-label`
+/// but has no visible content would never reach the Pageable tree because
+/// `convert_node` is never called for it (or its result is flattened away),
+/// so the outline entry would silently disappear.
+///
+/// The `x` / `y` arguments are the node's Taffy-computed `final_layout.location`;
+/// propagated for the same reason as `emit_orphan_string_set_markers` —
+/// `BlockPageable::split` uses the child's `y` as the rebase point on page
+/// break, so a marker hardcoded to `y = 0` could corrupt the y-offsets of
+/// trailing children.
+///
+/// Because both this path and `convert_node`'s bookmark wrapper call
+/// `ctx.bookmark_by_node.remove(&node_id)`, each node_id produces *at most
+/// one* marker — whichever path runs first consumes the entry.
+fn emit_orphan_bookmark_marker(
+    node_id: usize,
+    x: f32,
+    y: f32,
+    ctx: &mut ConvertContext<'_>,
+    out: &mut Vec<PositionedChild>,
+) {
+    use crate::pageable::BookmarkMarkerPageable;
+    if let Some(info) = ctx.bookmark_by_node.remove(&node_id) {
+        out.push(PositionedChild {
+            child: Box::new(BookmarkMarkerPageable::new(info.level, info.label)),
+            x,
+            y,
+        });
+    }
+}
+
 /// If `node_id` corresponds to a running element instance registered by
 /// `RunningElementPass`, return a fresh `RunningElementMarkerPageable` for it.
 ///
@@ -874,6 +908,13 @@ fn collect_positioned_children(
                 ctx,
                 &mut result,
             );
+            emit_orphan_bookmark_marker(
+                child_id,
+                child_layout.location.x,
+                child_layout.location.y,
+                ctx,
+                &mut result,
+            );
             if let Some(marker) = take_running_marker(child_id, ctx) {
                 pending_running_markers.push(marker);
             }
@@ -895,6 +936,13 @@ fn collect_positioned_children(
                 &mut result,
             );
             emit_counter_op_markers(
+                child_id,
+                child_layout.location.x,
+                child_layout.location.y,
+                ctx,
+                &mut result,
+            );
+            emit_orphan_bookmark_marker(
                 child_id,
                 child_layout.location.x,
                 child_layout.location.y,
@@ -1637,6 +1685,7 @@ fn collect_table_cells(
         let layout = node.final_layout;
         let out: &mut Vec<PositionedChild> = if is_header { header_cells } else { body_cells };
         emit_counter_op_markers(node_id, layout.location.x, layout.location.y, ctx, out);
+        emit_orphan_bookmark_marker(node_id, layout.location.x, layout.location.y, ctx, out);
     }
 
     for &child_id in &node.children {
@@ -3431,6 +3480,83 @@ mod tests {
             None
         }
         assert_eq!(find(root.as_ref()), Some((3u8, "Subsection".to_string())));
+    }
+
+    /// Regression: a bookmark-bearing element that is 0-size/empty (and would
+    /// normally be skipped in the zero-size-leaf branch of
+    /// `collect_positioned_children`) must still produce a bookmark marker
+    /// somewhere in the Pageable tree so that the outline entry is emitted.
+    ///
+    /// Mirrors `emit_orphan_string_set_markers`' regression case: without the
+    /// orphan-emit path, `convert_node` is never called for the empty <div>
+    /// and the marker is silently dropped.
+    #[test]
+    fn orphan_bookmark_marker_survives_empty_element() {
+        use crate::blitz_adapter::BookmarkInfo;
+        use crate::pageable::{BookmarkMarkerPageable, BookmarkMarkerWrapperPageable};
+
+        // Forcing `width: 0; height: 0` yields a 0x0 block leaf — this is
+        // the scenario `collect_positioned_children` skips via `continue`
+        // (see `test_dom_to_pageable_emits_pseudo_on_zero_size_block_leaf`
+        // for the analogous pseudo-image regression). Without
+        // `emit_orphan_bookmark_marker`, the bookmark on the <div> would
+        // be silently dropped.
+        let html = r#"<!doctype html><html><head><style>
+            .sentinel { display: block; width: 0; height: 0; }
+        </style></head><body><section><div class="sentinel"></div></section></body></html>"#;
+        let mut doc = crate::blitz_adapter::parse(html, 500.0, &[]);
+        crate::blitz_adapter::resolve(&mut doc);
+        let div_id = find_node_by_tag(&doc, "div").expect("div present in DOM");
+        let running_store = crate::gcpm::running::RunningElementStore::new();
+        let mut bookmark_by_node = HashMap::new();
+        bookmark_by_node.insert(
+            div_id,
+            BookmarkInfo {
+                level: 1,
+                label: "Chapter Empty".to_string(),
+            },
+        );
+        let mut ctx = ConvertContext {
+            running_store: &running_store,
+            assets: None,
+            font_cache: HashMap::new(),
+            string_set_by_node: HashMap::new(),
+            counter_ops_by_node: HashMap::new(),
+            bookmark_by_node,
+        };
+        let root = dom_to_pageable(&doc, &mut ctx);
+
+        // The node should have been consumed from the map exactly once.
+        assert!(
+            ctx.bookmark_by_node.is_empty(),
+            "bookmark_by_node entry must be removed by the orphan-emit path"
+        );
+
+        /// Recursively search the Pageable tree for any bookmark marker
+        /// (bare `BookmarkMarkerPageable` or wrapped `BookmarkMarkerWrapperPageable`).
+        fn find_marker(p: &dyn crate::pageable::Pageable) -> Option<(u8, String)> {
+            let any = p.as_any();
+            if let Some(m) = any.downcast_ref::<BookmarkMarkerPageable>() {
+                return Some((m.level, m.label.clone()));
+            }
+            if let Some(w) = any.downcast_ref::<BookmarkMarkerWrapperPageable>() {
+                return Some((w.marker.level, w.marker.label.clone()));
+            }
+            if let Some(b) = any.downcast_ref::<crate::pageable::BlockPageable>() {
+                for c in &b.children {
+                    if let Some(h) = find_marker(c.child.as_ref()) {
+                        return Some(h);
+                    }
+                }
+            }
+            None
+        }
+
+        assert_eq!(
+            find_marker(root.as_ref()),
+            Some((1u8, "Chapter Empty".to_string())),
+            "expected bookmark marker to survive empty-element skip/flatten"
+        );
     }
 
     /// Locate the first element with the given tag by DFS from the document root.
