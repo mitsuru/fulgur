@@ -257,6 +257,82 @@ pub fn get_attr<'a>(elem: &'a blitz_dom::node::ElementData, name: &str) -> Optio
         .map(|a| a.value.as_ref())
 }
 
+/// Concatenate all descendant text under `node_id` into a single String (DFS).
+///
+/// Used to build a PDF link's `alt_text` (tooltip / accessibility label) from
+/// the visible text of an `<a>` element. Returns an empty string if the node
+/// has no text descendants or does not exist.
+///
+/// Word-boundary preservation: a single space is inserted before descending
+/// into a child element when that child is `<br>` or a block-level element
+/// (block boundaries act as implicit whitespace in the visual rendering).
+/// Without this, `<a><div>foo</div><div>bar</div></a>` would collapse to
+/// `"foobar"` — meaningless for screen readers. Spaces are deduped by
+/// checking the accumulator's trailing char before pushing.
+pub fn element_text(doc: &blitz_dom::BaseDocument, node_id: usize) -> String {
+    fn is_block_boundary_tag(tag: &str) -> bool {
+        matches!(
+            tag,
+            "br" | "div"
+                | "p"
+                | "li"
+                | "ul"
+                | "ol"
+                | "blockquote"
+                | "section"
+                | "article"
+                | "header"
+                | "footer"
+                | "nav"
+                | "aside"
+                | "h1"
+                | "h2"
+                | "h3"
+                | "h4"
+                | "h5"
+                | "h6"
+                | "table"
+                | "tr"
+                | "td"
+                | "th"
+                | "pre"
+                | "figure"
+                | "hr"
+        )
+    }
+
+    fn push_separator(out: &mut String) {
+        if !out.is_empty() && !out.ends_with(|c: char| c.is_whitespace()) {
+            out.push(' ');
+        }
+    }
+
+    fn walk(doc: &blitz_dom::BaseDocument, id: usize, depth: usize, out: &mut String) {
+        if depth >= MAX_DOM_DEPTH {
+            return;
+        }
+        let Some(node) = doc.get_node(id) else {
+            return;
+        };
+        if let blitz_dom::node::NodeData::Text(t) = &node.data {
+            out.push_str(&t.content);
+        }
+        for &child_id in &node.children {
+            if let Some(child) = doc.get_node(child_id) {
+                if let blitz_dom::node::NodeData::Element(el) = &child.data {
+                    if is_block_boundary_tag(el.name.local.as_ref()) {
+                        push_separator(out);
+                    }
+                }
+            }
+            walk(doc, child_id, depth + 1, out);
+        }
+    }
+    let mut out = String::new();
+    walk(doc, node_id, 0, &mut out);
+    out
+}
+
 /// Extract the parsed `usvg::Tree` from an inline `<svg>` element, if present.
 ///
 /// Blitz parses inline `<svg>` elements during DOM construction (default `svg`
@@ -1861,6 +1937,92 @@ mod tests {
         assert!(b_css_link_found, "<link href=b.css> must be preserved");
         let text = style_text_found.expect("<style> with @import must exist");
         assert_eq!(text, r#"@import url("a.css") print;"#);
+    }
+
+    #[test]
+    fn element_text_does_not_stack_overflow_on_deep_nesting() {
+        // Regression guard: element_text used to recurse without a depth
+        // bound, so attacker-controlled HTML with thousands of nested
+        // elements could overflow the thread stack. MAX_DOM_DEPTH now caps
+        // the recursion — building ~2000 nested divs must return (possibly
+        // truncated) rather than panic.
+        let mut html = String::from("<html><body>");
+        for _ in 0..2000 {
+            html.push_str("<div>");
+        }
+        html.push_str("leaf");
+        for _ in 0..2000 {
+            html.push_str("</div>");
+        }
+        html.push_str("</body></html>");
+
+        let (doc, _gcpm) = parse_html_with_local_resources(&html, 400.0, &[], None);
+        use std::ops::Deref;
+        let root = doc.root_element();
+        let _ = element_text(doc.deref(), root.id);
+    }
+
+    /// Walk the DOM to find the first element whose `id` attribute equals `id_value`.
+    fn find_element_by_attr_id(doc: &blitz_dom::BaseDocument, id_value: &str) -> usize {
+        fn walk(
+            doc: &blitz_dom::BaseDocument,
+            node_id: usize,
+            want: &str,
+            depth: usize,
+        ) -> Option<usize> {
+            if depth >= MAX_DOM_DEPTH {
+                return None;
+            }
+            let node = doc.get_node(node_id)?;
+            if let Some(el) = node.element_data() {
+                if get_attr(el, "id") == Some(want) {
+                    return Some(node_id);
+                }
+            }
+            for &child_id in &node.children {
+                if let Some(found) = walk(doc, child_id, want, depth + 1) {
+                    return Some(found);
+                }
+            }
+            None
+        }
+        let root_id = doc.root_element().id;
+        walk(doc, root_id, id_value, 0)
+            .unwrap_or_else(|| panic!("element with id={id_value:?} not found"))
+    }
+
+    #[test]
+    fn element_text_inserts_space_between_block_children() {
+        let html = "<html><body><a id='x'><div>foo</div><div>bar</div></a></body></html>";
+        let (doc, _gcpm) = parse_html_with_local_resources(html, 400.0, &[], None);
+        use std::ops::Deref;
+        let a_id = find_element_by_attr_id(doc.deref(), "x");
+        let text = element_text(doc.deref(), a_id);
+        assert_eq!(text.trim(), "foo bar", "got {text:?}");
+    }
+
+    #[test]
+    fn element_text_inserts_space_for_br() {
+        let html = "<html><body><a id='x'>foo<br>bar</a></body></html>";
+        let (doc, _gcpm) = parse_html_with_local_resources(html, 400.0, &[], None);
+        use std::ops::Deref;
+        let a_id = find_element_by_attr_id(doc.deref(), "x");
+        let text = element_text(doc.deref(), a_id);
+        assert_eq!(text.trim(), "foo bar");
+    }
+
+    #[test]
+    fn element_text_does_not_double_whitespace() {
+        // If the text already ends in whitespace, a block boundary should
+        // not add another space.
+        let html = "<html><body><a id='x'>foo <div>bar</div></a></body></html>";
+        let (doc, _gcpm) = parse_html_with_local_resources(html, 400.0, &[], None);
+        use std::ops::Deref;
+        let a_id = find_element_by_attr_id(doc.deref(), "x");
+        let text = element_text(doc.deref(), a_id);
+        // Should be "foo bar" (single space), not "foo  bar".
+        assert_eq!(text.trim(), "foo bar");
+        assert!(!text.contains("  "));
     }
 }
 

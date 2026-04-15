@@ -1,7 +1,51 @@
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use crate::gcpm::CounterOp;
 use crate::image::ImageFormat;
+
+/// Registry of block-level anchor destinations discovered during a pre-pass
+/// walk of the paginated page tree.
+///
+/// Maps `id` → `(page_idx, y_pt)`. Later stages (link annotation emission)
+/// consult this to resolve `href="#foo"` into a `GoToXYZ` action.
+///
+/// # Semantics
+///
+/// - **First-write-wins**: duplicate IDs in a document are invalid HTML, but
+///   rather than crashing we keep the first occurrence and ignore subsequent
+///   ones. This matches browser behavior for `getElementById`.
+/// - **BTreeMap** for deterministic iteration ordering — see CLAUDE.md.
+/// - **Pre-pass**: callers must `set_current_page(idx)` before each page's
+///   `collect_ids` walk.
+#[derive(Debug, Default)]
+pub struct DestinationRegistry {
+    current_page_idx: usize,
+    entries: BTreeMap<String, (usize, Pt)>,
+}
+
+impl DestinationRegistry {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Set the page index to attach subsequent `record` calls to.
+    pub fn set_current_page(&mut self, idx: usize) {
+        self.current_page_idx = idx;
+    }
+
+    /// Record an anchor destination. First-write-wins: later duplicates are ignored.
+    pub fn record(&mut self, id: &str, y: Pt) {
+        self.entries
+            .entry(id.to_string())
+            .or_insert((self.current_page_idx, y));
+    }
+
+    /// Look up a recorded anchor.
+    pub fn get(&self, id: &str) -> Option<(usize, Pt)> {
+        self.entries.get(id).copied()
+    }
+}
 
 /// Point unit (1/72 inch)
 pub type Pt = f32;
@@ -178,11 +222,124 @@ impl Default for Pagination {
     }
 }
 
+/// Axis-aligned rectangle used to describe PDF link activation areas.
+///
+/// Coordinates are in PDF points in the Krilla surface coordinate space
+/// (origin at top-left, y growing downward) — i.e. the same space the
+/// `draw()` methods use when talking to `Surface`. `x`, `y` mark the
+/// top-left corner.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Rect {
+    pub x: f32,
+    pub y: f32,
+    pub width: f32,
+    pub height: f32,
+}
+
+/// One clickable link area captured by `LinkCollector` during draw.
+///
+/// A single `<a>` element may produce multiple rects when its glyphs wrap
+/// across lines (or when nested inlines split shaping into multiple runs);
+/// in that case `rects` holds one entry per fragment and `target`/`alt_text`
+/// are the shared anchor metadata.
+#[derive(Debug, Clone)]
+pub struct LinkOccurrence {
+    pub page_idx: usize,
+    pub target: crate::paragraph::LinkTarget,
+    pub alt_text: Option<String>,
+    pub rects: Vec<Rect>,
+}
+
+/// Per-page collector of link activation rects, grouped by `<a>` identity.
+///
+/// Identity is the pointer value of `Arc<LinkSpan>`. `convert.rs` guarantees
+/// that every glyph run / inline image extracted from the same `<a>`
+/// shares the *same* `Arc<LinkSpan>` clone, so runs that were split by
+/// `<em>`/`<strong>` inside an anchor merge into a single `LinkOccurrence`
+/// with multiple rects. Distinct `<a href="...">` elements — even pointing
+/// at the same URL — land in separate occurrences.
+///
+/// Occurrences are bucketed by `page_idx` so emission is O(L) per page
+/// instead of O(P×L). Within a bucket, ordering is insertion order (the
+/// draw order for that page), which is deterministic — what matters for
+/// reproducible PDFs. The internal `HashMap` dedup index (keyed by
+/// `(page_idx, Arc pointer)`) is never iterated for output, so it does
+/// not violate CLAUDE.md's BTreeMap-for-output rule.
+#[derive(Debug, Default)]
+pub struct LinkCollector {
+    current_page_idx: usize,
+    /// Dedup index: `(page_idx, Arc pointer)` → index into the per-page
+    /// Vec in `pages`. Stale entries for already-taken pages are harmless.
+    index: std::collections::HashMap<(usize, usize), usize>,
+    /// Occurrences grouped by `page_idx`. `BTreeMap` for deterministic
+    /// iteration (CLAUDE.md rule) and cheap page-keyed removal.
+    pages: BTreeMap<usize, Vec<LinkOccurrence>>,
+}
+
+impl LinkCollector {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn set_current_page(&mut self, idx: usize) {
+        self.current_page_idx = idx;
+    }
+
+    /// Record a rect for the given `<a>`. Rects pointing at the same
+    /// `Arc<LinkSpan>` *on the same page* are merged into a single
+    /// `LinkOccurrence`; on different pages they produce separate
+    /// occurrences.
+    pub fn push_rect(&mut self, link: &std::sync::Arc<crate::paragraph::LinkSpan>, rect: Rect) {
+        let page_idx = self.current_page_idx;
+        let key = (page_idx, std::sync::Arc::as_ptr(link) as usize);
+        let bucket = self.pages.entry(page_idx).or_default();
+        if let Some(&i) = self.index.get(&key) {
+            // Defensive check: if the index is stale (e.g. the page was
+            // already drained via `take_page`), `i` may be out of range.
+            if let Some(occ) = bucket.get_mut(i) {
+                occ.rects.push(rect);
+                return;
+            }
+        }
+        let i = bucket.len();
+        self.index.insert(key, i);
+        bucket.push(LinkOccurrence {
+            page_idx,
+            target: link.target.clone(),
+            alt_text: link.alt_text.clone(),
+            rects: vec![rect],
+        });
+    }
+
+    /// Remove and return all occurrences recorded for `page_idx`.
+    ///
+    /// Pages are emitted in order during rendering, so after calling
+    /// `take_page(n)` no further `push_rect` calls should target page `n`.
+    /// Returns an empty `Vec` if the page had no link occurrences.
+    pub fn take_page(&mut self, page_idx: usize) -> Vec<LinkOccurrence> {
+        self.pages.remove(&page_idx).unwrap_or_default()
+    }
+
+    /// Consume the collector and return every occurrence across all pages,
+    /// flattened in page-index order. Retained for testing.
+    pub fn into_occurrences(self) -> Vec<LinkOccurrence> {
+        self.pages.into_values().flatten().collect()
+    }
+
+    /// Return every occurrence across all pages as an owned Vec, in
+    /// page-index order. Retained for testing — production callers should
+    /// prefer `take_page` for O(L) per-page emission.
+    pub fn occurrences(&self) -> Vec<LinkOccurrence> {
+        self.pages.values().flatten().cloned().collect()
+    }
+}
+
 /// Wrapper around Krilla Surface for drawing commands.
 /// This decouples Pageable types from Krilla's concrete Surface type.
 pub struct Canvas<'a, 'b> {
     pub surface: &'a mut krilla::surface::Surface<'b>,
     pub heading_collector: Option<&'a mut HeadingCollector>,
+    pub link_collector: Option<&'a mut LinkCollector>,
 }
 
 /// Run a draw closure wrapped in opacity guards.
@@ -252,6 +409,27 @@ pub trait Pageable: Send + Sync {
 
     /// Downcast support for tests.
     fn as_any(&self) -> &dyn std::any::Any;
+
+    /// Walk this Pageable and record any block-level `id` anchors into
+    /// `registry`, in page-local coordinates.
+    ///
+    /// `(x, y)` is the top-left of this element in the current page's
+    /// content area. Containers must recurse into their children using the
+    /// same positional arithmetic that `draw()` uses so anchor positions
+    /// match the rendered output.
+    ///
+    /// Default: no-op. Overridden on block-like Pageables (`BlockPageable`)
+    /// and containers that hold children (pagination wrappers, `ListItemPageable`,
+    /// `TablePageable`, etc.).
+    fn collect_ids(
+        &self,
+        _x: Pt,
+        _y: Pt,
+        _avail_width: Pt,
+        _avail_height: Pt,
+        _registry: &mut DestinationRegistry,
+    ) {
+    }
 }
 
 impl Clone for Box<dyn Pageable> {
@@ -497,6 +675,10 @@ pub struct BlockPageable {
     pub style: BlockStyle,
     pub opacity: f32,
     pub visible: bool,
+    /// HTML `id` attribute (trimmed, non-empty). Used as an anchor target
+    /// for internal `href="#..."` links. `Arc<String>` so split fragments
+    /// can share without cloning the string.
+    pub id: Option<Arc<String>>,
 }
 
 impl BlockPageable {
@@ -523,6 +705,7 @@ impl BlockPageable {
             style: BlockStyle::default(),
             opacity: 1.0,
             visible: true,
+            id: None,
         }
     }
 
@@ -535,6 +718,7 @@ impl BlockPageable {
             style: BlockStyle::default(),
             opacity: 1.0,
             visible: true,
+            id: None,
         }
     }
 
@@ -555,6 +739,11 @@ impl BlockPageable {
 
     pub fn with_visible(mut self, visible: bool) -> Self {
         self.visible = visible;
+        self
+    }
+
+    pub fn with_id(mut self, id: Option<Arc<String>>) -> Self {
+        self.id = id;
         self
     }
 
@@ -1198,14 +1387,16 @@ impl Pageable for BlockPageable {
                             .with_pagination(self.pagination)
                             .with_style(self.style.clone())
                             .with_opacity(self.opacity)
-                            .with_visible(self.visible),
+                            .with_visible(self.visible)
+                            .with_id(self.id.clone()),
                     ),
                     Box::new(
                         BlockPageable::with_positioned_children(second)
                             .with_pagination(self.pagination)
                             .with_style(self.style.clone())
                             .with_opacity(self.opacity)
-                            .with_visible(self.visible),
+                            .with_visible(self.visible)
+                            .with_id(self.id.clone()),
                     ),
                 ))
             }
@@ -1225,14 +1416,16 @@ impl Pageable for BlockPageable {
                             .with_pagination(self.pagination)
                             .with_style(self.style.clone())
                             .with_opacity(self.opacity)
-                            .with_visible(self.visible),
+                            .with_visible(self.visible)
+                            .with_id(self.id.clone()),
                     ),
                     Box::new(
                         BlockPageable::with_positioned_children(second)
                             .with_pagination(self.pagination)
                             .with_style(self.style.clone())
                             .with_opacity(self.opacity)
-                            .with_visible(self.visible),
+                            .with_visible(self.visible)
+                            .with_id(self.id.clone()),
                     ),
                 ))
             }
@@ -1276,14 +1469,16 @@ impl Pageable for BlockPageable {
                             .with_pagination(me.pagination)
                             .with_style(me.style.clone())
                             .with_opacity(me.opacity)
-                            .with_visible(me.visible),
+                            .with_visible(me.visible)
+                            .with_id(me.id.clone()),
                     ),
                     Box::new(
                         BlockPageable::with_positioned_children(second)
                             .with_pagination(me.pagination)
                             .with_style(me.style)
                             .with_opacity(me.opacity)
-                            .with_visible(me.visible),
+                            .with_visible(me.visible)
+                            .with_id(me.id),
                     ),
                 ))
             }
@@ -1310,14 +1505,16 @@ impl Pageable for BlockPageable {
                             .with_pagination(me.pagination)
                             .with_style(me.style.clone())
                             .with_opacity(me.opacity)
-                            .with_visible(me.visible),
+                            .with_visible(me.visible)
+                            .with_id(me.id.clone()),
                     ),
                     Box::new(
                         BlockPageable::with_positioned_children(second_children)
                             .with_pagination(me.pagination)
                             .with_style(me.style)
                             .with_opacity(me.opacity)
-                            .with_visible(me.visible),
+                            .with_visible(me.visible)
+                            .with_id(me.id),
                     ),
                 ))
             }
@@ -1401,6 +1598,30 @@ impl Pageable for BlockPageable {
 
     fn as_any(&self) -> &dyn std::any::Any {
         self
+    }
+
+    fn collect_ids(
+        &self,
+        x: Pt,
+        y: Pt,
+        avail_width: Pt,
+        _avail_height: Pt,
+        registry: &mut DestinationRegistry,
+    ) {
+        // Record this block's own id at its top-left in page-local coords.
+        if let Some(id) = &self.id
+            && !id.is_empty()
+        {
+            registry.record(id, y);
+        }
+        // Recurse into children using the same positional arithmetic
+        // `draw()` uses (see the loop at the end of `draw`). We do NOT
+        // need to replicate clipping / opacity / background paths —
+        // anchor registration only cares about block-top coordinates.
+        for pc in &self.children {
+            pc.child
+                .collect_ids(x + pc.x, y + pc.y, avail_width, pc.child.height(), registry);
+        }
     }
 }
 
@@ -1606,6 +1827,18 @@ impl Pageable for HeadingMarkerWrapperPageable {
 
     fn as_any(&self) -> &dyn std::any::Any {
         self
+    }
+
+    fn collect_ids(
+        &self,
+        x: Pt,
+        y: Pt,
+        avail_width: Pt,
+        avail_height: Pt,
+        registry: &mut DestinationRegistry,
+    ) {
+        self.child
+            .collect_ids(x, y, avail_width, avail_height, registry);
     }
 }
 
@@ -1830,6 +2063,18 @@ impl Pageable for CounterOpWrapperPageable {
     fn as_any(&self) -> &dyn std::any::Any {
         self
     }
+
+    fn collect_ids(
+        &self,
+        x: Pt,
+        y: Pt,
+        avail_width: Pt,
+        avail_height: Pt,
+        registry: &mut DestinationRegistry,
+    ) {
+        self.child
+            .collect_ids(x, y, avail_width, avail_height, registry);
+    }
 }
 
 // ─── TransformWrapperPageable ──────────────────────────────
@@ -1920,6 +2165,20 @@ impl Pageable for TransformWrapperPageable {
     fn as_any(&self) -> &dyn std::any::Any {
         self
     }
+
+    fn collect_ids(
+        &self,
+        x: Pt,
+        y: Pt,
+        avail_width: Pt,
+        avail_height: Pt,
+        registry: &mut DestinationRegistry,
+    ) {
+        // Transform is a visual effect; the anchor position is the pre-transform
+        // block-top, matching where the destination "logically" lives.
+        self.inner
+            .collect_ids(x, y, avail_width, avail_height, registry);
+    }
 }
 
 // ─── StringSetWrapperPageable ──────────────────────────────
@@ -1984,6 +2243,18 @@ impl Pageable for StringSetWrapperPageable {
 
     fn as_any(&self) -> &dyn std::any::Any {
         self
+    }
+
+    fn collect_ids(
+        &self,
+        x: Pt,
+        y: Pt,
+        avail_width: Pt,
+        avail_height: Pt,
+        registry: &mut DestinationRegistry,
+    ) {
+        self.child
+            .collect_ids(x, y, avail_width, avail_height, registry);
     }
 }
 
@@ -2051,6 +2322,18 @@ impl Pageable for RunningElementWrapperPageable {
 
     fn as_any(&self) -> &dyn std::any::Any {
         self
+    }
+
+    fn collect_ids(
+        &self,
+        x: Pt,
+        y: Pt,
+        avail_width: Pt,
+        avail_height: Pt,
+        registry: &mut DestinationRegistry,
+    ) {
+        self.child
+            .collect_ids(x, y, avail_width, avail_height, registry);
     }
 }
 
@@ -2249,6 +2532,21 @@ impl Pageable for ListItemPageable {
     fn as_any(&self) -> &dyn std::any::Any {
         self
     }
+
+    fn collect_ids(
+        &self,
+        x: Pt,
+        y: Pt,
+        avail_width: Pt,
+        avail_height: Pt,
+        registry: &mut DestinationRegistry,
+    ) {
+        // `draw` calls `self.body.draw(canvas, x, y, ...)` (markers drawn
+        // at negative x); the body is the positional root for any nested
+        // block ids, so walk it at the same (x, y).
+        self.body
+            .collect_ids(x, y, avail_width, avail_height, registry);
+    }
 }
 
 // ─── TablePageable ─────────────────────────────────────
@@ -2272,6 +2570,10 @@ pub struct TablePageable {
     pub cached_height: Pt,
     pub opacity: f32,
     pub visible: bool,
+    /// HTML `id` attribute (trimmed, non-empty). Used as an anchor target
+    /// for internal `href="#..."` links. `Arc<String>` so split fragments
+    /// can share without cloning the string. Mirrors `BlockPageable::id`.
+    pub id: Option<Arc<String>>,
 }
 
 impl Pageable for TablePageable {
@@ -2347,6 +2649,7 @@ impl Pageable for TablePageable {
                 cached_height: 0.0,
                 opacity: self.opacity,
                 visible: self.visible,
+                id: self.id.clone(),
             }),
             Box::new(TablePageable {
                 header_cells: second_header,
@@ -2358,6 +2661,7 @@ impl Pageable for TablePageable {
                 cached_height: 0.0,
                 opacity: self.opacity,
                 visible: self.visible,
+                id: self.id.clone(),
             }),
         ))
     }
@@ -2412,6 +2716,7 @@ impl Pageable for TablePageable {
                 cached_height: 0.0,
                 opacity: me.opacity,
                 visible: me.visible,
+                id: me.id.clone(),
             }),
             Box::new(TablePageable {
                 header_cells: me.header_cells,
@@ -2423,6 +2728,7 @@ impl Pageable for TablePageable {
                 cached_height: 0.0,
                 opacity: me.opacity,
                 visible: me.visible,
+                id: me.id,
             }),
         ))
     }
@@ -2496,6 +2802,28 @@ impl Pageable for TablePageable {
 
     fn as_any(&self) -> &dyn std::any::Any {
         self
+    }
+
+    fn collect_ids(
+        &self,
+        x: Pt,
+        y: Pt,
+        _avail_width: Pt,
+        _avail_height: Pt,
+        registry: &mut DestinationRegistry,
+    ) {
+        // Record this table's own id at its top-left (mirrors BlockPageable).
+        if let Some(id) = &self.id
+            && !id.is_empty()
+        {
+            registry.record(id, y);
+        }
+        // Mirror TablePageable::draw child iteration — header + body cells.
+        let total_width = self.width;
+        for pc in self.header_cells.iter().chain(self.body_cells.iter()) {
+            pc.child
+                .collect_ids(x + pc.x, y + pc.y, total_width, pc.child.height(), registry);
+        }
     }
 }
 
@@ -2736,6 +3064,7 @@ mod tests {
             cached_height: 0.0,
             opacity: 1.0,
             visible: true,
+            id: None,
         };
         table.wrap(200.0, 1000.0);
 
@@ -2809,6 +3138,146 @@ mod tests {
         assert_eq!(m.name, "header");
         assert_eq!(m.instance_id, 42);
         assert!(m.split(100.0, 100.0).is_none());
+    }
+
+    // ─── DestinationRegistry tests ───────────────────────────
+
+    #[test]
+    fn destination_registry_collects_block_ids_from_paginated_pages() {
+        use crate::convert::{self, ConvertContext};
+        use crate::gcpm::running::RunningElementStore;
+        use std::collections::HashMap;
+
+        // Use `<div>` wrappers (container nodes, always BlockPageable) so
+        // the test does not depend on whether headings gain a block wrapper
+        // via default CSS — `<h1>` is an inline root that only becomes a
+        // BlockPageable when `needs_block_wrapper()` triggers on its style.
+        let html = r##"<html><body>
+            <div id="top" style="border:1px solid red">Top</div>
+            <div style="height:2000px"></div>
+            <div id="next" style="border:1px solid red">Next</div>
+        </body></html>"##;
+        let doc = crate::blitz_adapter::parse_and_layout(html, 400.0, 600.0, &[]);
+        let dummy_store = RunningElementStore::new();
+        let mut ctx = ConvertContext {
+            running_store: &dummy_store,
+            assets: None,
+            font_cache: HashMap::new(),
+            string_set_by_node: HashMap::new(),
+            counter_ops_by_node: HashMap::new(),
+        };
+        let pageable = convert::dom_to_pageable(&doc, &mut ctx);
+        let pages = crate::paginate::paginate(pageable, 400.0, 600.0);
+        let mut registry = DestinationRegistry::default();
+        for (idx, p) in pages.iter().enumerate() {
+            registry.set_current_page(idx);
+            p.collect_ids(0.0, 0.0, 400.0, 600.0, &mut registry);
+        }
+        assert!(registry.get("top").is_some(), "missing top");
+        assert!(registry.get("next").is_some(), "missing next");
+        // `top` and `next` should be on different pages (or different y) since
+        // the spacer between them is 2000px tall.
+        assert_ne!(registry.get("top"), registry.get("next"));
+    }
+
+    #[test]
+    fn destination_registry_ignores_blocks_without_id() {
+        // A BlockPageable with `id: None` should not register anything.
+        let mut block = BlockPageable::with_positioned_children(vec![]);
+        block.wrap(100.0, 100.0);
+        let mut registry = DestinationRegistry::default();
+        registry.set_current_page(0);
+        block.collect_ids(0.0, 0.0, 100.0, 100.0, &mut registry);
+        assert!(registry.get("anything").is_none());
+    }
+
+    #[test]
+    fn destination_registry_captures_paragraph_id_for_headings() {
+        // Headings like `<h1 id="top">` are inline roots that typically
+        // become `ParagraphPageable`, not `BlockPageable`. Ensure their ids
+        // are still captured so `href="#top"` links resolve.
+        use crate::convert::{self, ConvertContext};
+        use crate::gcpm::running::RunningElementStore;
+        use std::collections::HashMap;
+
+        let html = r##"<html><body>
+            <h1 id="top">Top</h1>
+            <div style="height:2000px"></div>
+            <h2 id="next">Next</h2>
+        </body></html>"##;
+        let doc = crate::blitz_adapter::parse_and_layout(html, 400.0, 600.0, &[]);
+        let dummy_store = RunningElementStore::new();
+        let mut ctx = ConvertContext {
+            running_store: &dummy_store,
+            assets: None,
+            font_cache: HashMap::new(),
+            string_set_by_node: HashMap::new(),
+            counter_ops_by_node: HashMap::new(),
+        };
+        let pageable = convert::dom_to_pageable(&doc, &mut ctx);
+        let pages = crate::paginate::paginate(pageable, 400.0, 600.0);
+        let mut registry = DestinationRegistry::default();
+        for (idx, p) in pages.iter().enumerate() {
+            registry.set_current_page(idx);
+            p.collect_ids(0.0, 0.0, 400.0, 600.0, &mut registry);
+        }
+        assert!(
+            registry.get("top").is_some(),
+            "expected <h1 id=top> to be captured"
+        );
+        assert!(
+            registry.get("next").is_some(),
+            "expected <h2 id=next> to be captured"
+        );
+        assert_ne!(
+            registry.get("top"),
+            registry.get("next"),
+            "headings separated by 2000px spacer should not share location"
+        );
+    }
+
+    #[test]
+    fn destination_registry_captures_table_id() {
+        // Regression: `<table id=...>` previously skipped BlockPageable
+        // wrapping, so TablePageable never registered its own id.
+        use crate::convert::{self, ConvertContext};
+        use crate::gcpm::running::RunningElementStore;
+        use std::collections::HashMap;
+
+        let html = r##"<html><body>
+            <table id="data"><tr><td>x</td></tr></table>
+        </body></html>"##;
+        let doc = crate::blitz_adapter::parse_and_layout(html, 400.0, 600.0, &[]);
+        let dummy_store = RunningElementStore::new();
+        let mut ctx = ConvertContext {
+            running_store: &dummy_store,
+            assets: None,
+            font_cache: HashMap::new(),
+            string_set_by_node: HashMap::new(),
+            counter_ops_by_node: HashMap::new(),
+        };
+        let pageable = convert::dom_to_pageable(&doc, &mut ctx);
+        let pages = crate::paginate::paginate(pageable, 400.0, 600.0);
+        let mut registry = DestinationRegistry::default();
+        for (idx, p) in pages.iter().enumerate() {
+            registry.set_current_page(idx);
+            p.collect_ids(0.0, 0.0, 400.0, 600.0, &mut registry);
+        }
+        assert!(
+            registry.get("data").is_some(),
+            "table id was not captured (entries: {:?})",
+            registry
+        );
+    }
+
+    #[test]
+    fn destination_registry_first_write_wins_for_duplicate_ids() {
+        let mut reg = DestinationRegistry::default();
+        reg.set_current_page(0);
+        reg.record("dup", 10.0);
+        reg.set_current_page(2);
+        reg.record("dup", 99.0);
+        assert_eq!(reg.get("dup"), Some((0, 10.0)));
     }
 }
 

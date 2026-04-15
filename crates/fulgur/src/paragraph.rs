@@ -69,6 +69,20 @@ pub struct ShapedGlyph {
     pub text_range: std::ops::Range<usize>,
 }
 
+/// Target for a clickable link in PDF output.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum LinkTarget {
+    External(Arc<String>),
+    Internal(Arc<String>),
+}
+
+/// Link association attached to a glyph run or inline image.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LinkSpan {
+    pub target: LinkTarget,
+    pub alt_text: Option<String>,
+}
+
 /// A pre-extracted glyph run (single font + style).
 #[derive(Clone, Debug)]
 pub struct ShapedGlyphRun {
@@ -80,6 +94,7 @@ pub struct ShapedGlyphRun {
     pub glyphs: Vec<ShapedGlyph>,
     pub text: String,
     pub x_offset: f32,
+    pub link: Option<Arc<LinkSpan>>,
 }
 
 /// Vertical alignment for inline replaced elements (images).
@@ -111,6 +126,7 @@ pub struct InlineImage {
     pub visible: bool,
     /// Y position relative to line top, computed by recalculate_line_box.
     pub computed_y: f32,
+    pub link: Option<Arc<LinkSpan>>,
 }
 
 /// A single item in a shaped line: either a text glyph run or an inline image.
@@ -137,6 +153,11 @@ pub struct ParagraphPageable {
     pub cached_height: f32,
     pub opacity: f32,
     pub visible: bool,
+    /// HTML `id` attribute of the inline-root element this paragraph was
+    /// extracted from. Used by `DestinationRegistry` to resolve `#anchor`
+    /// links targeting headings (`<h1 id=..>`) and similar inline-root
+    /// elements that do not gain a `BlockPageable` wrapper.
+    pub id: Option<Arc<String>>,
 }
 
 impl ParagraphPageable {
@@ -148,7 +169,14 @@ impl ParagraphPageable {
             cached_height,
             opacity: 1.0,
             visible: true,
+            id: None,
         }
+    }
+
+    /// Attach an `id` anchor to this paragraph. Chain after `new()`.
+    pub fn with_id(mut self, id: Option<Arc<String>>) -> Self {
+        self.id = id;
+        self
     }
 }
 
@@ -460,7 +488,15 @@ fn draw_line_decorations(canvas: &mut Canvas<'_, '_>, items: &[LineItem], x: Pt,
 
 /// Draw pre-shaped text lines at the given position.
 pub fn draw_shaped_lines(canvas: &mut Canvas<'_, '_>, lines: &[ShapedLine], x: Pt, y: Pt) {
+    // Track the top edge of each line within the paragraph (paragraph y=0 at
+    // `y`). Lines pack tightly by `line.height`. We use the full line box for
+    // link activation rects (matches WeasyPrint behavior), so tracking the
+    // top via cumulative height is both simpler and more robust than trying
+    // to derive it from `line.baseline` (which is an absolute baseline offset
+    // and does not carry per-line ascent).
+    let mut line_top: f32 = 0.0;
     for line in lines {
+        let line_top_abs = y + line_top;
         let baseline_y = y + line.baseline;
 
         for item in &line.items {
@@ -515,6 +551,25 @@ pub fn draw_shaped_lines(canvas: &mut Canvas<'_, '_>, lines: &[ShapedLine], x: P
                         run.font_size,
                         false,
                     );
+
+                    // After the glyphs are drawn, record a link rect if this
+                    // run was emitted under an <a href>. Width mirrors the
+                    // decoration-span computation in `draw_line_decorations`
+                    // (same glyph advance accumulator); height uses the full
+                    // line box so the hit area is stable across lines.
+                    if let Some(link_span) = run.link.as_ref() {
+                        let run_width: f32 =
+                            run.glyphs.iter().map(|g| g.x_advance * run.font_size).sum();
+                        let rect = crate::pageable::Rect {
+                            x: x + run.x_offset,
+                            y: line_top_abs,
+                            width: run_width.max(0.0),
+                            height: line.height,
+                        };
+                        if let Some(collector) = canvas.link_collector.as_deref_mut() {
+                            collector.push_rect(link_span, rect);
+                        }
+                    }
                 }
                 LineItem::Image(img) => {
                     if !img.visible {
@@ -535,12 +590,29 @@ pub fn draw_shaped_lines(canvas: &mut Canvas<'_, '_>, lines: &[ShapedLine], x: P
                         canvas.surface.draw_image(image, size);
                         canvas.surface.pop();
                     });
+
+                    // Record a rect for this image if it sits under an <a>.
+                    // Matches the image's drawn coordinates exactly:
+                    // (x + x_offset, y + computed_y, width, height).
+                    if let Some(link_span) = img.link.as_ref() {
+                        let rect = crate::pageable::Rect {
+                            x: x + img.x_offset,
+                            y: y + img.computed_y,
+                            width: img.width.max(0.0),
+                            height: img.height.max(0.0),
+                        };
+                        if let Some(collector) = canvas.link_collector.as_deref_mut() {
+                            collector.push_rect(link_span, rect);
+                        }
+                    }
                 }
             }
         }
 
         // Draw decorations after all glyphs so lines appear on top
         draw_line_decorations(canvas, &line.items, x, baseline_y);
+
+        line_top += line.height;
     }
 }
 
@@ -692,6 +764,7 @@ impl Pageable for ParagraphPageable {
         let mut first = ParagraphPageable::new(self.lines[..split_at].to_vec());
         first.opacity = self.opacity;
         first.visible = self.visible;
+        first.id = self.id.clone();
 
         // Rebase second fragment: baseline is absolute from paragraph top,
         // so subtract the consumed height to make it relative to the new fragment.
@@ -714,6 +787,11 @@ impl Pageable for ParagraphPageable {
         let mut second = ParagraphPageable::new(second_lines);
         second.opacity = self.opacity;
         second.visible = self.visible;
+        // Both fragments inherit the id. `DestinationRegistry::record` is
+        // first-write-wins, so the second fragment's entry is a no-op when
+        // it lands on a later page — we just carry the id so ordering quirks
+        // don't drop anchors.
+        second.id = self.id.clone();
 
         Some((Box::new(first), Box::new(second)))
     }
@@ -742,6 +820,22 @@ impl Pageable for ParagraphPageable {
     fn as_any(&self) -> &dyn std::any::Any {
         self
     }
+
+    fn collect_ids(
+        &self,
+        _x: Pt,
+        y: Pt,
+        _avail_width: Pt,
+        _avail_height: Pt,
+        registry: &mut crate::pageable::DestinationRegistry,
+    ) {
+        if let Some(id) = &self.id
+            && !id.is_empty()
+        {
+            registry.record(id, y);
+        }
+        // No child recursion: paragraph lines are glyph data, not Pageables.
+    }
 }
 
 #[cfg(test)]
@@ -769,6 +863,7 @@ mod tests {
             opacity: 1.0,
             visible: true,
             computed_y: 0.0,
+            link: None,
         }
     }
 
@@ -1112,5 +1207,206 @@ mod tests {
         } else {
             panic!("expected image item");
         }
+    }
+
+    // ---------- Id propagation ----------
+
+    #[test]
+    fn paragraph_default_has_no_id() {
+        let p = ParagraphPageable::new(Vec::new());
+        assert!(p.id.is_none());
+    }
+
+    #[test]
+    fn paragraph_with_id_stores_value() {
+        let p = ParagraphPageable::new(Vec::new()).with_id(Some(Arc::new("section-1".to_string())));
+        assert_eq!(p.id.as_deref().map(String::as_str), Some("section-1"));
+    }
+
+    #[test]
+    fn collect_ids_records_paragraph_id() {
+        use crate::pageable::DestinationRegistry;
+        let p = ParagraphPageable::new(Vec::new()).with_id(Some(Arc::new("anchor".to_string())));
+        let mut reg = DestinationRegistry::default();
+        reg.set_current_page(3);
+        p.collect_ids(10.0, 42.0, 400.0, 600.0, &mut reg);
+        assert_eq!(reg.get("anchor"), Some((3, 42.0)));
+    }
+
+    #[test]
+    fn collect_ids_is_noop_without_id() {
+        use crate::pageable::DestinationRegistry;
+        let p = ParagraphPageable::new(Vec::new());
+        let mut reg = DestinationRegistry::default();
+        p.collect_ids(0.0, 0.0, 400.0, 600.0, &mut reg);
+        assert!(reg.get("anything").is_none());
+    }
+
+    #[test]
+    fn split_propagates_id_to_both_fragments() {
+        // Four lines so orphans/widows (default=2) allow splitting at line 2.
+        let line1 = text_line(16.0, 12.0);
+        let line2 = text_line(16.0, 28.0);
+        let line3 = text_line(16.0, 44.0);
+        let line4 = text_line(16.0, 60.0);
+        let para = ParagraphPageable::new(vec![line1, line2, line3, line4])
+            .with_id(Some(Arc::new("heading".to_string())));
+
+        let (first, second) = para.split(100.0, 32.0).expect("should split");
+        let first_para = first.as_any().downcast_ref::<ParagraphPageable>().unwrap();
+        let second_para = second.as_any().downcast_ref::<ParagraphPageable>().unwrap();
+        assert_eq!(
+            first_para.id.as_deref().map(String::as_str),
+            Some("heading")
+        );
+        assert_eq!(
+            second_para.id.as_deref().map(String::as_str),
+            Some("heading")
+        );
+    }
+}
+
+#[cfg(test)]
+mod link_span_tests {
+    use super::*;
+    use std::sync::Arc;
+
+    #[test]
+    fn link_target_equality_is_by_value() {
+        let a = LinkTarget::External(Arc::new("https://example.com".into()));
+        let b = LinkTarget::External(Arc::new("https://example.com".into()));
+        assert_eq!(a, b);
+        let c = LinkTarget::Internal(Arc::new("section".into()));
+        assert_ne!(a, c);
+    }
+
+    #[test]
+    fn shaped_glyph_run_default_has_no_link() {
+        let run = ShapedGlyphRun {
+            font_data: Arc::new(Vec::new()),
+            font_index: 0,
+            font_size: 12.0,
+            color: [0, 0, 0, 255],
+            decoration: TextDecoration::default(),
+            glyphs: Vec::new(),
+            text: String::new(),
+            x_offset: 0.0,
+            link: None,
+        };
+        assert!(run.link.is_none());
+    }
+}
+
+#[cfg(test)]
+mod link_collect_tests {
+    use super::*;
+    use crate::pageable::{Canvas, LinkCollector};
+    use std::collections::HashMap;
+
+    fn render_pages_into_collector(html: &str, collector: &mut LinkCollector) -> usize {
+        use crate::convert::{self, ConvertContext};
+        use crate::gcpm::running::RunningElementStore;
+
+        let doc = crate::blitz_adapter::parse_and_layout(html, 400.0, 600.0, &[]);
+        let dummy_store = RunningElementStore::new();
+        let mut ctx = ConvertContext {
+            running_store: &dummy_store,
+            assets: None,
+            font_cache: HashMap::new(),
+            string_set_by_node: HashMap::new(),
+            counter_ops_by_node: HashMap::new(),
+        };
+        let pageable = convert::dom_to_pageable(&doc, &mut ctx);
+        let pages = crate::paginate::paginate(pageable, 400.0, 600.0);
+        let page_count = pages.len();
+
+        let mut krilla_doc = krilla::Document::new();
+        for (idx, p) in pages.iter().enumerate() {
+            let settings =
+                krilla::page::PageSettings::from_wh(400.0, 600.0).expect("valid page dimensions");
+            let mut page = krilla_doc.start_page_with(settings);
+            let mut surface = page.surface();
+            collector.set_current_page(idx);
+            {
+                let mut canvas = Canvas {
+                    surface: &mut surface,
+                    heading_collector: None,
+                    link_collector: Some(collector),
+                };
+                p.draw(&mut canvas, 0.0, 0.0, 400.0, 600.0);
+            }
+        }
+        // Drop the document — we only care about the collector side effect.
+        let _ = krilla_doc.finish();
+        page_count
+    }
+
+    #[test]
+    fn draw_pushes_link_rect_for_glyph_run_inside_anchor() {
+        let html = r#"<html><body><p><a href="https://x.test">hello world</a></p></body></html>"#;
+        let mut collector = LinkCollector::new();
+        render_pages_into_collector(html, &mut collector);
+
+        let occs = collector.into_occurrences();
+        assert!(!occs.is_empty(), "expected at least one link occurrence");
+        let first = &occs[0];
+        assert_eq!(first.page_idx, 0, "link should land on page 0");
+        assert!(
+            matches!(&first.target, LinkTarget::External(u) if u.as_str() == "https://x.test"),
+            "unexpected target: {:?}",
+            first.target,
+        );
+        assert!(!first.rects.is_empty());
+        assert!(
+            first.rects[0].width > 0.0,
+            "expected positive rect width, got {}",
+            first.rects[0].width,
+        );
+        assert!(
+            first.rects[0].height > 0.0,
+            "expected positive rect height, got {}",
+            first.rects[0].height,
+        );
+    }
+
+    #[test]
+    fn draw_merges_multiple_glyph_runs_under_same_anchor_into_one_occurrence() {
+        // <em> inside <a> forces shaping to split into multiple glyph runs,
+        // but convert.rs clones the same Arc<LinkSpan> onto every run — so
+        // LinkCollector's Arc-pointer dedup should merge them into one
+        // occurrence with multiple rects.
+        let html =
+            r#"<html><body><p><a href="https://x.test"><em>foo</em>bar</a></p></body></html>"#;
+        let mut collector = LinkCollector::new();
+        render_pages_into_collector(html, &mut collector);
+
+        let occs = collector.into_occurrences();
+        assert_eq!(
+            occs.len(),
+            1,
+            "expected one occurrence even with multiple glyph runs, got {:?}",
+            occs.iter().map(|o| &o.target).collect::<Vec<_>>(),
+        );
+        assert!(
+            occs[0].rects.len() >= 2,
+            "expected at least two rects merged under one occurrence, got {}",
+            occs[0].rects.len(),
+        );
+    }
+
+    #[test]
+    fn distinct_anchors_with_same_href_stay_separate() {
+        // Two separate <a> elements pointing at the same URL must produce
+        // two occurrences — Arc identity is what distinguishes them.
+        let html = r#"<html><body><p><a href="https://x.test">one</a> <a href="https://x.test">two</a></p></body></html>"#;
+        let mut collector = LinkCollector::new();
+        render_pages_into_collector(html, &mut collector);
+
+        let occs = collector.into_occurrences();
+        assert_eq!(
+            occs.len(),
+            2,
+            "expected two occurrences for two distinct <a> elements",
+        );
     }
 }
