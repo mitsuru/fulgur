@@ -1613,6 +1613,7 @@ fn convert_table(
         cached_height: height,
         opacity,
         visible,
+        id: extract_block_id(node),
     };
     Box::new(table)
 }

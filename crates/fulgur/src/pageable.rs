@@ -2545,6 +2545,10 @@ pub struct TablePageable {
     pub cached_height: Pt,
     pub opacity: f32,
     pub visible: bool,
+    /// HTML `id` attribute (trimmed, non-empty). Used as an anchor target
+    /// for internal `href="#..."` links. `Arc<String>` so split fragments
+    /// can share without cloning the string. Mirrors `BlockPageable::id`.
+    pub id: Option<Arc<String>>,
 }
 
 impl Pageable for TablePageable {
@@ -2620,6 +2624,7 @@ impl Pageable for TablePageable {
                 cached_height: 0.0,
                 opacity: self.opacity,
                 visible: self.visible,
+                id: self.id.clone(),
             }),
             Box::new(TablePageable {
                 header_cells: second_header,
@@ -2631,6 +2636,7 @@ impl Pageable for TablePageable {
                 cached_height: 0.0,
                 opacity: self.opacity,
                 visible: self.visible,
+                id: self.id.clone(),
             }),
         ))
     }
@@ -2685,6 +2691,7 @@ impl Pageable for TablePageable {
                 cached_height: 0.0,
                 opacity: me.opacity,
                 visible: me.visible,
+                id: me.id.clone(),
             }),
             Box::new(TablePageable {
                 header_cells: me.header_cells,
@@ -2696,6 +2703,7 @@ impl Pageable for TablePageable {
                 cached_height: 0.0,
                 opacity: me.opacity,
                 visible: me.visible,
+                id: me.id,
             }),
         ))
     }
@@ -2779,6 +2787,12 @@ impl Pageable for TablePageable {
         _avail_height: Pt,
         registry: &mut DestinationRegistry,
     ) {
+        // Record this table's own id at its top-left (mirrors BlockPageable).
+        if let Some(id) = &self.id
+            && !id.is_empty()
+        {
+            registry.record(id, y);
+        }
         // Mirror TablePageable::draw child iteration — header + body cells.
         let total_width = self.width;
         for pc in self.header_cells.iter().chain(self.body_cells.iter()) {
@@ -3025,6 +3039,7 @@ mod tests {
             cached_height: 0.0,
             opacity: 1.0,
             visible: true,
+            id: None,
         };
         table.wrap(200.0, 1000.0);
 
@@ -3193,6 +3208,40 @@ mod tests {
             registry.get("top"),
             registry.get("next"),
             "headings separated by 2000px spacer should not share location"
+        );
+    }
+
+    #[test]
+    fn destination_registry_captures_table_id() {
+        // Regression: `<table id=...>` previously skipped BlockPageable
+        // wrapping, so TablePageable never registered its own id.
+        use crate::convert::{self, ConvertContext};
+        use crate::gcpm::running::RunningElementStore;
+        use std::collections::HashMap;
+
+        let html = r##"<html><body>
+            <table id="data"><tr><td>x</td></tr></table>
+        </body></html>"##;
+        let doc = crate::blitz_adapter::parse_and_layout(html, 400.0, 600.0, &[]);
+        let dummy_store = RunningElementStore::new();
+        let mut ctx = ConvertContext {
+            running_store: &dummy_store,
+            assets: None,
+            font_cache: HashMap::new(),
+            string_set_by_node: HashMap::new(),
+            counter_ops_by_node: HashMap::new(),
+        };
+        let pageable = convert::dom_to_pageable(&doc, &mut ctx);
+        let pages = crate::paginate::paginate(pageable, 400.0, 600.0);
+        let mut registry = DestinationRegistry::default();
+        for (idx, p) in pages.iter().enumerate() {
+            registry.set_current_page(idx);
+            p.collect_ids(0.0, 0.0, 400.0, 600.0, &mut registry);
+        }
+        assert!(
+            registry.get("data").is_some(),
+            "table id was not captured (entries: {:?})",
+            registry
         );
     }
 
