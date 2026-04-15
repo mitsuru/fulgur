@@ -364,7 +364,8 @@ fn build_list_item_body(
                 );
                 let mut block = BlockPageable::with_positioned_children(children)
                     .with_style(style)
-                    .with_visible(visible);
+                    .with_visible(visible)
+                    .with_id(extract_block_id(node));
                 block.wrap(width, height);
                 block.layout_size = Some(Size { width, height });
                 Box::new(block)
@@ -408,7 +409,8 @@ fn build_list_item_body(
                 );
                 let mut block = BlockPageable::with_positioned_children(children)
                     .with_style(style)
-                    .with_visible(visible);
+                    .with_visible(visible)
+                    .with_id(extract_block_id(node));
                 block.wrap(width, height);
                 block.layout_size = Some(Size { width, height });
                 Box::new(block)
@@ -430,7 +432,8 @@ fn build_list_item_body(
             );
             let mut block = BlockPageable::with_positioned_children(positioned_children)
                 .with_style(style)
-                .with_visible(visible);
+                .with_visible(visible)
+                .with_id(extract_block_id(node));
             block.wrap(width, 10000.0);
             Box::new(block)
         }
@@ -447,7 +450,8 @@ fn build_list_item_body(
         );
         let mut block = BlockPageable::with_positioned_children(positioned_children)
             .with_style(style)
-            .with_visible(visible);
+            .with_visible(visible)
+            .with_id(extract_block_id(node));
         block.wrap(width, 10000.0);
         Box::new(block)
     }
@@ -706,7 +710,8 @@ fn convert_node_inner(
                 let mut block = BlockPageable::with_positioned_children(children)
                     .with_style(style)
                     .with_opacity(opacity)
-                    .with_visible(visible);
+                    .with_visible(visible)
+                    .with_id(extract_block_id(node));
                 block.wrap(width, height);
                 // Use Taffy's computed height (includes padding + border) instead of children-only height
                 block.layout_size = Some(Size { width, height });
@@ -755,7 +760,8 @@ fn convert_node_inner(
                 let mut block = BlockPageable::with_positioned_children(children)
                     .with_style(style)
                     .with_opacity(opacity)
-                    .with_visible(visible);
+                    .with_visible(visible)
+                    .with_id(extract_block_id(node));
                 block.wrap(width, height);
                 block.layout_size = Some(Size { width, height });
                 return Box::new(block);
@@ -783,7 +789,8 @@ fn convert_node_inner(
             let mut block = BlockPageable::with_positioned_children(positioned_children)
                 .with_style(style)
                 .with_opacity(opacity)
-                .with_visible(visible);
+                .with_visible(visible)
+                .with_id(extract_block_id(node));
             block.wrap(width, height);
             block.layout_size = Some(Size { width, height });
             return Box::new(block);
@@ -812,7 +819,8 @@ fn convert_node_inner(
     let mut block = BlockPageable::with_positioned_children(positioned_children)
         .with_style(style)
         .with_opacity(opacity)
-        .with_visible(visible);
+        .with_visible(visible)
+        .with_id(extract_block_id(node));
     block.wrap(width, 10000.0);
     if has_style {
         block.layout_size = Some(Size { width, height });
@@ -964,6 +972,21 @@ fn collect_positioned_children(
 
 use crate::blitz_adapter::{extract_inline_svg_tree, get_attr};
 
+/// Extract a trimmed, non-empty HTML `id` attribute from `node` and wrap it
+/// in an `Arc<String>` so split fragments can share without cloning the string.
+///
+/// Returns `None` if the node has no element data, no `id` attribute, or an
+/// empty/whitespace-only value.
+fn extract_block_id(node: &Node) -> Option<Arc<String>> {
+    let el = node.element_data()?;
+    let raw = get_attr(el, "id")?.trim();
+    if raw.is_empty() {
+        None
+    } else {
+        Some(Arc::new(raw.to_string()))
+    }
+}
+
 /// Wrap an atomic replaced element (image, svg) in a styled `BlockPageable`
 /// when the node has visual styling, or return the inner Pageable directly.
 ///
@@ -1006,7 +1029,8 @@ where
         let mut block = BlockPageable::with_positioned_children(vec![child])
             .with_style(style)
             .with_opacity(opacity)
-            .with_visible(visible);
+            .with_visible(visible)
+            .with_id(extract_block_id(node));
         block.wrap(width, height);
         block.layout_size = Some(Size { width, height });
         Box::new(block)
