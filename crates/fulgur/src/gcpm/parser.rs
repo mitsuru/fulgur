@@ -1902,6 +1902,52 @@ mod tests {
     }
 
     #[test]
+    fn test_parse_bookmark_combined() {
+        // Combined level + label in a single rule: both must land in the
+        // same `BookmarkMapping`. This is the canonical shape produced
+        // by `FULGUR_UA_CSS` for h1-h6.
+        let css = "h1 { bookmark-level: 1; bookmark-label: content(); }";
+        let ctx = parse_gcpm(css);
+        assert_eq!(ctx.bookmark_mappings.len(), 1);
+        let m = &ctx.bookmark_mappings[0];
+        assert_eq!(m.selector, ParsedSelector::Tag("h1".into()));
+        assert_eq!(m.level, Some(BookmarkLevel::Integer(1)));
+        assert_eq!(m.label.as_deref(), Some(&[ContentItem::ContentText][..]));
+    }
+
+    #[test]
+    fn test_parse_bookmark_only_level_produces_mapping() {
+        // Level-only is valid: label inherits the UA default elsewhere.
+        let css = ".aside { bookmark-level: 2; }";
+        let ctx = parse_gcpm(css);
+        assert_eq!(ctx.bookmark_mappings.len(), 1);
+        let m = &ctx.bookmark_mappings[0];
+        assert_eq!(m.level, Some(BookmarkLevel::Integer(2)));
+        assert!(m.label.is_none());
+    }
+
+    #[test]
+    fn test_parse_bookmark_only_label_produces_mapping() {
+        // Label-only is valid: level inherits from UA or parent rule.
+        let css = r#"h1 { bookmark-label: "Custom"; }"#;
+        let ctx = parse_gcpm(css);
+        assert_eq!(ctx.bookmark_mappings.len(), 1);
+        let m = &ctx.bookmark_mappings[0];
+        assert!(m.level.is_none());
+        assert_eq!(
+            m.label,
+            Some(vec![ContentItem::String("Custom".into())])
+        );
+    }
+
+    #[test]
+    fn test_parse_no_bookmark_no_mapping() {
+        let css = "p { color: red; }";
+        let ctx = parse_gcpm(css);
+        assert!(ctx.bookmark_mappings.is_empty());
+    }
+
+    #[test]
     fn test_parse_bookmark_level_invalid_values_ignored() {
         // Zero, negative, non-integer, or unknown idents must not produce
         // a level. The rule itself still parses fine; bookmark_mappings
