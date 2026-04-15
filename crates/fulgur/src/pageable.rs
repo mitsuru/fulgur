@@ -259,16 +259,21 @@ pub struct LinkOccurrence {
 /// with multiple rects. Distinct `<a href="...">` elements — even pointing
 /// at the same URL — land in separate occurrences.
 ///
-/// `occurrences` iteration order is *insertion* order, which is the draw
-/// order for a given page; this is deterministic, which is what matters
-/// for reproducible PDFs. The internal `HashMap` is a dedup-only index
-/// (keyed by `(page_idx, Arc pointer)`) and is never iterated for output,
-/// so it does not violate CLAUDE.md's BTreeMap-for-output rule.
+/// Occurrences are bucketed by `page_idx` so emission is O(L) per page
+/// instead of O(P×L). Within a bucket, ordering is insertion order (the
+/// draw order for that page), which is deterministic — what matters for
+/// reproducible PDFs. The internal `HashMap` dedup index (keyed by
+/// `(page_idx, Arc pointer)`) is never iterated for output, so it does
+/// not violate CLAUDE.md's BTreeMap-for-output rule.
 #[derive(Debug, Default)]
 pub struct LinkCollector {
     current_page_idx: usize,
+    /// Dedup index: `(page_idx, Arc pointer)` → index into the per-page
+    /// Vec in `pages`. Stale entries for already-taken pages are harmless.
     index: std::collections::HashMap<(usize, usize), usize>,
-    occurrences: Vec<LinkOccurrence>,
+    /// Occurrences grouped by `page_idx`. `BTreeMap` for deterministic
+    /// iteration (CLAUDE.md rule) and cheap page-keyed removal.
+    pages: BTreeMap<usize, Vec<LinkOccurrence>>,
 }
 
 impl LinkCollector {
@@ -285,27 +290,47 @@ impl LinkCollector {
     /// `LinkOccurrence`; on different pages they produce separate
     /// occurrences.
     pub fn push_rect(&mut self, link: &std::sync::Arc<crate::paragraph::LinkSpan>, rect: Rect) {
-        let key = (self.current_page_idx, std::sync::Arc::as_ptr(link) as usize);
+        let page_idx = self.current_page_idx;
+        let key = (page_idx, std::sync::Arc::as_ptr(link) as usize);
+        let bucket = self.pages.entry(page_idx).or_default();
         if let Some(&i) = self.index.get(&key) {
-            self.occurrences[i].rects.push(rect);
-        } else {
-            let i = self.occurrences.len();
-            self.index.insert(key, i);
-            self.occurrences.push(LinkOccurrence {
-                page_idx: self.current_page_idx,
-                target: link.target.clone(),
-                alt_text: link.alt_text.clone(),
-                rects: vec![rect],
-            });
+            // Defensive check: if the index is stale (e.g. the page was
+            // already drained via `take_page`), `i` may be out of range.
+            if let Some(occ) = bucket.get_mut(i) {
+                occ.rects.push(rect);
+                return;
+            }
         }
+        let i = bucket.len();
+        self.index.insert(key, i);
+        bucket.push(LinkOccurrence {
+            page_idx,
+            target: link.target.clone(),
+            alt_text: link.alt_text.clone(),
+            rects: vec![rect],
+        });
     }
 
+    /// Remove and return all occurrences recorded for `page_idx`.
+    ///
+    /// Pages are emitted in order during rendering, so after calling
+    /// `take_page(n)` no further `push_rect` calls should target page `n`.
+    /// Returns an empty `Vec` if the page had no link occurrences.
+    pub fn take_page(&mut self, page_idx: usize) -> Vec<LinkOccurrence> {
+        self.pages.remove(&page_idx).unwrap_or_default()
+    }
+
+    /// Consume the collector and return every occurrence across all pages,
+    /// flattened in page-index order. Retained for testing.
     pub fn into_occurrences(self) -> Vec<LinkOccurrence> {
-        self.occurrences
+        self.pages.into_values().flatten().collect()
     }
 
-    pub fn occurrences(&self) -> &[LinkOccurrence] {
-        &self.occurrences
+    /// Return every occurrence across all pages as an owned Vec, in
+    /// page-index order. Retained for testing — production callers should
+    /// prefer `take_page` for O(L) per-page emission.
+    pub fn occurrences(&self) -> Vec<LinkOccurrence> {
+        self.pages.values().flatten().cloned().collect()
     }
 }
 

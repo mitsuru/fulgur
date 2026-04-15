@@ -80,13 +80,9 @@ pub fn render_to_pdf(root: Box<dyn Pageable>, config: &Config) -> Result<Vec<u8>
         }
 
         // Emit link annotations for this page now that `page` is exclusively
-        // ours again. Filter the collector's occurrences to this page.
-        let per_page: Vec<_> = link_collector
-            .occurrences()
-            .iter()
-            .filter(|o| o.page_idx == page_idx)
-            .cloned()
-            .collect();
+        // ours again. `take_page` drains just this page's occurrences in
+        // O(L_page) instead of scanning the entire occurrence list.
+        let per_page = link_collector.take_page(page_idx);
         crate::link::emit_link_annotations(&mut page, &per_page, &dest_registry);
     }
 
@@ -551,12 +547,7 @@ pub fn render_to_pdf_with_gcpm(
         // wrapper around `&mut surface`, so dropping `surface` is enough.
         drop(surface);
 
-        let per_page: Vec<_> = link_collector
-            .occurrences()
-            .iter()
-            .filter(|o| o.page_idx == page_idx)
-            .cloned()
-            .collect();
+        let per_page = link_collector.take_page(page_idx);
         crate::link::emit_link_annotations(&mut page, &per_page, &dest_registry);
     }
 
