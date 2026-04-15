@@ -488,7 +488,15 @@ fn draw_line_decorations(canvas: &mut Canvas<'_, '_>, items: &[LineItem], x: Pt,
 
 /// Draw pre-shaped text lines at the given position.
 pub fn draw_shaped_lines(canvas: &mut Canvas<'_, '_>, lines: &[ShapedLine], x: Pt, y: Pt) {
+    // Track the top edge of each line within the paragraph (paragraph y=0 at
+    // `y`). Lines pack tightly by `line.height`. We use the full line box for
+    // link activation rects (matches WeasyPrint behavior), so tracking the
+    // top via cumulative height is both simpler and more robust than trying
+    // to derive it from `line.baseline` (which is an absolute baseline offset
+    // and does not carry per-line ascent).
+    let mut line_top: f32 = 0.0;
     for line in lines {
+        let line_top_abs = y + line_top;
         let baseline_y = y + line.baseline;
 
         for item in &line.items {
@@ -543,6 +551,25 @@ pub fn draw_shaped_lines(canvas: &mut Canvas<'_, '_>, lines: &[ShapedLine], x: P
                         run.font_size,
                         false,
                     );
+
+                    // After the glyphs are drawn, record a link rect if this
+                    // run was emitted under an <a href>. Width mirrors the
+                    // decoration-span computation in `draw_line_decorations`
+                    // (same glyph advance accumulator); height uses the full
+                    // line box so the hit area is stable across lines.
+                    if let Some(link_span) = run.link.as_ref() {
+                        let run_width: f32 =
+                            run.glyphs.iter().map(|g| g.x_advance * run.font_size).sum();
+                        let rect = crate::pageable::Rect {
+                            x: x + run.x_offset,
+                            y: line_top_abs,
+                            width: run_width.max(0.0),
+                            height: line.height,
+                        };
+                        if let Some(collector) = canvas.link_collector.as_deref_mut() {
+                            collector.push_rect(link_span, rect);
+                        }
+                    }
                 }
                 LineItem::Image(img) => {
                     if !img.visible {
@@ -563,12 +590,29 @@ pub fn draw_shaped_lines(canvas: &mut Canvas<'_, '_>, lines: &[ShapedLine], x: P
                         canvas.surface.draw_image(image, size);
                         canvas.surface.pop();
                     });
+
+                    // Record a rect for this image if it sits under an <a>.
+                    // Matches the image's drawn coordinates exactly:
+                    // (x + x_offset, y + computed_y, width, height).
+                    if let Some(link_span) = img.link.as_ref() {
+                        let rect = crate::pageable::Rect {
+                            x: x + img.x_offset,
+                            y: y + img.computed_y,
+                            width: img.width.max(0.0),
+                            height: img.height.max(0.0),
+                        };
+                        if let Some(collector) = canvas.link_collector.as_deref_mut() {
+                            collector.push_rect(link_span, rect);
+                        }
+                    }
                 }
             }
         }
 
         // Draw decorations after all glyphs so lines appear on top
         draw_line_decorations(canvas, &line.items, x, baseline_y);
+
+        line_top += line.height;
     }
 }
 
@@ -1250,5 +1294,119 @@ mod link_span_tests {
             link: None,
         };
         assert!(run.link.is_none());
+    }
+}
+
+#[cfg(test)]
+mod link_collect_tests {
+    use super::*;
+    use crate::pageable::{Canvas, LinkCollector};
+    use std::collections::HashMap;
+
+    fn render_pages_into_collector(html: &str, collector: &mut LinkCollector) -> usize {
+        use crate::convert::{self, ConvertContext};
+        use crate::gcpm::running::RunningElementStore;
+
+        let doc = crate::blitz_adapter::parse_and_layout(html, 400.0, 600.0, &[]);
+        let dummy_store = RunningElementStore::new();
+        let mut ctx = ConvertContext {
+            running_store: &dummy_store,
+            assets: None,
+            font_cache: HashMap::new(),
+            string_set_by_node: HashMap::new(),
+            counter_ops_by_node: HashMap::new(),
+        };
+        let pageable = convert::dom_to_pageable(&doc, &mut ctx);
+        let pages = crate::paginate::paginate(pageable, 400.0, 600.0);
+        let page_count = pages.len();
+
+        let mut krilla_doc = krilla::Document::new();
+        for (idx, p) in pages.iter().enumerate() {
+            let settings =
+                krilla::page::PageSettings::from_wh(400.0, 600.0).expect("valid page dimensions");
+            let mut page = krilla_doc.start_page_with(settings);
+            let mut surface = page.surface();
+            collector.set_current_page(idx);
+            {
+                let mut canvas = Canvas {
+                    surface: &mut surface,
+                    heading_collector: None,
+                    link_collector: Some(collector),
+                };
+                p.draw(&mut canvas, 0.0, 0.0, 400.0, 600.0);
+            }
+        }
+        // Drop the document — we only care about the collector side effect.
+        let _ = krilla_doc.finish();
+        page_count
+    }
+
+    #[test]
+    fn draw_pushes_link_rect_for_glyph_run_inside_anchor() {
+        let html = r#"<html><body><p><a href="https://x.test">hello world</a></p></body></html>"#;
+        let mut collector = LinkCollector::new();
+        render_pages_into_collector(html, &mut collector);
+
+        let occs = collector.into_occurrences();
+        assert!(!occs.is_empty(), "expected at least one link occurrence");
+        let first = &occs[0];
+        assert_eq!(first.page_idx, 0, "link should land on page 0");
+        assert!(
+            matches!(&first.target, LinkTarget::External(u) if u.as_str() == "https://x.test"),
+            "unexpected target: {:?}",
+            first.target,
+        );
+        assert!(!first.rects.is_empty());
+        assert!(
+            first.rects[0].width > 0.0,
+            "expected positive rect width, got {}",
+            first.rects[0].width,
+        );
+        assert!(
+            first.rects[0].height > 0.0,
+            "expected positive rect height, got {}",
+            first.rects[0].height,
+        );
+    }
+
+    #[test]
+    fn draw_merges_multiple_glyph_runs_under_same_anchor_into_one_occurrence() {
+        // <em> inside <a> forces shaping to split into multiple glyph runs,
+        // but convert.rs clones the same Arc<LinkSpan> onto every run — so
+        // LinkCollector's Arc-pointer dedup should merge them into one
+        // occurrence with multiple rects.
+        let html =
+            r#"<html><body><p><a href="https://x.test"><em>foo</em>bar</a></p></body></html>"#;
+        let mut collector = LinkCollector::new();
+        render_pages_into_collector(html, &mut collector);
+
+        let occs = collector.into_occurrences();
+        assert_eq!(
+            occs.len(),
+            1,
+            "expected one occurrence even with multiple glyph runs, got {:?}",
+            occs.iter().map(|o| &o.target).collect::<Vec<_>>(),
+        );
+        assert!(
+            occs[0].rects.len() >= 2,
+            "expected at least two rects merged under one occurrence, got {}",
+            occs[0].rects.len(),
+        );
+    }
+
+    #[test]
+    fn distinct_anchors_with_same_href_stay_separate() {
+        // Two separate <a> elements pointing at the same URL must produce
+        // two occurrences — Arc identity is what distinguishes them.
+        let html = r#"<html><body><p><a href="https://x.test">one</a> <a href="https://x.test">two</a></p></body></html>"#;
+        let mut collector = LinkCollector::new();
+        render_pages_into_collector(html, &mut collector);
+
+        let occs = collector.into_occurrences();
+        assert_eq!(
+            occs.len(),
+            2,
+            "expected two occurrences for two distinct <a> elements",
+        );
     }
 }

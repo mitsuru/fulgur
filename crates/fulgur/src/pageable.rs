@@ -222,11 +222,99 @@ impl Default for Pagination {
     }
 }
 
+/// Axis-aligned rectangle used to describe PDF link activation areas.
+///
+/// Coordinates are in PDF points in the Krilla surface coordinate space
+/// (origin at top-left, y growing downward) — i.e. the same space the
+/// `draw()` methods use when talking to `Surface`. `x`, `y` mark the
+/// top-left corner.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Rect {
+    pub x: f32,
+    pub y: f32,
+    pub width: f32,
+    pub height: f32,
+}
+
+/// One clickable link area captured by `LinkCollector` during draw.
+///
+/// A single `<a>` element may produce multiple rects when its glyphs wrap
+/// across lines (or when nested inlines split shaping into multiple runs);
+/// in that case `rects` holds one entry per fragment and `target`/`alt_text`
+/// are the shared anchor metadata.
+#[derive(Debug, Clone)]
+pub struct LinkOccurrence {
+    pub page_idx: usize,
+    pub target: crate::paragraph::LinkTarget,
+    pub alt_text: Option<String>,
+    pub rects: Vec<Rect>,
+}
+
+/// Per-page collector of link activation rects, grouped by `<a>` identity.
+///
+/// Identity is the pointer value of `Arc<LinkSpan>`. `convert.rs` guarantees
+/// that every glyph run / inline image extracted from the same `<a>`
+/// shares the *same* `Arc<LinkSpan>` clone, so runs that were split by
+/// `<em>`/`<strong>` inside an anchor merge into a single `LinkOccurrence`
+/// with multiple rects. Distinct `<a href="...">` elements — even pointing
+/// at the same URL — land in separate occurrences.
+///
+/// `occurrences` iteration order is *insertion* order, which is the draw
+/// order for a given page; this is deterministic, which is what matters
+/// for reproducible PDFs. The internal `HashMap` is a dedup-only index
+/// (keyed by `(page_idx, Arc pointer)`) and is never iterated for output,
+/// so it does not violate CLAUDE.md's BTreeMap-for-output rule.
+#[derive(Debug, Default)]
+pub struct LinkCollector {
+    current_page_idx: usize,
+    index: std::collections::HashMap<(usize, usize), usize>,
+    occurrences: Vec<LinkOccurrence>,
+}
+
+impl LinkCollector {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn set_current_page(&mut self, idx: usize) {
+        self.current_page_idx = idx;
+    }
+
+    /// Record a rect for the given `<a>`. Rects pointing at the same
+    /// `Arc<LinkSpan>` *on the same page* are merged into a single
+    /// `LinkOccurrence`; on different pages they produce separate
+    /// occurrences.
+    pub fn push_rect(&mut self, link: &std::sync::Arc<crate::paragraph::LinkSpan>, rect: Rect) {
+        let key = (self.current_page_idx, std::sync::Arc::as_ptr(link) as usize);
+        if let Some(&i) = self.index.get(&key) {
+            self.occurrences[i].rects.push(rect);
+        } else {
+            let i = self.occurrences.len();
+            self.index.insert(key, i);
+            self.occurrences.push(LinkOccurrence {
+                page_idx: self.current_page_idx,
+                target: link.target.clone(),
+                alt_text: link.alt_text.clone(),
+                rects: vec![rect],
+            });
+        }
+    }
+
+    pub fn into_occurrences(self) -> Vec<LinkOccurrence> {
+        self.occurrences
+    }
+
+    pub fn occurrences(&self) -> &[LinkOccurrence] {
+        &self.occurrences
+    }
+}
+
 /// Wrapper around Krilla Surface for drawing commands.
 /// This decouples Pageable types from Krilla's concrete Surface type.
 pub struct Canvas<'a, 'b> {
     pub surface: &'a mut krilla::surface::Surface<'b>,
     pub heading_collector: Option<&'a mut HeadingCollector>,
+    pub link_collector: Option<&'a mut LinkCollector>,
 }
 
 /// Run a draw closure wrapped in opacity guards.

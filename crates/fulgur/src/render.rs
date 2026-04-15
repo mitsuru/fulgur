@@ -47,6 +47,7 @@ pub fn render_to_pdf(root: Box<dyn Pageable>, config: &Config) -> Result<Vec<u8>
         let mut canvas = Canvas {
             surface: &mut surface,
             heading_collector: collector.as_mut(),
+            link_collector: None,
         };
         page_content.draw(
             &mut canvas,
@@ -270,6 +271,7 @@ pub fn render_to_pdf_with_gcpm(
         let mut canvas = Canvas {
             surface: &mut surface,
             heading_collector: None,
+            link_collector: None,
         };
 
         // Resolve margin boxes: for each position, pick the most specific
@@ -458,6 +460,7 @@ pub fn render_to_pdf_with_gcpm(
         canvas = Canvas {
             surface: &mut surface,
             heading_collector: collector.as_mut(),
+            link_collector: None,
         };
         let page_content_width = page_size.width - resolved_margin.left - resolved_margin.right;
         let page_content_height = page_size.height - resolved_margin.top - resolved_margin.bottom;
