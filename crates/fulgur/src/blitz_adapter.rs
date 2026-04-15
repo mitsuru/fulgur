@@ -257,6 +257,28 @@ pub fn get_attr<'a>(elem: &'a blitz_dom::node::ElementData, name: &str) -> Optio
         .map(|a| a.value.as_ref())
 }
 
+/// Concatenate all descendant text under `node_id` into a single String (DFS).
+///
+/// Used to build a PDF link's `alt_text` (tooltip / accessibility label) from
+/// the visible text of an `<a>` element. Returns an empty string if the node
+/// has no text descendants or does not exist.
+pub fn element_text(doc: &blitz_dom::BaseDocument, node_id: usize) -> String {
+    fn walk(doc: &blitz_dom::BaseDocument, id: usize, out: &mut String) {
+        let Some(node) = doc.get_node(id) else {
+            return;
+        };
+        if let blitz_dom::node::NodeData::Text(t) = &node.data {
+            out.push_str(&t.content);
+        }
+        for &child_id in &node.children {
+            walk(doc, child_id, out);
+        }
+    }
+    let mut out = String::new();
+    walk(doc, node_id, &mut out);
+    out
+}
+
 /// Extract the parsed `usvg::Tree` from an inline `<svg>` element, if present.
 ///
 /// Blitz parses inline `<svg>` elements during DOM construction (default `svg`

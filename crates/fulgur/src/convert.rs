@@ -12,8 +12,9 @@ use crate::pageable::{
     StringSetPageable, StringSetWrapperPageable, TablePageable, TransformWrapperPageable,
 };
 use crate::paragraph::{
-    InlineImage, LineFontMetrics, LineItem, ParagraphPageable, ShapedGlyph, ShapedGlyphRun,
-    ShapedLine, TextDecoration, TextDecorationLine, TextDecorationStyle, VerticalAlign,
+    InlineImage, LineFontMetrics, LineItem, LinkSpan, LinkTarget, ParagraphPageable, ShapedGlyph,
+    ShapedGlyphRun, ShapedLine, TextDecoration, TextDecorationLine, TextDecorationStyle,
+    VerticalAlign,
 };
 use crate::svg::SvgPageable;
 use blitz_dom::{Node, NodeData};
@@ -319,6 +320,10 @@ fn build_list_item_body(
             .filter(|p| !is_block_pseudo(p))
             .and_then(|p| {
                 build_inline_pseudo_image(p, content_box.width, content_box.height, ctx.assets)
+            })
+            .map(|mut img| {
+                attach_link_to_inline_image(&mut img, doc, node.id);
+                img
             });
         let after_inline = node
             .after
@@ -326,6 +331,10 @@ fn build_list_item_body(
             .filter(|p| !is_block_pseudo(p))
             .and_then(|p| {
                 build_inline_pseudo_image(p, content_box.width, content_box.height, ctx.assets)
+            })
+            .map(|mut img| {
+                attach_link_to_inline_image(&mut img, doc, node.id);
+                img
             });
 
         if let Some(mut paragraph) = paragraph_opt {
@@ -619,6 +628,10 @@ fn convert_node_inner(
             .filter(|p| !is_block_pseudo(p))
             .and_then(|p| {
                 build_inline_pseudo_image(p, content_box.width, content_box.height, ctx.assets)
+            })
+            .map(|mut img| {
+                attach_link_to_inline_image(&mut img, doc, node.id);
+                img
             });
         let after_inline = node
             .after
@@ -626,6 +639,10 @@ fn convert_node_inner(
             .filter(|p| !is_block_pseudo(p))
             .and_then(|p| {
                 build_inline_pseudo_image(p, content_box.width, content_box.height, ctx.assets)
+            })
+            .map(|mut img| {
+                attach_link_to_inline_image(&mut img, doc, node.id);
+                img
             });
 
         if let Some(mut paragraph) = paragraph_opt {
@@ -1285,6 +1302,28 @@ fn build_inline_pseudo_image(
     })
 }
 
+/// Populate the `link` field on an `InlineImage` built for a pseudo-element
+/// whose real originating node is `origin_node_id` (typically the pseudo's
+/// parent — the element that owns `::before` / `::after`). If that node is
+/// enclosed by an `<a href>` ancestor, attach a fresh `LinkSpan`.
+///
+/// We build a fresh `LinkSpan` here rather than sharing through the
+/// `extract_paragraph` cache because pseudo images are injected into the
+/// paragraph's line vector by callers, not emitted from within the glyph-run
+/// loop — they live on a separate control-flow path. Rect-dedup in a later
+/// task will be keyed on the LinkTarget+alt_text payload for pseudo images,
+/// not on Arc identity, and this is fine because most anchors contain at
+/// most one pseudo image.
+fn attach_link_to_inline_image(
+    img: &mut InlineImage,
+    doc: &blitz_dom::BaseDocument,
+    origin_node_id: usize,
+) {
+    if let Some((_, span)) = resolve_enclosing_anchor(doc, origin_node_id) {
+        img.link = Some(Arc::new(span));
+    }
+}
+
 /// Inject an inline pseudo image at the start (::before) and/or end (::after)
 /// of the shaped lines. The ::before image is prepended to the first line and
 /// all existing items are shifted right by its width. The ::after image is
@@ -1643,6 +1682,81 @@ fn collect_table_cells(
     }
 }
 
+/// Walk up from `start_id` to find the closest `<a href>` ancestor and build
+/// a `LinkSpan` describing its target. Returns `None` if no ancestor is an
+/// anchor with a non-empty `href`.
+///
+/// Caller should memoize results per anchor node ID so multiple glyph runs
+/// descended from the same `<a>` share one `Arc<LinkSpan>` (pointer identity,
+/// required for later rect-dedup in PDF emission).
+fn resolve_enclosing_anchor(
+    doc: &blitz_dom::BaseDocument,
+    start_id: usize,
+) -> Option<(usize, LinkSpan)> {
+    let mut cur = Some(start_id);
+    while let Some(id) = cur {
+        let node = doc.get_node(id)?;
+        if let NodeData::Element(el) = &node.data {
+            if el.name.local.as_ref() == "a" {
+                let href = crate::blitz_adapter::get_attr(el, "href")?.trim();
+                if href.is_empty() {
+                    return None;
+                }
+                let target = if let Some(frag) = href.strip_prefix('#') {
+                    LinkTarget::Internal(Arc::new(frag.to_string()))
+                } else {
+                    LinkTarget::External(Arc::new(href.to_string()))
+                };
+                let alt = crate::blitz_adapter::element_text(doc, id);
+                let alt_text = if alt.is_empty() { None } else { Some(alt) };
+                return Some((id, LinkSpan { target, alt_text }));
+            }
+        }
+        cur = node.parent;
+    }
+    None
+}
+
+/// Memoized lookup of the enclosing `<a href>` for a node.
+///
+/// Two-level cache to ensure pointer identity per anchor:
+/// - `by_start` maps the starting node ID (e.g. a glyph run's brush.id) to
+///   the resolved anchor's node ID (or `None` if no anchor ancestor).
+/// - `by_anchor` maps the anchor's node ID to the canonical `Arc<LinkSpan>`.
+///
+/// This guarantees that two glyph runs under the same `<a>` receive the
+/// SAME `Arc<LinkSpan>` (verified via `Arc::ptr_eq`), which is required for
+/// correct quad_points deduplication during PDF /Link emission.
+#[derive(Default)]
+struct LinkCache {
+    by_start: HashMap<usize, Option<usize>>,
+    by_anchor: HashMap<usize, Arc<LinkSpan>>,
+}
+
+impl LinkCache {
+    fn lookup(&mut self, doc: &blitz_dom::BaseDocument, start_id: usize) -> Option<Arc<LinkSpan>> {
+        if let Some(cached) = self.by_start.get(&start_id) {
+            let anchor_id = (*cached)?;
+            return self.by_anchor.get(&anchor_id).cloned();
+        }
+        match resolve_enclosing_anchor(doc, start_id) {
+            Some((anchor_id, span)) => {
+                self.by_start.insert(start_id, Some(anchor_id));
+                let arc = self
+                    .by_anchor
+                    .entry(anchor_id)
+                    .or_insert_with(|| Arc::new(span))
+                    .clone();
+                Some(arc)
+            }
+            None => {
+                self.by_start.insert(start_id, None);
+                None
+            }
+        }
+    }
+}
+
 /// Extract a ParagraphPageable from an inline root node.
 fn extract_paragraph(
     doc: &blitz_dom::BaseDocument,
@@ -1656,6 +1770,7 @@ fn extract_paragraph(
     let text = &text_layout.text;
 
     let mut shaped_lines = Vec::new();
+    let mut link_cache = LinkCache::default();
 
     for line in parley_layout.lines() {
         let metrics = line.metrics();
@@ -1673,6 +1788,7 @@ fn extract_paragraph(
                 let brush = &glyph_run.style().brush;
                 let color = get_text_color(doc, brush.id);
                 let decoration = get_text_decoration(doc, brush.id);
+                let link = link_cache.lookup(doc, brush.id);
 
                 // Extract raw glyphs (relative offsets, not absolute positions)
                 let text_len = text.len();
@@ -1699,7 +1815,7 @@ fn extract_paragraph(
                         glyphs,
                         text: run_text,
                         x_offset: glyph_run.offset(),
-                        link: None,
+                        link,
                     }));
                 }
             }
@@ -3240,5 +3356,212 @@ mod tests {
             None
         }
         assert_eq!(find(root.as_ref()), Some((3u8, "Subsection".to_string())));
+    }
+
+    /// Locate the first element with the given tag by DFS from the document root.
+    fn find_tag(doc: &blitz_html::HtmlDocument, tag: &str) -> Option<usize> {
+        fn walk(doc: &blitz_dom::BaseDocument, id: usize, tag: &str) -> Option<usize> {
+            let node = doc.get_node(id)?;
+            if let Some(ed) = node.element_data() {
+                if ed.name.local.as_ref() == tag {
+                    return Some(id);
+                }
+            }
+            for &c in &node.children {
+                if let Some(v) = walk(doc, c, tag) {
+                    return Some(v);
+                }
+            }
+            None
+        }
+        walk(doc.deref(), doc.root_element().id, tag)
+    }
+
+    macro_rules! make_ctx {
+        ($store:ident) => {{
+            ConvertContext {
+                running_store: &$store,
+                assets: None,
+                font_cache: HashMap::new(),
+                string_set_by_node: HashMap::new(),
+                counter_ops_by_node: HashMap::new(),
+            }
+        }};
+    }
+
+    #[test]
+    fn paragraph_attaches_external_link_to_glyph_run_inside_anchor() {
+        let html =
+            r#"<html><body><p>Go to <a href="https://example.com">example</a>.</p></body></html>"#;
+        let mut doc = crate::blitz_adapter::parse(html, 400.0, &[]);
+        crate::blitz_adapter::resolve(&mut doc);
+
+        let store = crate::gcpm::running::RunningElementStore::new();
+        let mut ctx = make_ctx!(store);
+        let p_id = find_tag(&doc, "p").expect("p exists");
+        let p_node = doc.get_node(p_id).expect("p node");
+        let para = extract_paragraph(doc.deref(), p_node, &mut ctx).expect("paragraph");
+
+        let mut found_external = false;
+        for line in &para.lines {
+            for item in &line.items {
+                if let LineItem::Text(run) = item {
+                    if let Some(ls) = &run.link {
+                        if let LinkTarget::External(u) = &ls.target {
+                            if u.as_str() == "https://example.com" {
+                                found_external = true;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        assert!(
+            found_external,
+            "expected at least one glyph run under <a> to carry an External link"
+        );
+    }
+
+    #[test]
+    fn paragraph_attaches_internal_link_for_fragment_href() {
+        let html = r##"<html><body><p>See <a href="#intro">intro</a></p></body></html>"##;
+        let mut doc = crate::blitz_adapter::parse(html, 400.0, &[]);
+        crate::blitz_adapter::resolve(&mut doc);
+
+        let store = crate::gcpm::running::RunningElementStore::new();
+        let mut ctx = make_ctx!(store);
+        let p_id = find_tag(&doc, "p").expect("p exists");
+        let p_node = doc.get_node(p_id).expect("p node");
+        let para = extract_paragraph(doc.deref(), p_node, &mut ctx).expect("paragraph");
+
+        let mut found = false;
+        for line in &para.lines {
+            for item in &line.items {
+                if let LineItem::Text(run) = item {
+                    if let Some(ls) = &run.link {
+                        if let LinkTarget::Internal(frag) = &ls.target {
+                            if frag.as_str() == "intro" {
+                                found = true;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        assert!(
+            found,
+            "expected fragment link to produce LinkTarget::Internal(\"intro\")"
+        );
+    }
+
+    #[test]
+    fn paragraph_shares_arc_linkspan_across_glyph_runs_under_same_anchor() {
+        // <em> forces two separate glyph runs (different style) under one <a>.
+        let html =
+            r#"<html><body><p><a href="https://x.test"><em>foo</em> bar</a></p></body></html>"#;
+        let mut doc = crate::blitz_adapter::parse(html, 400.0, &[]);
+        crate::blitz_adapter::resolve(&mut doc);
+
+        let store = crate::gcpm::running::RunningElementStore::new();
+        let mut ctx = make_ctx!(store);
+        let p_id = find_tag(&doc, "p").expect("p exists");
+        let p_node = doc.get_node(p_id).expect("p node");
+        let para = extract_paragraph(doc.deref(), p_node, &mut ctx).expect("paragraph");
+
+        let mut links: Vec<Arc<LinkSpan>> = Vec::new();
+        for line in &para.lines {
+            for item in &line.items {
+                if let LineItem::Text(run) = item {
+                    if let Some(ls) = &run.link {
+                        links.push(Arc::clone(ls));
+                    }
+                }
+            }
+        }
+        assert!(
+            links.len() >= 2,
+            "expected at least two linked glyph runs (got {})",
+            links.len()
+        );
+        let first = &links[0];
+        for other in &links[1..] {
+            assert!(
+                Arc::ptr_eq(first, other),
+                "all glyph runs inside the same <a> must share one Arc<LinkSpan>"
+            );
+        }
+    }
+
+    #[test]
+    fn paragraph_leaves_link_none_for_anchor_without_href() {
+        let html = r#"<html><body><p>Text <a>no href</a> here.</p></body></html>"#;
+        let mut doc = crate::blitz_adapter::parse(html, 400.0, &[]);
+        crate::blitz_adapter::resolve(&mut doc);
+
+        let store = crate::gcpm::running::RunningElementStore::new();
+        let mut ctx = make_ctx!(store);
+        let p_id = find_tag(&doc, "p").expect("p exists");
+        let p_node = doc.get_node(p_id).expect("p node");
+        let para = extract_paragraph(doc.deref(), p_node, &mut ctx).expect("paragraph");
+
+        for line in &para.lines {
+            for item in &line.items {
+                if let LineItem::Text(run) = item {
+                    assert!(
+                        run.link.is_none(),
+                        "glyph runs under <a> without href must have link: None"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn paragraph_leaves_link_none_for_anchor_with_empty_href() {
+        let html = r#"<html><body><p><a href="">empty</a></p></body></html>"#;
+        let mut doc = crate::blitz_adapter::parse(html, 400.0, &[]);
+        crate::blitz_adapter::resolve(&mut doc);
+
+        let store = crate::gcpm::running::RunningElementStore::new();
+        let mut ctx = make_ctx!(store);
+        let p_id = find_tag(&doc, "p").expect("p exists");
+        let p_node = doc.get_node(p_id).expect("p node");
+        let para = extract_paragraph(doc.deref(), p_node, &mut ctx).expect("paragraph");
+
+        for line in &para.lines {
+            for item in &line.items {
+                if let LineItem::Text(run) = item {
+                    assert!(
+                        run.link.is_none(),
+                        "glyph runs under <a href=\"\"> must have link: None"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn paragraph_linkspan_alt_text_uses_anchor_text_content() {
+        let html = r#"<html><body><p><a href="https://x.test">hello world</a></p></body></html>"#;
+        let mut doc = crate::blitz_adapter::parse(html, 400.0, &[]);
+        crate::blitz_adapter::resolve(&mut doc);
+
+        let store = crate::gcpm::running::RunningElementStore::new();
+        let mut ctx = make_ctx!(store);
+        let p_id = find_tag(&doc, "p").expect("p exists");
+        let p_node = doc.get_node(p_id).expect("p node");
+        let para = extract_paragraph(doc.deref(), p_node, &mut ctx).expect("paragraph");
+
+        let mut alt: Option<String> = None;
+        for line in &para.lines {
+            for item in &line.items {
+                if let LineItem::Text(run) = item {
+                    if let Some(ls) = &run.link {
+                        alt = ls.alt_text.clone();
+                    }
+                }
+            }
+        }
+        assert_eq!(alt.as_deref(), Some("hello world"));
     }
 }
