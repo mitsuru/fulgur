@@ -47,9 +47,9 @@ pub struct ConvertContext<'a> {
     /// keyed by node_id for O(1) lookup. When a node_id is present in this
     /// map, `convert_node` wraps the produced pageable with a
     /// `BookmarkMarkerWrapperPageable` carrying the CSS-resolved
-    /// level/label. Nodes absent from the map fall back to the legacy
-    /// hardcoded `h1`-`h6` path (retained for tests that construct a
-    /// `ConvertContext` without running the GCPM passes).
+    /// level/label. Nodes absent from the map are passed through unchanged;
+    /// defaults for `h1`-`h6` come from `FULGUR_UA_CSS` applied by the
+    /// engine before `BookmarkPass` runs.
     pub bookmark_by_node: HashMap<usize, crate::blitz_adapter::BookmarkInfo>,
 }
 
@@ -110,18 +110,6 @@ fn debug_print_tree(doc: &blitz_dom::BaseDocument, node_id: usize, depth: usize)
     }
 }
 
-/// Return heading level (1-6) for `<h1>` … `<h6>`, else None.
-fn heading_level(node: &Node) -> Option<u8> {
-    let elem = node.element_data()?;
-    let tag = elem.name.local.as_ref();
-    let bytes = tag.as_bytes();
-    if bytes.len() == 2 && bytes[0] == b'h' && (b'1'..=b'6').contains(&bytes[1]) {
-        Some(bytes[1] - b'0')
-    } else {
-        None
-    }
-}
-
 fn convert_node(
     doc: &blitz_dom::BaseDocument,
     node_id: usize,
@@ -135,10 +123,10 @@ fn convert_node(
     let result = maybe_prepend_string_set(node_id, result, ctx);
     let result = maybe_prepend_counter_ops(node_id, result, ctx);
     let result = maybe_wrap_transform(doc, node_id, result);
-    // CSS-driven bookmark wrapping takes priority. The hardcoded h1-h6
-    // fallback path only fires when no CSS entry exists for this node
-    // (relevant to tests that construct a `ConvertContext` directly and
-    // therefore never run `BookmarkPass`). Phase 5 removes the fallback.
+    // CSS-driven bookmark wrapping. Entries are populated by
+    // `BookmarkPass` (see `blitz_adapter::run_bookmark_pass`). Nodes absent
+    // from the map are passed through unchanged — there is no hardcoded
+    // h1-h6 fallback; defaults come from `FULGUR_UA_CSS`.
     if let Some(info) = ctx.bookmark_by_node.remove(&node_id) {
         use crate::pageable::{BookmarkMarkerPageable, BookmarkMarkerWrapperPageable};
         Box::new(BookmarkMarkerWrapperPageable::new(
@@ -146,32 +134,8 @@ fn convert_node(
             result,
         ))
     } else {
-        maybe_wrap_heading(doc, node_id, result)
+        result
     }
-}
-
-/// Wrap the result with `BookmarkMarkerWrapperPageable` if the node is an
-/// `h1`-`h6` element, so its position is captured during draw for PDF outline.
-fn maybe_wrap_heading(
-    doc: &blitz_dom::BaseDocument,
-    node_id: usize,
-    result: Box<dyn Pageable>,
-) -> Box<dyn Pageable> {
-    use crate::pageable::{BookmarkMarkerPageable, BookmarkMarkerWrapperPageable};
-    let Some(node) = doc.get_node(node_id) else {
-        return result;
-    };
-    let Some(level) = heading_level(node) else {
-        return result;
-    };
-    let label = crate::gcpm::string_set::extract_text_content(doc, node_id);
-    if label.is_empty() {
-        return result;
-    }
-    Box::new(BookmarkMarkerWrapperPageable::new(
-        BookmarkMarkerPageable::new(level, label),
-        result,
-    ))
 }
 
 /// If the given node has string-set entries, wrap the pageable in a
@@ -3356,20 +3320,55 @@ mod tests {
         );
     }
 
+    /// Walk the DOM to find the first element with `tag` and return its node id.
+    ///
+    /// Used by bookmark fixtures below to populate `bookmark_by_node` directly
+    /// without running the full `BookmarkPass` pipeline — these tests exercise
+    /// the `convert_node` wrapping path in isolation.
+    fn find_node_by_tag(doc: &blitz_html::HtmlDocument, tag: &str) -> Option<usize> {
+        use std::ops::Deref;
+        fn walk(doc: &blitz_dom::BaseDocument, node_id: usize, tag: &str) -> Option<usize> {
+            let node = doc.get_node(node_id)?;
+            if let Some(el) = node.element_data() {
+                if el.name.local.as_ref() == tag {
+                    return Some(node_id);
+                }
+            }
+            for &child_id in &node.children {
+                if let Some(found) = walk(doc, child_id, tag) {
+                    return Some(found);
+                }
+            }
+            None
+        }
+        let root = doc.root_element();
+        walk(doc.deref(), root.id, tag)
+    }
+
     #[test]
     fn h1_wraps_block_with_bookmark_marker() {
+        use crate::blitz_adapter::BookmarkInfo;
         use crate::pageable::BookmarkMarkerWrapperPageable;
 
         let html = r#"<html><body><h1>Chapter One</h1></body></html>"#;
         let doc = crate::blitz_adapter::parse_and_layout(html, 500.0, 500.0, &[]);
+        let h1_id = find_node_by_tag(&doc, "h1").expect("h1 present in DOM");
         let running_store = crate::gcpm::running::RunningElementStore::new();
+        let mut bookmark_by_node = HashMap::new();
+        bookmark_by_node.insert(
+            h1_id,
+            BookmarkInfo {
+                level: 1,
+                label: "Chapter One".to_string(),
+            },
+        );
         let mut ctx = ConvertContext {
             running_store: &running_store,
             assets: None,
             font_cache: HashMap::new(),
             string_set_by_node: HashMap::new(),
             counter_ops_by_node: HashMap::new(),
-            bookmark_by_node: HashMap::new(),
+            bookmark_by_node,
         };
         let root = dom_to_pageable(&doc, &mut ctx);
 
@@ -3393,18 +3392,28 @@ mod tests {
 
     #[test]
     fn h3_produces_level_3_marker() {
+        use crate::blitz_adapter::BookmarkInfo;
         use crate::pageable::BookmarkMarkerWrapperPageable;
 
         let html = r#"<html><body><h3>Subsection</h3></body></html>"#;
         let doc = crate::blitz_adapter::parse_and_layout(html, 500.0, 500.0, &[]);
+        let h3_id = find_node_by_tag(&doc, "h3").expect("h3 present in DOM");
         let running_store = crate::gcpm::running::RunningElementStore::new();
+        let mut bookmark_by_node = HashMap::new();
+        bookmark_by_node.insert(
+            h3_id,
+            BookmarkInfo {
+                level: 3,
+                label: "Subsection".to_string(),
+            },
+        );
         let mut ctx = ConvertContext {
             running_store: &running_store,
             assets: None,
             font_cache: HashMap::new(),
             string_set_by_node: HashMap::new(),
             counter_ops_by_node: HashMap::new(),
-            bookmark_by_node: HashMap::new(),
+            bookmark_by_node,
         };
         let root = dom_to_pageable(&doc, &mut ctx);
 
