@@ -130,26 +130,26 @@ fn convert_node(
     maybe_wrap_heading(doc, node_id, result)
 }
 
-/// Wrap the result with `HeadingMarkerWrapperPageable` if the node is an
+/// Wrap the result with `BookmarkMarkerWrapperPageable` if the node is an
 /// `h1`-`h6` element, so its position is captured during draw for PDF outline.
 fn maybe_wrap_heading(
     doc: &blitz_dom::BaseDocument,
     node_id: usize,
     result: Box<dyn Pageable>,
 ) -> Box<dyn Pageable> {
-    use crate::pageable::{HeadingMarkerPageable, HeadingMarkerWrapperPageable};
+    use crate::pageable::{BookmarkMarkerPageable, BookmarkMarkerWrapperPageable};
     let Some(node) = doc.get_node(node_id) else {
         return result;
     };
     let Some(level) = heading_level(node) else {
         return result;
     };
-    let text = crate::gcpm::string_set::extract_text_content(doc, node_id);
-    if text.is_empty() {
+    let label = crate::gcpm::string_set::extract_text_content(doc, node_id);
+    if label.is_empty() {
         return result;
     }
-    Box::new(HeadingMarkerWrapperPageable::new(
-        HeadingMarkerPageable::new(level, text),
+    Box::new(BookmarkMarkerWrapperPageable::new(
+        BookmarkMarkerPageable::new(level, label),
         result,
     ))
 }
@@ -3329,8 +3329,8 @@ mod tests {
     }
 
     #[test]
-    fn h1_wraps_block_with_heading_marker() {
-        use crate::pageable::HeadingMarkerWrapperPageable;
+    fn h1_wraps_block_with_bookmark_marker() {
+        use crate::pageable::BookmarkMarkerWrapperPageable;
 
         let html = r#"<html><body><h1>Chapter One</h1></body></html>"#;
         let doc = crate::blitz_adapter::parse_and_layout(html, 500.0, 500.0, &[]);
@@ -3346,8 +3346,8 @@ mod tests {
 
         fn collect(p: &dyn crate::pageable::Pageable, out: &mut Vec<(u8, String)>) {
             let any = p.as_any();
-            if let Some(w) = any.downcast_ref::<HeadingMarkerWrapperPageable>() {
-                out.push((w.marker.level, w.marker.text.clone()));
+            if let Some(w) = any.downcast_ref::<BookmarkMarkerWrapperPageable>() {
+                out.push((w.marker.level, w.marker.label.clone()));
                 collect(w.child.as_ref(), out);
                 return;
             }
@@ -3364,7 +3364,7 @@ mod tests {
 
     #[test]
     fn h3_produces_level_3_marker() {
-        use crate::pageable::HeadingMarkerWrapperPageable;
+        use crate::pageable::BookmarkMarkerWrapperPageable;
 
         let html = r#"<html><body><h3>Subsection</h3></body></html>"#;
         let doc = crate::blitz_adapter::parse_and_layout(html, 500.0, 500.0, &[]);
@@ -3380,8 +3380,8 @@ mod tests {
 
         fn find(p: &dyn crate::pageable::Pageable) -> Option<(u8, String)> {
             let any = p.as_any();
-            if let Some(w) = any.downcast_ref::<HeadingMarkerWrapperPageable>() {
-                return Some((w.marker.level, w.marker.text.clone()));
+            if let Some(w) = any.downcast_ref::<BookmarkMarkerWrapperPageable>() {
+                return Some((w.marker.level, w.marker.label.clone()));
             }
             if let Some(b) = any.downcast_ref::<crate::pageable::BlockPageable>() {
                 for c in &b.children {
