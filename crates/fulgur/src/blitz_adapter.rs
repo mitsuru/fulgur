@@ -524,6 +524,7 @@ impl DomPass for InjectCssPass {
     }
 }
 
+use crate::gcpm::bookmark::{BookmarkLevel, BookmarkMapping};
 use crate::gcpm::counter::{CounterState, format_counter};
 use crate::gcpm::running::{RunningElementStore, serialize_node};
 use crate::gcpm::string_set::{StringSetEntry, StringSetStore, extract_text_content};
@@ -882,6 +883,196 @@ impl CounterPass {
         }
         out
     }
+}
+
+/// Resolved bookmark attributes for a single DOM element, as produced by
+/// [`BookmarkPass`]. Consumed by the PDF outline emitter (`render.rs`) to
+/// populate the document's bookmark tree.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BookmarkInfo {
+    /// 1-based outline depth (1 is top-level).
+    pub level: u8,
+    /// Resolved label text for the PDF outline entry.
+    pub label: String,
+}
+
+/// Walks the DOM and, for each element, applies the cascade of
+/// [`BookmarkMapping`] rules to decide whether a PDF outline entry should
+/// be emitted for that element.
+///
+/// # Cascade semantics
+///
+/// Mappings are iterated in the order they were collected from the CSS
+/// stylesheet(s). For each matching mapping, the pass overlays its
+/// `level` / `label` fields onto a per-node accumulator — later matches
+/// overwrite earlier ones per field. This mirrors CSS property cascade
+/// ("last declaration wins") while letting an author split a selector's
+/// level and label into separate rules.
+///
+/// # Suppression
+///
+/// If the final resolved level is [`BookmarkLevel::None_`], no entry is
+/// emitted for the node. This is the spec-prescribed way for an author
+/// stylesheet to override the fulgur UA default that bookmarks every
+/// `h1`–`h6`.
+///
+/// # Label fallback
+///
+/// When a mapping sets `bookmark-level` but leaves `bookmark-label`
+/// unset, the label falls back to the element's rendered text content
+/// (`content()` equivalent, matching GCPM's "unset label ⇒ use the
+/// element's text" rule).
+pub struct BookmarkPass {
+    mappings: Vec<BookmarkMapping>,
+    results: RefCell<Vec<(usize, BookmarkInfo)>>,
+}
+
+impl BookmarkPass {
+    pub fn new(mappings: Vec<BookmarkMapping>) -> Self {
+        Self {
+            mappings,
+            results: RefCell::new(Vec::new()),
+        }
+    }
+
+    pub fn into_results(self) -> Vec<(usize, BookmarkInfo)> {
+        self.results.into_inner()
+    }
+}
+
+impl DomPass for BookmarkPass {
+    fn apply(&self, doc: &mut HtmlDocument, _ctx: &PassContext<'_>) {
+        if self.mappings.is_empty() {
+            return;
+        }
+        let root = doc.root_element();
+        let root_id = root.id;
+        self.walk_tree(doc, root_id, 0);
+    }
+}
+
+impl BookmarkPass {
+    fn walk_tree(&self, doc: &HtmlDocument, node_id: usize, depth: usize) {
+        if depth >= MAX_DOM_DEPTH {
+            return;
+        }
+        let Some(node) = doc.get_node(node_id) else {
+            return;
+        };
+
+        if let Some(elem) = node.element_data() {
+            if is_non_visual_tag(elem.name.local.as_ref()) {
+                return;
+            }
+            self.resolve_node(doc, node_id, elem);
+        }
+
+        for &child_id in &node.children {
+            self.walk_tree(doc, child_id, depth + 1);
+        }
+    }
+
+    /// Apply the cascade of matching mappings to a single element and,
+    /// if the resolution yields a visible bookmark, record it.
+    fn resolve_node(
+        &self,
+        doc: &HtmlDocument,
+        node_id: usize,
+        elem: &blitz_dom::node::ElementData,
+    ) {
+        // Overlay accumulator — iterate forward; each matching mapping
+        // overwrites the fields it sets.
+        let mut level: Option<BookmarkLevel> = None;
+        let mut label: Option<Vec<ContentItem>> = None;
+        let mut any_match = false;
+        for mapping in &self.mappings {
+            if selector_matches(&mapping.selector, elem) {
+                any_match = true;
+                if let Some(l) = &mapping.level {
+                    level = Some(l.clone());
+                }
+                if let Some(lbl) = &mapping.label {
+                    label = Some(lbl.clone());
+                }
+            }
+        }
+        if !any_match {
+            return;
+        }
+
+        // `bookmark-level: none` suppresses the entry outright, regardless
+        // of label.
+        let level_int = match level {
+            Some(BookmarkLevel::Integer(n)) => n,
+            Some(BookmarkLevel::None_) => return,
+            // A rule that only set `bookmark-label` without a level is
+            // effectively inert — GCPM requires a level for an outline
+            // entry. Skip silently.
+            None => return,
+        };
+
+        // Label fallback: if no `bookmark-label` was declared, use the
+        // element's text content (equivalent to `content()`).
+        let resolved_label = match label {
+            Some(items) => resolve_label(&items, doc, node_id, elem),
+            None => extract_text_content(doc, node_id),
+        };
+
+        self.results.borrow_mut().push((
+            node_id,
+            BookmarkInfo {
+                level: level_int,
+                label: resolved_label,
+            },
+        ));
+    }
+}
+
+/// Resolve a `bookmark-label` content list against a concrete DOM element
+/// into a flat string.
+///
+/// Supported items:
+/// - [`ContentItem::String`] — literal text.
+/// - [`ContentItem::ContentText`] — the element's normalized text content
+///   (same extraction as `string-set: … content(text)`).
+/// - [`ContentItem::Attr`] — the named HTML attribute, or empty if absent.
+///
+/// Skipped (no-op) items (tracked in beads `fulgur-yfx`):
+/// - [`ContentItem::ContentBefore`] / [`ContentItem::ContentAfter`] —
+///   pseudo-element text extraction is not yet wired in.
+/// - [`ContentItem::Counter`] — counter state isn't available in this pass.
+/// - [`ContentItem::StringRef`] / [`ContentItem::Element`] — margin-box
+///   constructs that don't resolve in a bookmark-label context.
+fn resolve_label(
+    items: &[ContentItem],
+    doc: &HtmlDocument,
+    node_id: usize,
+    elem: &blitz_dom::node::ElementData,
+) -> String {
+    let mut out = String::new();
+    for item in items {
+        match item {
+            ContentItem::String(s) => out.push_str(s),
+            ContentItem::ContentText => {
+                out.push_str(&extract_text_content(doc, node_id));
+            }
+            ContentItem::Attr(name) => {
+                if let Some(v) = get_attr(elem, name) {
+                    out.push_str(v);
+                }
+                // Missing attribute contributes the empty string per CSS
+                // `attr()` — no action needed.
+            }
+            // TODO(fulgur-yfx): pseudo-element text, counter(), string(),
+            // and element() are not yet resolvable in bookmark labels.
+            ContentItem::ContentBefore
+            | ContentItem::ContentAfter
+            | ContentItem::Counter { .. }
+            | ContentItem::StringRef { .. }
+            | ContentItem::Element { .. } => {}
+        }
+    }
+    out
 }
 
 fn css_escape_string(s: &str) -> String {
