@@ -69,6 +69,20 @@ pub struct ShapedGlyph {
     pub text_range: std::ops::Range<usize>,
 }
 
+/// Target for a clickable link in PDF output.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum LinkTarget {
+    External(Arc<String>),
+    Internal(Arc<String>),
+}
+
+/// Link association attached to a glyph run or inline image.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LinkSpan {
+    pub target: LinkTarget,
+    pub alt_text: Option<String>,
+}
+
 /// A pre-extracted glyph run (single font + style).
 #[derive(Clone, Debug)]
 pub struct ShapedGlyphRun {
@@ -80,6 +94,7 @@ pub struct ShapedGlyphRun {
     pub glyphs: Vec<ShapedGlyph>,
     pub text: String,
     pub x_offset: f32,
+    pub link: Option<Arc<LinkSpan>>,
 }
 
 /// Vertical alignment for inline replaced elements (images).
@@ -111,6 +126,7 @@ pub struct InlineImage {
     pub visible: bool,
     /// Y position relative to line top, computed by recalculate_line_box.
     pub computed_y: f32,
+    pub link: Option<Arc<LinkSpan>>,
 }
 
 /// A single item in a shaped line: either a text glyph run or an inline image.
@@ -769,6 +785,7 @@ mod tests {
             opacity: 1.0,
             visible: true,
             computed_y: 0.0,
+            link: None,
         }
     }
 
@@ -1112,5 +1129,36 @@ mod tests {
         } else {
             panic!("expected image item");
         }
+    }
+}
+
+#[cfg(test)]
+mod link_span_tests {
+    use super::*;
+    use std::sync::Arc;
+
+    #[test]
+    fn link_target_equality_is_by_value() {
+        let a = LinkTarget::External(Arc::new("https://example.com".into()));
+        let b = LinkTarget::External(Arc::new("https://example.com".into()));
+        assert_eq!(a, b);
+        let c = LinkTarget::Internal(Arc::new("section".into()));
+        assert_ne!(a, c);
+    }
+
+    #[test]
+    fn shaped_glyph_run_default_has_no_link() {
+        let run = ShapedGlyphRun {
+            font_data: Arc::new(Vec::new()),
+            font_index: 0,
+            font_size: 12.0,
+            color: [0, 0, 0, 255],
+            decoration: TextDecoration::default(),
+            glyphs: Vec::new(),
+            text: String::new(),
+            x_offset: 0.0,
+            link: None,
+        };
+        assert!(run.link.is_none());
     }
 }

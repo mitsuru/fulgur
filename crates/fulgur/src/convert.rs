@@ -1281,6 +1281,7 @@ fn build_inline_pseudo_image(
         opacity,
         visible,
         computed_y: 0.0,
+        link: None,
     })
 }
 
@@ -1698,6 +1699,7 @@ fn extract_paragraph(
                         glyphs,
                         text: run_text,
                         x_offset: glyph_run.offset(),
+                        link: None,
                     }));
                 }
             }
@@ -2205,6 +2207,7 @@ fn resolve_inside_image_marker(
                 opacity: 1.0,
                 visible: true,
                 computed_y: 0.0,
+                link: None,
             })
         }
         // SVG inline images are not yet supported in LineItem::Image
@@ -2285,6 +2288,7 @@ fn extract_marker_lines(
                         glyphs,
                         text: marker_text.clone(),
                         x_offset: glyph_run.offset(),
+                        link: None,
                     }));
                 }
             }
@@ -2879,6 +2883,7 @@ mod tests {
             opacity: 1.0,
             visible: true,
             computed_y: 0.0,
+            link: None,
         }
     }
 
@@ -2898,6 +2903,7 @@ mod tests {
             }],
             text: "A".to_string(),
             x_offset,
+            link: None,
         }
     }
 
