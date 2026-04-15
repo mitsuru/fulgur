@@ -1856,7 +1856,11 @@ fn extract_paragraph(
         return None;
     }
 
-    Some(ParagraphPageable::new(shaped_lines))
+    // Propagate the inline-root `id` so headings like `<h1 id="top">` that
+    // end up as plain `ParagraphPageable` (no block wrapper triggered by the
+    // default style) still register with `DestinationRegistry` for
+    // `href="#top"` resolution.
+    Some(ParagraphPageable::new(shaped_lines).with_id(extract_block_id(node)))
 }
 
 /// Extract visual style (background, borders, padding, background-image) from a node.

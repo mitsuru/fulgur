@@ -3064,6 +3064,51 @@ mod tests {
     }
 
     #[test]
+    fn destination_registry_captures_paragraph_id_for_headings() {
+        // Headings like `<h1 id="top">` are inline roots that typically
+        // become `ParagraphPageable`, not `BlockPageable`. Ensure their ids
+        // are still captured so `href="#top"` links resolve.
+        use crate::convert::{self, ConvertContext};
+        use crate::gcpm::running::RunningElementStore;
+        use std::collections::HashMap;
+
+        let html = r##"<html><body>
+            <h1 id="top">Top</h1>
+            <div style="height:2000px"></div>
+            <h2 id="next">Next</h2>
+        </body></html>"##;
+        let doc = crate::blitz_adapter::parse_and_layout(html, 400.0, 600.0, &[]);
+        let dummy_store = RunningElementStore::new();
+        let mut ctx = ConvertContext {
+            running_store: &dummy_store,
+            assets: None,
+            font_cache: HashMap::new(),
+            string_set_by_node: HashMap::new(),
+            counter_ops_by_node: HashMap::new(),
+        };
+        let pageable = convert::dom_to_pageable(&doc, &mut ctx);
+        let pages = crate::paginate::paginate(pageable, 400.0, 600.0);
+        let mut registry = DestinationRegistry::default();
+        for (idx, p) in pages.iter().enumerate() {
+            registry.set_current_page(idx);
+            p.collect_ids(0.0, 0.0, 400.0, 600.0, &mut registry);
+        }
+        assert!(
+            registry.get("top").is_some(),
+            "expected <h1 id=top> to be captured"
+        );
+        assert!(
+            registry.get("next").is_some(),
+            "expected <h2 id=next> to be captured"
+        );
+        assert_ne!(
+            registry.get("top"),
+            registry.get("next"),
+            "headings separated by 2000px spacer should not share location"
+        );
+    }
+
+    #[test]
     fn destination_registry_first_write_wins_for_duplicate_ids() {
         let mut reg = DestinationRegistry::default();
         reg.set_current_page(0);

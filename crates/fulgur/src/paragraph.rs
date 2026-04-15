@@ -153,6 +153,11 @@ pub struct ParagraphPageable {
     pub cached_height: f32,
     pub opacity: f32,
     pub visible: bool,
+    /// HTML `id` attribute of the inline-root element this paragraph was
+    /// extracted from. Used by `DestinationRegistry` to resolve `#anchor`
+    /// links targeting headings (`<h1 id=..>`) and similar inline-root
+    /// elements that do not gain a `BlockPageable` wrapper.
+    pub id: Option<Arc<String>>,
 }
 
 impl ParagraphPageable {
@@ -164,7 +169,14 @@ impl ParagraphPageable {
             cached_height,
             opacity: 1.0,
             visible: true,
+            id: None,
         }
+    }
+
+    /// Attach an `id` anchor to this paragraph. Chain after `new()`.
+    pub fn with_id(mut self, id: Option<Arc<String>>) -> Self {
+        self.id = id;
+        self
     }
 }
 
@@ -708,6 +720,7 @@ impl Pageable for ParagraphPageable {
         let mut first = ParagraphPageable::new(self.lines[..split_at].to_vec());
         first.opacity = self.opacity;
         first.visible = self.visible;
+        first.id = self.id.clone();
 
         // Rebase second fragment: baseline is absolute from paragraph top,
         // so subtract the consumed height to make it relative to the new fragment.
@@ -730,6 +743,11 @@ impl Pageable for ParagraphPageable {
         let mut second = ParagraphPageable::new(second_lines);
         second.opacity = self.opacity;
         second.visible = self.visible;
+        // Both fragments inherit the id. `DestinationRegistry::record` is
+        // first-write-wins, so the second fragment's entry is a no-op when
+        // it lands on a later page — we just carry the id so ordering quirks
+        // don't drop anchors.
+        second.id = self.id.clone();
 
         Some((Box::new(first), Box::new(second)))
     }
@@ -757,6 +775,22 @@ impl Pageable for ParagraphPageable {
 
     fn as_any(&self) -> &dyn std::any::Any {
         self
+    }
+
+    fn collect_ids(
+        &self,
+        _x: Pt,
+        y: Pt,
+        _avail_width: Pt,
+        _avail_height: Pt,
+        registry: &mut crate::pageable::DestinationRegistry,
+    ) {
+        if let Some(id) = &self.id
+            && !id.is_empty()
+        {
+            registry.record(id, y);
+        }
+        // No child recursion: paragraph lines are glyph data, not Pageables.
     }
 }
 
@@ -1129,6 +1163,62 @@ mod tests {
         } else {
             panic!("expected image item");
         }
+    }
+
+    // ---------- Id propagation ----------
+
+    #[test]
+    fn paragraph_default_has_no_id() {
+        let p = ParagraphPageable::new(Vec::new());
+        assert!(p.id.is_none());
+    }
+
+    #[test]
+    fn paragraph_with_id_stores_value() {
+        let p = ParagraphPageable::new(Vec::new()).with_id(Some(Arc::new("section-1".to_string())));
+        assert_eq!(p.id.as_deref().map(String::as_str), Some("section-1"));
+    }
+
+    #[test]
+    fn collect_ids_records_paragraph_id() {
+        use crate::pageable::DestinationRegistry;
+        let p = ParagraphPageable::new(Vec::new()).with_id(Some(Arc::new("anchor".to_string())));
+        let mut reg = DestinationRegistry::default();
+        reg.set_current_page(3);
+        p.collect_ids(10.0, 42.0, 400.0, 600.0, &mut reg);
+        assert_eq!(reg.get("anchor"), Some((3, 42.0)));
+    }
+
+    #[test]
+    fn collect_ids_is_noop_without_id() {
+        use crate::pageable::DestinationRegistry;
+        let p = ParagraphPageable::new(Vec::new());
+        let mut reg = DestinationRegistry::default();
+        p.collect_ids(0.0, 0.0, 400.0, 600.0, &mut reg);
+        assert!(reg.get("anything").is_none());
+    }
+
+    #[test]
+    fn split_propagates_id_to_both_fragments() {
+        // Four lines so orphans/widows (default=2) allow splitting at line 2.
+        let line1 = text_line(16.0, 12.0);
+        let line2 = text_line(16.0, 28.0);
+        let line3 = text_line(16.0, 44.0);
+        let line4 = text_line(16.0, 60.0);
+        let para = ParagraphPageable::new(vec![line1, line2, line3, line4])
+            .with_id(Some(Arc::new("heading".to_string())));
+
+        let (first, second) = para.split(100.0, 32.0).expect("should split");
+        let first_para = first.as_any().downcast_ref::<ParagraphPageable>().unwrap();
+        let second_para = second.as_any().downcast_ref::<ParagraphPageable>().unwrap();
+        assert_eq!(
+            first_para.id.as_deref().map(String::as_str),
+            Some("heading")
+        );
+        assert_eq!(
+            second_para.id.as_deref().map(String::as_str),
+            Some("heading")
+        );
     }
 }
 
