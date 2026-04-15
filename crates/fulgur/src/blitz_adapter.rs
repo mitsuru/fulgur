@@ -2498,4 +2498,204 @@ li::marker { content: url("star.png"); }
             "should handle uppercase STYLE with attributes, got: {result}"
         );
     }
+
+    // ─── BookmarkPass ──────────────────────────────────────────────
+
+    fn run_bookmark_pass(html: &str, mappings: Vec<BookmarkMapping>) -> Vec<(usize, BookmarkInfo)> {
+        let mut doc = parse(html, 400.0, &[]);
+        let pass = BookmarkPass::new(mappings);
+        let ctx = PassContext {
+            viewport_width: 400.0,
+            viewport_height: 10000.0,
+            font_data: &[],
+        };
+        pass.apply(&mut doc, &ctx);
+        pass.into_results()
+    }
+
+    #[test]
+    fn bookmark_pass_matches_class_selector() {
+        let html = r#"<html><body><div class="ch" data-title="Intro">X</div></body></html>"#;
+        let results = run_bookmark_pass(
+            html,
+            vec![BookmarkMapping {
+                selector: ParsedSelector::Class("ch".into()),
+                level: Some(BookmarkLevel::Integer(1)),
+                label: Some(vec![ContentItem::Attr("data-title".into())]),
+            }],
+        );
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].1.level, 1);
+        assert_eq!(results[0].1.label, "Intro");
+    }
+
+    #[test]
+    fn bookmark_pass_resolves_content_text() {
+        let html = r#"<html><body><h2>Hello World</h2></body></html>"#;
+        let results = run_bookmark_pass(
+            html,
+            vec![BookmarkMapping {
+                selector: ParsedSelector::Tag("h2".into()),
+                level: Some(BookmarkLevel::Integer(2)),
+                label: Some(vec![ContentItem::ContentText]),
+            }],
+        );
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].1.level, 2);
+        assert_eq!(results[0].1.label, "Hello World");
+    }
+
+    #[test]
+    fn bookmark_pass_resolves_literal_and_mixed() {
+        let html = r#"<html><body>
+            <section class="ch" data-num="1"><h2>Intro</h2></section>
+        </body></html>"#;
+        let results = run_bookmark_pass(
+            html,
+            vec![BookmarkMapping {
+                selector: ParsedSelector::Class("ch".into()),
+                level: Some(BookmarkLevel::Integer(1)),
+                label: Some(vec![
+                    ContentItem::String("Ch. ".into()),
+                    ContentItem::Attr("data-num".into()),
+                    ContentItem::String(": ".into()),
+                    ContentItem::ContentText,
+                ]),
+            }],
+        );
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].1.level, 1);
+        assert_eq!(results[0].1.label, "Ch. 1: Intro");
+    }
+
+    #[test]
+    fn bookmark_pass_skips_counter_gracefully() {
+        use crate::gcpm::CounterStyle;
+
+        let html = r#"<html><body><h1>Title</h1></body></html>"#;
+        let results = run_bookmark_pass(
+            html,
+            vec![BookmarkMapping {
+                selector: ParsedSelector::Tag("h1".into()),
+                level: Some(BookmarkLevel::Integer(1)),
+                label: Some(vec![
+                    ContentItem::Counter {
+                        name: "chapter".into(),
+                        style: CounterStyle::Decimal,
+                    },
+                    ContentItem::String(": ".into()),
+                    ContentItem::ContentText,
+                ]),
+            }],
+        );
+        assert_eq!(results.len(), 1);
+        // counter() is a no-op in bookmark-label for now; only literal + text survive.
+        assert_eq!(results[0].1.label, ": Title");
+    }
+
+    #[test]
+    fn bookmark_pass_none_suppresses_entry() {
+        let html = r#"<html><body><h1>Title</h1></body></html>"#;
+        let results = run_bookmark_pass(
+            html,
+            vec![
+                BookmarkMapping {
+                    selector: ParsedSelector::Tag("h1".into()),
+                    level: Some(BookmarkLevel::Integer(1)),
+                    label: Some(vec![ContentItem::ContentText]),
+                },
+                BookmarkMapping {
+                    selector: ParsedSelector::Tag("h1".into()),
+                    level: Some(BookmarkLevel::None_),
+                    label: None,
+                },
+            ],
+        );
+        assert!(
+            results.is_empty(),
+            "bookmark-level: none must suppress the entry, got: {results:?}"
+        );
+    }
+
+    #[test]
+    fn bookmark_pass_fallback_label_when_level_only() {
+        let html = r#"<html><body><div class="aside">Note text</div></body></html>"#;
+        let results = run_bookmark_pass(
+            html,
+            vec![BookmarkMapping {
+                selector: ParsedSelector::Class("aside".into()),
+                level: Some(BookmarkLevel::Integer(2)),
+                label: None,
+            }],
+        );
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].1.level, 2);
+        assert_eq!(results[0].1.label, "Note text");
+    }
+
+    #[test]
+    fn bookmark_pass_cascade_last_wins() {
+        let html = r#"<html><body><h1>Heading</h1></body></html>"#;
+        let results = run_bookmark_pass(
+            html,
+            vec![
+                BookmarkMapping {
+                    selector: ParsedSelector::Tag("h1".into()),
+                    level: Some(BookmarkLevel::Integer(1)),
+                    label: Some(vec![ContentItem::String("A".into())]),
+                },
+                BookmarkMapping {
+                    selector: ParsedSelector::Tag("h1".into()),
+                    level: Some(BookmarkLevel::Integer(2)),
+                    label: Some(vec![ContentItem::String("B".into())]),
+                },
+            ],
+        );
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].1.level, 2);
+        assert_eq!(results[0].1.label, "B");
+    }
+
+    #[test]
+    fn bookmark_pass_no_mappings_is_noop() {
+        let html = r#"<html><body><h1>Title</h1></body></html>"#;
+        let results = run_bookmark_pass(html, vec![]);
+        assert!(results.is_empty());
+    }
+
+    #[test]
+    fn bookmark_pass_skips_non_visual_tags() {
+        // <style> content must not leak into the bookmark label even when
+        // a broad `*` or matching tag selector hits it.
+        let html = r#"<html><head><style>h1 { color: red; }</style></head>
+            <body><h1>Heading</h1></body></html>"#;
+        let results = run_bookmark_pass(
+            html,
+            vec![BookmarkMapping {
+                selector: ParsedSelector::Tag("style".into()),
+                level: Some(BookmarkLevel::Integer(1)),
+                label: Some(vec![ContentItem::ContentText]),
+            }],
+        );
+        assert!(
+            results.is_empty(),
+            "<style> is a non-visual tag and must be skipped"
+        );
+    }
+
+    #[test]
+    fn bookmark_pass_label_only_without_level_is_skipped() {
+        // A mapping with only `bookmark-label` and no level is inert —
+        // GCPM requires a level to emit an outline entry.
+        let html = r#"<html><body><h1>Title</h1></body></html>"#;
+        let results = run_bookmark_pass(
+            html,
+            vec![BookmarkMapping {
+                selector: ParsedSelector::Tag("h1".into()),
+                level: None,
+                label: Some(vec![ContentItem::ContentText]),
+            }],
+        );
+        assert!(results.is_empty());
+    }
 }
