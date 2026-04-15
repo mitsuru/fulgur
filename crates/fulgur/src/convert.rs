@@ -43,6 +43,14 @@ pub struct ConvertContext<'a> {
     pub string_set_by_node: HashMap<usize, Vec<(String, String)>>,
     /// Counter operations from CounterPass, keyed by node_id for O(1) lookup.
     pub counter_ops_by_node: HashMap<usize, Vec<CounterOp>>,
+    /// Resolved bookmark entries from [`crate::blitz_adapter::BookmarkPass`],
+    /// keyed by node_id for O(1) lookup. When a node_id is present in this
+    /// map, `convert_node` wraps the produced pageable with a
+    /// `BookmarkMarkerWrapperPageable` carrying the CSS-resolved
+    /// level/label. Nodes absent from the map fall back to the legacy
+    /// hardcoded `h1`-`h6` path (retained for tests that construct a
+    /// `ConvertContext` without running the GCPM passes).
+    pub bookmark_by_node: HashMap<usize, crate::blitz_adapter::BookmarkInfo>,
 }
 
 impl ConvertContext<'_> {
@@ -2808,6 +2816,7 @@ mod tests {
             font_cache: HashMap::new(),
             string_set_by_node: HashMap::new(),
             counter_ops_by_node: HashMap::new(),
+            bookmark_by_node: HashMap::new(),
         };
         let tree = super::dom_to_pageable(&doc, &mut ctx);
 
@@ -2850,6 +2859,7 @@ mod tests {
             font_cache: HashMap::new(),
             string_set_by_node: HashMap::new(),
             counter_ops_by_node: HashMap::new(),
+            bookmark_by_node: HashMap::new(),
         };
         let tree = super::dom_to_pageable(&doc, &mut ctx);
 
@@ -2896,6 +2906,7 @@ mod tests {
             font_cache: HashMap::new(),
             string_set_by_node: HashMap::new(),
             counter_ops_by_node: HashMap::new(),
+            bookmark_by_node: HashMap::new(),
         };
         let tree = super::dom_to_pageable(&doc, &mut ctx);
         let mut images = Vec::new();
@@ -2950,6 +2961,7 @@ mod tests {
             font_cache: HashMap::new(),
             string_set_by_node: HashMap::new(),
             counter_ops_by_node: HashMap::new(),
+            bookmark_by_node: HashMap::new(),
         };
         let tree = super::dom_to_pageable(&doc, &mut ctx);
         let mut images = Vec::new();
@@ -2995,6 +3007,7 @@ mod tests {
             font_cache: HashMap::new(),
             string_set_by_node: HashMap::new(),
             counter_ops_by_node: HashMap::new(),
+            bookmark_by_node: HashMap::new(),
         };
         let tree = super::dom_to_pageable(&doc, &mut ctx);
         let mut images = Vec::new();
@@ -3255,6 +3268,7 @@ mod tests {
             font_cache: HashMap::new(),
             string_set_by_node: HashMap::new(),
             counter_ops_by_node: HashMap::new(),
+            bookmark_by_node: HashMap::new(),
         };
         let tree = super::dom_to_pageable(&doc, &mut ctx);
 
@@ -3284,6 +3298,7 @@ mod tests {
             font_cache: HashMap::new(),
             string_set_by_node: HashMap::new(),
             counter_ops_by_node: HashMap::new(),
+            bookmark_by_node: HashMap::new(),
         };
         let tree = super::dom_to_pageable(&doc, &mut ctx);
 
@@ -3316,6 +3331,7 @@ mod tests {
             font_cache: HashMap::new(),
             string_set_by_node: HashMap::new(),
             counter_ops_by_node: HashMap::new(),
+            bookmark_by_node: HashMap::new(),
         };
         let tree = super::dom_to_pageable(&doc, &mut ctx);
 
@@ -3341,6 +3357,7 @@ mod tests {
             font_cache: HashMap::new(),
             string_set_by_node: HashMap::new(),
             counter_ops_by_node: HashMap::new(),
+            bookmark_by_node: HashMap::new(),
         };
         let root = dom_to_pageable(&doc, &mut ctx);
 
@@ -3375,6 +3392,7 @@ mod tests {
             font_cache: HashMap::new(),
             string_set_by_node: HashMap::new(),
             counter_ops_by_node: HashMap::new(),
+            bookmark_by_node: HashMap::new(),
         };
         let root = dom_to_pageable(&doc, &mut ctx);
 
