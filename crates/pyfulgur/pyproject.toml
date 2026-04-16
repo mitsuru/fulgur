@@ -1,0 +1,31 @@
+# NOTE: placeholder build uses setuptools. Real builds will use maturin.
+[build-system]
+requires = ["setuptools>=68.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pyfulgur"
+version = "0.0.1"
+description = "Python bindings for fulgur — offline HTML/CSS to PDF conversion"
+readme = "README.md"
+license = "MIT OR Apache-2.0"
+requires-python = ">=3.9"
+authors = [
+    { name = "Mitsuru Hayasaka", email = "hayasaka.mitsuru@gmail.com" },
+]
+keywords = ["pdf", "html", "css", "conversion", "typesetting"]
+classifiers = [
+    "Development Status :: 1 - Planning",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: Implementation :: CPython",
+    "Programming Language :: Rust",
+    "Topic :: Text Processing :: Markup :: HTML",
+]
+
+[project.urls]
+Repository = "https://github.com/mitsuru/fulgur"
+Documentation = "https://github.com/mitsuru/fulgur"
+
+[tool.setuptools.packages.find]
+where = ["."]
