@@ -2730,9 +2730,10 @@ fn shape_marker_with_skrifa(
         skrifa::instance::LocationRef::default(),
     );
 
-    let text_len = text.len();
     let mut glyphs = Vec::new();
+    let mut byte_offset = 0usize;
     for ch in text.chars() {
+        let ch_len = ch.len_utf8();
         let gid = charmap.map(ch).unwrap_or(skrifa::GlyphId::new(0));
         let advance = glyph_metrics.advance_width(gid).unwrap_or(0.0);
         glyphs.push(ShapedGlyph {
@@ -2740,8 +2741,9 @@ fn shape_marker_with_skrifa(
             x_advance: advance / font_size,
             x_offset: 0.0,
             y_offset: 0.0,
-            text_range: 0..text_len,
+            text_range: byte_offset..byte_offset + ch_len,
         });
+        byte_offset += ch_len;
     }
 
     Some(ShapedGlyphRun {
