@@ -3819,10 +3819,16 @@ mod affine_tests {
             height: 10.0,
         };
         let q = Affine2D::scale(0.0, 1.0).transform_rect(&r);
-        assert!(q.is_degenerate(), "scaleX(0) should produce degenerate quad");
+        assert!(
+            q.is_degenerate(),
+            "scaleX(0) should produce degenerate quad"
+        );
 
         let q2 = Affine2D::scale(1.0, 0.0).transform_rect(&r);
-        assert!(q2.is_degenerate(), "scaleY(0) should produce degenerate quad");
+        assert!(
+            q2.is_degenerate(),
+            "scaleY(0) should produce degenerate quad"
+        );
     }
 
     #[test]
@@ -4183,7 +4189,10 @@ mod link_collector_transform_tests {
         );
         lc.pop_transform();
         let occs = lc.into_occurrences();
-        assert!(occs.is_empty(), "scaleX(0) should produce no link occurrence");
+        assert!(
+            occs.is_empty(),
+            "scaleX(0) should produce no link occurrence"
+        );
     }
 }
 
