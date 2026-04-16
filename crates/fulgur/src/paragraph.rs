@@ -1362,11 +1362,7 @@ mod link_collect_tests {
         let q = &first.quads[0];
         let width = q.points[1][0] - q.points[0][0];
         let height = q.points[0][1] - q.points[3][1];
-        assert!(
-            width > 0.0,
-            "expected positive quad width, got {}",
-            width,
-        );
+        assert!(width > 0.0, "expected positive quad width, got {}", width,);
         assert!(
             height > 0.0,
             "expected positive quad height, got {}",

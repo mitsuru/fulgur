@@ -2237,9 +2237,15 @@ impl Pageable for TransformWrapperPageable {
 
     fn draw(&self, canvas: &mut Canvas<'_, '_>, x: Pt, y: Pt, avail_width: Pt, avail_height: Pt) {
         let full = self.effective_matrix(x, y);
+        if let Some(lc) = canvas.link_collector.as_mut() {
+            lc.push_transform(full);
+        }
         canvas.surface.push_transform(&full.to_krilla());
         self.inner.draw(canvas, x, y, avail_width, avail_height);
         canvas.surface.pop();
+        if let Some(lc) = canvas.link_collector.as_mut() {
+            lc.pop_transform();
+        }
     }
 
     fn clone_box(&self) -> Box<dyn Pageable> {
@@ -2266,10 +2272,11 @@ impl Pageable for TransformWrapperPageable {
         avail_height: Pt,
         registry: &mut DestinationRegistry,
     ) {
-        // Transform is a visual effect; the anchor position is the pre-transform
-        // block-top, matching where the destination "logically" lives.
+        let full = self.effective_matrix(x, y);
+        registry.push_transform(full);
         self.inner
             .collect_ids(x, y, avail_width, avail_height, registry);
+        registry.pop_transform();
     }
 }
 
@@ -3748,12 +3755,7 @@ mod affine_tests {
             height: 40.0,
         };
         let q = Affine2D::IDENTITY.transform_rect(&r);
-        let expected = [
-            [10.0, 60.0],
-            [40.0, 60.0],
-            [40.0, 20.0],
-            [10.0, 20.0],
-        ];
+        let expected = [[10.0, 60.0], [40.0, 60.0], [40.0, 20.0], [10.0, 20.0]];
         for (i, (got, exp)) in q.points.iter().zip(expected.iter()).enumerate() {
             assert!((got[0] - exp[0]).abs() < 1e-5, "quad[{i}].x");
             assert!((got[1] - exp[1]).abs() < 1e-5, "quad[{i}].y");
@@ -4077,10 +4079,7 @@ mod link_collector_transform_tests {
         let q = &occs[0].quads[0];
         // After 90° rotation: (x,y) → (-y, x)
         // BL (0,5) → (-5, 0)
-        assert!(
-            (q.points[0][0] - (-5.0)).abs() < 1e-4,
-            "bl.x after rot90"
-        );
+        assert!((q.points[0][0] - (-5.0)).abs() < 1e-4, "bl.x after rot90");
         assert!((q.points[0][1] - 0.0).abs() < 1e-4, "bl.y after rot90");
     }
 

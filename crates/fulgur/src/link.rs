@@ -59,4 +59,3 @@ pub(crate) fn emit_link_annotations(
         page.add_annotation(annotation);
     }
 }
-
