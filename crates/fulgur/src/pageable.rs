@@ -148,6 +148,14 @@ impl Affine2D {
     pub fn to_krilla(&self) -> krilla::geom::Transform {
         krilla::geom::Transform::from_row(self.a, self.b, self.c, self.d, self.e, self.f)
     }
+
+    /// Apply this affine transform to a 2D point.
+    pub fn transform_point(&self, x: f32, y: f32) -> (f32, f32) {
+        (
+            self.a * x + self.c * y + self.e,
+            self.b * x + self.d * y + self.f,
+        )
+    }
 }
 
 /// Matrix product `self * rhs`. Applied to a point `p`, this yields
@@ -3621,6 +3629,30 @@ mod affine_tests {
         assert!(approx(s.c, 0.0));
         assert!(approx(s.e, 0.0));
         assert!(approx(s.f, 0.0));
+    }
+
+    #[test]
+    fn transform_point_identity() {
+        let m = Affine2D::IDENTITY;
+        let (x, y) = m.transform_point(10.0, 20.0);
+        assert!((x - 10.0).abs() < 1e-5);
+        assert!((y - 20.0).abs() < 1e-5);
+    }
+
+    #[test]
+    fn transform_point_translation() {
+        let m = Affine2D::translation(5.0, -3.0);
+        let (x, y) = m.transform_point(10.0, 20.0);
+        assert!((x - 15.0).abs() < 1e-5);
+        assert!((y - 17.0).abs() < 1e-5);
+    }
+
+    #[test]
+    fn transform_point_rotation_90() {
+        let m = Affine2D::rotation(std::f32::consts::FRAC_PI_2);
+        let (x, y) = m.transform_point(1.0, 0.0);
+        assert!((x - 0.0).abs() < 1e-4);
+        assert!((y - 1.0).abs() < 1e-4);
     }
 }
 
