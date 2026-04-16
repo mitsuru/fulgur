@@ -23,7 +23,7 @@ for dir in examples/*/; do
   done
   if [ -f "${dir}fulgur.args" ]; then
     while IFS= read -r line; do
-      [[ -z "$line" || "$line" == \#* ]] && continue
+      [[ -z "$line" || "$line" == '#'* ]] && continue
       args+=($line)
     done < "${dir}fulgur.args"
   fi
