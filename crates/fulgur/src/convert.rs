@@ -693,7 +693,25 @@ fn convert_node_inner(
                 if let Some(marker_run) =
                     shape_marker_with_skrifa(marker, &font_data, font_index, font_size_pt, color)
                 {
-                    inject_inside_marker_into_children(&mut positioned_children, marker_run);
+                    if !inject_inside_marker_into_children(
+                        &mut positioned_children,
+                        marker_run.clone(),
+                    ) {
+                        // No paragraph descendant found — insert a standalone marker paragraph.
+                        let paragraph = ParagraphPageable::new(vec![ShapedLine {
+                            height: line_height,
+                            baseline: line_height / DEFAULT_LINE_HEIGHT_RATIO,
+                            items: vec![LineItem::Text(marker_run)],
+                        }]);
+                        positioned_children.insert(
+                            0,
+                            PositionedChild {
+                                child: Box::new(paragraph),
+                                x: 0.0,
+                                y: 0.0,
+                            },
+                        );
+                    }
                 }
             }
 
@@ -2767,7 +2785,17 @@ fn inject_inside_marker_into_children(
     // Direct ParagraphPageable child
     if let Some(para) = pc.child.as_any().downcast_ref::<ParagraphPageable>() {
         let mut para_clone = para.clone();
-        if !para_clone.lines.is_empty() {
+        if para_clone.lines.is_empty() {
+            // Empty paragraph — create a line with just the marker.
+            let font_size = marker_run.font_size;
+            let line_height = font_size * DEFAULT_LINE_HEIGHT_RATIO;
+            let baseline = line_height / DEFAULT_LINE_HEIGHT_RATIO;
+            para_clone.lines.push(ShapedLine {
+                height: line_height,
+                baseline,
+                items: vec![LineItem::Text(marker_run)],
+            });
+        } else {
             for item in &mut para_clone.lines[0].items {
                 match item {
                     LineItem::Text(run) => run.x_offset += marker_width,
@@ -2778,8 +2806,8 @@ fn inject_inside_marker_into_children(
                 .items
                 .insert(0, LineItem::Text(marker_run));
             recalculate_paragraph_line_boxes(&mut para_clone.lines);
-            para_clone.cached_height = para_clone.lines.iter().map(|l| l.height).sum();
         }
+        para_clone.cached_height = para_clone.lines.iter().map(|l| l.height).sum();
         pc.child = Box::new(para_clone);
         return true;
     }
