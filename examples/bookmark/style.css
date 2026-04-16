@@ -20,7 +20,7 @@ h3 {
 /* ── Page layout ─────────────────────────────── */
 
 @page {
-  size: A4;
+  size: a4;
   margin: 20mm 25mm;
 }
 

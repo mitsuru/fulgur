@@ -248,14 +248,10 @@ impl<'i, 'a> QualifiedRuleParser<'i> for GcpmSheetParser<'a> {
         }
 
         // Push a bookmark mapping when either `bookmark-level` or
-        // `bookmark-label` was declared. Level-only rules (e.g. `h1
-        // { bookmark-level: 1 }` paired with a UA-default label from a
-        // separate rule) and label-only rules (e.g. overriding the label
-        // via `bookmark-label: content()` while inheriting the level)
-        // are both valid per GCPM. Pseudo-element rules are currently
-        // passed through; bookmark properties on `::before` / `::after`
-        // have no defined semantic, so nothing downstream acts on them.
-        if bookmark_level.is_some() || bookmark_label.is_some() {
+        // `bookmark-label` was declared on a real element (not a
+        // pseudo-element). `bookmark-*` on `::before` / `::after` has no
+        // defined semantic in GCPM, so pseudo-element rules are skipped.
+        if pseudo.is_none() && (bookmark_level.is_some() || bookmark_label.is_some()) {
             self.bookmark_mappings.push(BookmarkMapping {
                 selector: selector.clone(),
                 level: bookmark_level,
@@ -1941,6 +1937,16 @@ mod tests {
         let css = "p { color: red; }";
         let ctx = parse_gcpm(css);
         assert!(ctx.bookmark_mappings.is_empty());
+    }
+
+    #[test]
+    fn test_parse_bookmark_pseudo_element_skipped() {
+        let css = "h1::before { bookmark-level: 1; bookmark-label: content(); }";
+        let ctx = parse_gcpm(css);
+        assert!(
+            ctx.bookmark_mappings.is_empty(),
+            "bookmark-* on pseudo-elements must be ignored"
+        );
     }
 
     #[test]
