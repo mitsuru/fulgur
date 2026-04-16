@@ -301,6 +301,17 @@ pub struct Quad {
 }
 
 impl Quad {
+    /// Returns `true` when the quad has collapsed to zero (or near-zero) area,
+    /// e.g. after a `scaleX(0)` transform. Uses the cross product of two edge
+    /// vectors originating from the bottom-left corner.
+    pub fn is_degenerate(&self) -> bool {
+        let ax = self.points[1][0] - self.points[0][0];
+        let ay = self.points[1][1] - self.points[0][1];
+        let bx = self.points[3][0] - self.points[0][0];
+        let by = self.points[3][1] - self.points[0][1];
+        (ax * by - ay * bx).abs() <= f32::EPSILON
+    }
+
     /// Convert to krilla's `Quadrilateral` for PDF annotation emission.
     pub fn to_krilla(&self) -> krilla::geom::Quadrilateral {
         krilla::geom::Quadrilateral([
@@ -400,6 +411,12 @@ impl LinkCollector {
             return;
         }
         let quad = self.current_transform().transform_rect(&rect);
+        // Also reject quads that collapsed to zero area after transform
+        // (e.g. scaleX(0)). Cross product of two edge vectors gives
+        // twice the signed area of the parallelogram.
+        if quad.is_degenerate() {
+            return;
+        }
         let page_idx = self.current_page_idx;
         let key = (page_idx, std::sync::Arc::as_ptr(link) as usize);
         let bucket = self.pages.entry(page_idx).or_default();
@@ -3792,6 +3809,33 @@ mod affine_tests {
         assert!((q.points[0][0] - 100.0).abs() < 1e-5);
         assert!((q.points[0][1] - 210.0).abs() < 1e-5);
     }
+
+    #[test]
+    fn quad_is_degenerate_after_scale_zero() {
+        let r = Rect {
+            x: 0.0,
+            y: 0.0,
+            width: 10.0,
+            height: 10.0,
+        };
+        let q = Affine2D::scale(0.0, 1.0).transform_rect(&r);
+        assert!(q.is_degenerate(), "scaleX(0) should produce degenerate quad");
+
+        let q2 = Affine2D::scale(1.0, 0.0).transform_rect(&r);
+        assert!(q2.is_degenerate(), "scaleY(0) should produce degenerate quad");
+    }
+
+    #[test]
+    fn quad_is_not_degenerate_for_normal_transform() {
+        let r = Rect {
+            x: 10.0,
+            y: 20.0,
+            width: 30.0,
+            height: 40.0,
+        };
+        let q = Affine2D::rotation(std::f32::consts::FRAC_PI_4).transform_rect(&r);
+        assert!(!q.is_degenerate(), "rotated rect should not be degenerate");
+    }
 }
 
 #[cfg(test)]
@@ -4120,6 +4164,26 @@ mod link_collector_transform_tests {
         // TL corner untransformed: (5, 10)
         assert!((q.points[3][0] - 5.0).abs() < 1e-5, "tl.x identity");
         assert!((q.points[3][1] - 10.0).abs() < 1e-5, "tl.y identity");
+    }
+
+    #[test]
+    fn scale_zero_x_produces_no_occurrence() {
+        let mut lc = LinkCollector::new();
+        lc.set_current_page(0);
+        lc.push_transform(Affine2D::scale(0.0, 1.0));
+        let link = make_link();
+        lc.push_rect(
+            &link,
+            Rect {
+                x: 0.0,
+                y: 0.0,
+                width: 10.0,
+                height: 10.0,
+            },
+        );
+        lc.pop_transform();
+        let occs = lc.into_occurrences();
+        assert!(occs.is_empty(), "scaleX(0) should produce no link occurrence");
     }
 }
 
