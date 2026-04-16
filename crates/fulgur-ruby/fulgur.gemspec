@@ -10,7 +10,7 @@ Gem::Specification.new do |s|
   s.authors     = ["Mitsuru Hayasaka"]
   s.email       = "hayasaka.mitsuru@gmail.com"
   s.homepage    = "https://github.com/mitsuru/fulgur"
-  s.license     = "MIT"
+  s.licenses    = ["MIT", "Apache-2.0"]
   s.metadata    = {
     "source_code_uri"   => "https://github.com/mitsuru/fulgur",
     "changelog_uri"     => "https://github.com/mitsuru/fulgur/blob/main/CHANGELOG.md",

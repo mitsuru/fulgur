@@ -7,7 +7,7 @@ See https://github.com/mitsuru/fulgur for details.
 __version__ = "0.0.1"
 
 
-def _placeholder() -> None:
+def placeholder() -> None:
     raise NotImplementedError(
         "pyfulgur is not yet implemented. "
         "See https://github.com/mitsuru/fulgur for progress."
