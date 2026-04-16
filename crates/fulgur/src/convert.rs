@@ -645,73 +645,80 @@ fn convert_node_inner(
         let children: &[usize] = &node.children;
         if children.is_empty() {
             // Empty <li>: create a standalone paragraph with just the marker.
-            if let Some((font_data, font_index)) = find_marker_font(marker, ctx.assets, &[]) {
-                if let Some(marker_run) =
-                    shape_marker_with_skrifa(marker, &font_data, font_index, font_size_pt, color)
-                {
-                    let paragraph = ParagraphPageable::new(vec![ShapedLine {
-                        height: line_height,
-                        baseline: line_height / DEFAULT_LINE_HEIGHT_RATIO,
-                        items: vec![LineItem::Text(marker_run)],
-                    }]);
-                    let (before_pseudo, after_pseudo) =
-                        build_block_pseudo_images(doc, node, content_box, ctx.assets);
-                    let paragraph_children = vec![PositionedChild {
-                        child: Box::new(paragraph),
-                        x: 0.0,
-                        y: 0.0,
-                    }];
-                    let positioned_children = wrap_with_block_pseudo_images(
-                        before_pseudo,
-                        after_pseudo,
-                        content_box,
-                        paragraph_children,
-                    );
-                    let needs_wrapper = style.needs_block_wrapper();
-                    let mut block = BlockPageable::with_positioned_children(positioned_children)
-                        .with_style(style)
-                        .with_opacity(opacity)
-                        .with_visible(visible)
-                        .with_id(extract_block_id(node));
-                    block.wrap(width, 10000.0);
-                    if needs_wrapper {
-                        block.layout_size = Some(Size { width, height });
-                    }
-                    return Box::new(block);
+            // Try image marker first (list-style-image), then text fallback.
+            let marker_item: Option<LineItem> =
+                resolve_inside_image_marker(node, line_height, ctx.assets)
+                    .map(LineItem::Image)
+                    .or_else(|| {
+                        let (fd, fi) = find_marker_font(marker, ctx.assets, &[])?;
+                        let run = shape_marker_with_skrifa(marker, &fd, fi, font_size_pt, color)?;
+                        Some(LineItem::Text(run))
+                    });
+            if let Some(item) = marker_item {
+                let paragraph = ParagraphPageable::new(vec![ShapedLine {
+                    height: line_height,
+                    baseline: line_height / DEFAULT_LINE_HEIGHT_RATIO,
+                    items: vec![item],
+                }]);
+                let (before_pseudo, after_pseudo) =
+                    build_block_pseudo_images(doc, node, content_box, ctx.assets);
+                let (child_x, child_y) = style.content_inset();
+                let paragraph_children = vec![PositionedChild {
+                    child: Box::new(paragraph),
+                    x: child_x,
+                    y: child_y,
+                }];
+                let positioned_children = wrap_with_block_pseudo_images(
+                    before_pseudo,
+                    after_pseudo,
+                    content_box,
+                    paragraph_children,
+                );
+                let needs_wrapper = style.needs_block_wrapper();
+                let mut block = BlockPageable::with_positioned_children(positioned_children)
+                    .with_style(style)
+                    .with_opacity(opacity)
+                    .with_visible(visible)
+                    .with_id(extract_block_id(node));
+                block.wrap(width, 10000.0);
+                if needs_wrapper {
+                    block.layout_size = Some(Size { width, height });
                 }
+                return Box::new(block);
             }
-            // No font available — fall through to normal empty-element handling
+            // No marker resolved — fall through to normal empty-element handling
         } else {
             // Non-empty <li> with block children: convert children, then inject
             // marker into the first ParagraphPageable found in the tree.
+            // Try image marker first (list-style-image), then text fallback.
             let mut positioned_children = collect_positioned_children(doc, children, ctx, depth);
 
-            // Find font: first from AssetBundle, then from child paragraph runs.
-            let font_info = find_marker_font(marker, ctx.assets, &positioned_children);
+            let marker_item: Option<LineItem> =
+                resolve_inside_image_marker(node, line_height, ctx.assets)
+                    .map(LineItem::Image)
+                    .or_else(|| {
+                        let (fd, fi) = find_marker_font(marker, ctx.assets, &positioned_children)?;
+                        let run = shape_marker_with_skrifa(marker, &fd, fi, font_size_pt, color)?;
+                        Some(LineItem::Text(run))
+                    });
 
-            if let Some((font_data, font_index)) = font_info {
-                if let Some(marker_run) =
-                    shape_marker_with_skrifa(marker, &font_data, font_index, font_size_pt, color)
+            if let Some(item) = marker_item {
+                if !inject_inside_marker_item_into_children(&mut positioned_children, item.clone())
                 {
-                    if !inject_inside_marker_into_children(
-                        &mut positioned_children,
-                        marker_run.clone(),
-                    ) {
-                        // No paragraph descendant found — insert a standalone marker paragraph.
-                        let paragraph = ParagraphPageable::new(vec![ShapedLine {
-                            height: line_height,
-                            baseline: line_height / DEFAULT_LINE_HEIGHT_RATIO,
-                            items: vec![LineItem::Text(marker_run)],
-                        }]);
-                        positioned_children.insert(
-                            0,
-                            PositionedChild {
-                                child: Box::new(paragraph),
-                                x: 0.0,
-                                y: 0.0,
-                            },
-                        );
-                    }
+                    // No paragraph descendant found — insert a standalone marker paragraph.
+                    let paragraph = ParagraphPageable::new(vec![ShapedLine {
+                        height: line_height,
+                        baseline: line_height / DEFAULT_LINE_HEIGHT_RATIO,
+                        items: vec![item],
+                    }]);
+                    positioned_children.insert(
+                        0,
+                        PositionedChild {
+                            child: Box::new(paragraph),
+                            x: 0.0,
+                            y: 0.0,
+                        },
+                    );
                 }
             }
 
@@ -2759,16 +2766,14 @@ fn shape_marker_with_skrifa(
     })
 }
 
-/// Inject a shaped marker run into the first `ParagraphPageable` found in the
-/// `positioned_children` tree. Handles both direct `ParagraphPageable` children
-/// and paragraphs nested inside `BlockPageable` wrappers (e.g. `<p>` with
-/// border/background). Returns `true` if injection succeeded.
-fn inject_inside_marker_into_children(
+/// Inject a marker `LineItem` (text or image) into the first `ParagraphPageable`
+/// found in the `positioned_children` tree. Handles both direct children and
+/// paragraphs nested inside `BlockPageable` wrappers. Returns `true` if
+/// injection succeeded.
+fn inject_inside_marker_item_into_children(
     children: &mut [PositionedChild],
-    marker_run: ShapedGlyphRun,
+    marker_item: LineItem,
 ) -> bool {
-    // First pass: check which child contains the target paragraph, so we
-    // don't move the marker_run into a dead end.
     let target_idx = children
         .iter()
         .position(|pc| has_paragraph_descendant(pc.child.as_ref()));
@@ -2778,24 +2783,24 @@ fn inject_inside_marker_into_children(
     };
 
     let pc = &mut children[idx];
-    let marker_width: f32 = marker_run
-        .glyphs
-        .iter()
-        .map(|g| g.x_advance * marker_run.font_size)
-        .sum();
+    let marker_width: f32 = match &marker_item {
+        LineItem::Text(run) => run.glyphs.iter().map(|g| g.x_advance * run.font_size).sum(),
+        LineItem::Image(img) => img.width,
+    };
 
     // Direct ParagraphPageable child
     if let Some(para) = pc.child.as_any().downcast_ref::<ParagraphPageable>() {
         let mut para_clone = para.clone();
         if para_clone.lines.is_empty() {
             // Empty paragraph — create a line with just the marker.
-            let font_size = marker_run.font_size;
-            let line_height = font_size * DEFAULT_LINE_HEIGHT_RATIO;
-            let baseline = line_height / DEFAULT_LINE_HEIGHT_RATIO;
+            let line_height = match &marker_item {
+                LineItem::Text(run) => run.font_size * DEFAULT_LINE_HEIGHT_RATIO,
+                LineItem::Image(img) => img.height,
+            };
             para_clone.lines.push(ShapedLine {
                 height: line_height,
-                baseline,
-                items: vec![LineItem::Text(marker_run)],
+                baseline: line_height / DEFAULT_LINE_HEIGHT_RATIO,
+                items: vec![marker_item],
             });
         } else {
             for item in &mut para_clone.lines[0].items {
@@ -2804,9 +2809,7 @@ fn inject_inside_marker_into_children(
                     LineItem::Image(i) => i.x_offset += marker_width,
                 }
             }
-            para_clone.lines[0]
-                .items
-                .insert(0, LineItem::Text(marker_run));
+            para_clone.lines[0].items.insert(0, marker_item);
             recalculate_paragraph_line_boxes(&mut para_clone.lines);
         }
         para_clone.cached_height = para_clone.lines.iter().map(|l| l.height).sum();
@@ -2817,8 +2820,7 @@ fn inject_inside_marker_into_children(
     // ParagraphPageable nested inside a BlockPageable (e.g. <p> with styles)
     if let Some(block) = pc.child.as_any().downcast_ref::<BlockPageable>() {
         let mut block_clone = block.clone();
-        if inject_inside_marker_into_children(&mut block_clone.children, marker_run) {
-            // Re-wrap with the original layout width if available.
+        if inject_inside_marker_item_into_children(&mut block_clone.children, marker_item) {
             let wrap_w = block_clone.layout_size.map(|s| s.width).unwrap_or(10000.0);
             block_clone.wrap(wrap_w, 10000.0);
             pc.child = Box::new(block_clone);
