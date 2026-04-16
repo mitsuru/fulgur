@@ -156,6 +156,25 @@ impl Affine2D {
             self.b * x + self.d * y + self.f,
         )
     }
+
+    /// Transform a `Rect` into a `Quad` by applying this matrix to each corner.
+    ///
+    /// The four corners of the input rect (in Y-down page coordinates) are
+    /// transformed individually, preserving the krilla quad-point order:
+    /// bottom-left → bottom-right → top-right → top-left.
+    pub fn transform_rect(&self, r: &Rect) -> Quad {
+        let x0 = r.x;
+        let y0 = r.y;
+        let x1 = r.x + r.width;
+        let y1 = r.y + r.height;
+        let bl = self.transform_point(x0, y1);
+        let br = self.transform_point(x1, y1);
+        let tr = self.transform_point(x1, y0);
+        let tl = self.transform_point(x0, y0);
+        Quad {
+            points: [[bl.0, bl.1], [br.0, br.1], [tr.0, tr.1], [tl.0, tl.1]],
+        }
+    }
 }
 
 /// Matrix product `self * rhs`. Applied to a point `p`, this yields
@@ -242,6 +261,27 @@ pub struct Rect {
     pub y: f32,
     pub width: f32,
     pub height: f32,
+}
+
+/// Four-point quadrilateral for transformed link areas.
+///
+/// Point order follows krilla convention:
+/// bottom-left → bottom-right → top-right → top-left (Y-down coordinates).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Quad {
+    pub points: [[f32; 2]; 4],
+}
+
+impl Quad {
+    /// Convert to krilla's `Quadrilateral` for PDF annotation emission.
+    pub fn to_krilla(&self) -> krilla::geom::Quadrilateral {
+        krilla::geom::Quadrilateral([
+            krilla::geom::Point::from_xy(self.points[0][0], self.points[0][1]),
+            krilla::geom::Point::from_xy(self.points[1][0], self.points[1][1]),
+            krilla::geom::Point::from_xy(self.points[2][0], self.points[2][1]),
+            krilla::geom::Point::from_xy(self.points[3][0], self.points[3][1]),
+        ])
+    }
 }
 
 /// One clickable link area captured by `LinkCollector` during draw.
@@ -3653,6 +3693,40 @@ mod affine_tests {
         let (x, y) = m.transform_point(1.0, 0.0);
         assert!((x - 0.0).abs() < 1e-4);
         assert!((y - 1.0).abs() < 1e-4);
+    }
+
+    #[test]
+    fn transform_rect_identity_produces_axis_aligned_quad() {
+        let r = Rect {
+            x: 10.0,
+            y: 20.0,
+            width: 30.0,
+            height: 40.0,
+        };
+        let q = Affine2D::IDENTITY.transform_rect(&r);
+        let expected = [
+            [10.0, 60.0],
+            [40.0, 60.0],
+            [40.0, 20.0],
+            [10.0, 20.0],
+        ];
+        for (i, (got, exp)) in q.points.iter().zip(expected.iter()).enumerate() {
+            assert!((got[0] - exp[0]).abs() < 1e-5, "quad[{i}].x");
+            assert!((got[1] - exp[1]).abs() < 1e-5, "quad[{i}].y");
+        }
+    }
+
+    #[test]
+    fn transform_rect_translate() {
+        let r = Rect {
+            x: 0.0,
+            y: 0.0,
+            width: 10.0,
+            height: 10.0,
+        };
+        let q = Affine2D::translation(100.0, 200.0).transform_rect(&r);
+        assert!((q.points[0][0] - 100.0).abs() < 1e-5);
+        assert!((q.points[0][1] - 210.0).abs() < 1e-5);
     }
 }
 
