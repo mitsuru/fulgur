@@ -21,7 +21,9 @@ use crate::image::ImageFormat;
 #[derive(Debug, Default)]
 pub struct DestinationRegistry {
     current_page_idx: usize,
-    entries: BTreeMap<String, (usize, Pt)>,
+    entries: BTreeMap<String, (usize, Pt, Pt)>,
+    /// Stack of transforms applied to coordinates before storing.
+    transform_stack: Vec<Affine2D>,
 }
 
 impl DestinationRegistry {
@@ -34,15 +36,35 @@ impl DestinationRegistry {
         self.current_page_idx = idx;
     }
 
-    /// Record an anchor destination. First-write-wins: later duplicates are ignored.
-    pub fn record(&mut self, id: &str, y: Pt) {
-        self.entries
-            .entry(id.to_string())
-            .or_insert((self.current_page_idx, y));
+    /// Push a transform onto the stack; subsequent `record` calls will
+    /// transform coordinates through the composed stack before storing.
+    pub fn push_transform(&mut self, m: Affine2D) {
+        self.transform_stack.push(m);
     }
 
-    /// Look up a recorded anchor.
-    pub fn get(&self, id: &str) -> Option<(usize, Pt)> {
+    /// Pop the most recent transform off the stack.
+    pub fn pop_transform(&mut self) {
+        self.transform_stack.pop();
+    }
+
+    /// Compose all stacked transforms into a single matrix.
+    fn current_transform(&self) -> Affine2D {
+        self.transform_stack
+            .iter()
+            .copied()
+            .fold(Affine2D::IDENTITY, |acc, m| acc * m)
+    }
+
+    /// Record an anchor destination. First-write-wins: later duplicates are ignored.
+    pub fn record(&mut self, id: &str, x: Pt, y: Pt) {
+        let (tx, ty) = self.current_transform().transform_point(x, y);
+        self.entries
+            .entry(id.to_string())
+            .or_insert((self.current_page_idx, tx, ty));
+    }
+
+    /// Look up a recorded anchor. Returns `(page_idx, x, y)`.
+    pub fn get(&self, id: &str) -> Option<(usize, Pt, Pt)> {
         self.entries.get(id).copied()
     }
 }
@@ -1682,7 +1704,7 @@ impl Pageable for BlockPageable {
         if let Some(id) = &self.id
             && !id.is_empty()
         {
-            registry.record(id, y);
+            registry.record(id, x, y);
         }
         // Recurse into children using the same positional arithmetic
         // `draw()` uses (see the loop at the end of `draw`). We do NOT
@@ -2886,7 +2908,7 @@ impl Pageable for TablePageable {
         if let Some(id) = &self.id
             && !id.is_empty()
         {
-            registry.record(id, y);
+            registry.record(id, x, y);
         }
         // Mirror TablePageable::draw child iteration — header + body cells.
         let total_width = self.width;
@@ -3347,10 +3369,10 @@ mod tests {
     fn destination_registry_first_write_wins_for_duplicate_ids() {
         let mut reg = DestinationRegistry::default();
         reg.set_current_page(0);
-        reg.record("dup", 10.0);
+        reg.record("dup", 0.0, 10.0);
         reg.set_current_page(2);
-        reg.record("dup", 99.0);
-        assert_eq!(reg.get("dup"), Some((0, 10.0)));
+        reg.record("dup", 0.0, 99.0);
+        assert_eq!(reg.get("dup"), Some((0, 0.0, 10.0)));
     }
 }
 
@@ -4081,5 +4103,61 @@ mod link_collector_transform_tests {
         // TL corner untransformed: (5, 10)
         assert!((q.points[3][0] - 5.0).abs() < 1e-5, "tl.x identity");
         assert!((q.points[3][1] - 10.0).abs() < 1e-5, "tl.y identity");
+    }
+}
+
+#[cfg(test)]
+mod dest_registry_transform_tests {
+    use super::*;
+
+    #[test]
+    fn record_without_transform_stores_original_coords() {
+        let mut reg = DestinationRegistry::new();
+        reg.set_current_page(0);
+        reg.record("sec", 10.0, 50.0);
+        let (page, x, y) = reg.get("sec").unwrap();
+        assert_eq!(page, 0);
+        assert!((x - 10.0).abs() < 1e-5);
+        assert!((y - 50.0).abs() < 1e-5);
+    }
+
+    #[test]
+    fn record_with_translation_shifts_coords() {
+        let mut reg = DestinationRegistry::new();
+        reg.set_current_page(0);
+        reg.push_transform(Affine2D::translation(100.0, 200.0));
+        reg.record("sec", 10.0, 50.0);
+        reg.pop_transform();
+        let (page, x, y) = reg.get("sec").unwrap();
+        assert_eq!(page, 0);
+        assert!((x - 110.0).abs() < 1e-5);
+        assert!((y - 250.0).abs() < 1e-5);
+    }
+
+    #[test]
+    fn nested_transforms_compose_in_registry() {
+        let mut reg = DestinationRegistry::new();
+        reg.set_current_page(0);
+        reg.push_transform(Affine2D::translation(10.0, 0.0));
+        reg.push_transform(Affine2D::translation(0.0, 20.0));
+        reg.record("nested", 5.0, 5.0);
+        reg.pop_transform();
+        reg.pop_transform();
+        let (_, x, y) = reg.get("nested").unwrap();
+        assert!((x - 15.0).abs() < 1e-5);
+        assert!((y - 25.0).abs() < 1e-5);
+    }
+
+    #[test]
+    fn first_write_wins_even_with_transform() {
+        let mut reg = DestinationRegistry::new();
+        reg.set_current_page(0);
+        reg.record("dup", 0.0, 10.0);
+        reg.push_transform(Affine2D::translation(100.0, 100.0));
+        reg.record("dup", 0.0, 10.0);
+        reg.pop_transform();
+        let (_, x, y) = reg.get("dup").unwrap();
+        assert!((x - 0.0).abs() < 1e-5, "first write should win");
+        assert!((y - 10.0).abs() < 1e-5, "first write should win");
     }
 }

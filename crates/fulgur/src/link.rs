@@ -36,12 +36,10 @@ pub(crate) fn emit_link_annotations(
                 Target::Action(Action::Link(LinkAction::new(uri.as_str().to_string())))
             }
             LinkTarget::Internal(id) => match registry.get(id.as_str()) {
-                Some((page_idx, y_pt)) => {
-                    // Use x=0 so that viewers scroll so the anchor sits at the
-                    // top-left of the viewport. y is in page-local (top-down)
-                    // coordinates; krilla flips to PDF bottom-up during
-                    // serialization.
-                    let dest = XyzDestination::new(page_idx, Point::from_xy(0.0, y_pt));
+                Some((page_idx, x_pt, y_pt)) => {
+                    // x and y are in page-local (top-down) coordinates;
+                    // krilla flips to PDF bottom-up during serialization.
+                    let dest = XyzDestination::new(page_idx, Point::from_xy(x_pt, y_pt));
                     Target::Destination(Destination::Xyz(dest))
                 }
                 None => {

@@ -823,7 +823,7 @@ impl Pageable for ParagraphPageable {
 
     fn collect_ids(
         &self,
-        _x: Pt,
+        x: Pt,
         y: Pt,
         _avail_width: Pt,
         _avail_height: Pt,
@@ -832,7 +832,7 @@ impl Pageable for ParagraphPageable {
         if let Some(id) = &self.id
             && !id.is_empty()
         {
-            registry.record(id, y);
+            registry.record(id, x, y);
         }
         // No child recursion: paragraph lines are glyph data, not Pageables.
     }
@@ -1230,7 +1230,7 @@ mod tests {
         let mut reg = DestinationRegistry::default();
         reg.set_current_page(3);
         p.collect_ids(10.0, 42.0, 400.0, 600.0, &mut reg);
-        assert_eq!(reg.get("anchor"), Some((3, 42.0)));
+        assert_eq!(reg.get("anchor"), Some((3, 10.0, 42.0)));
     }
 
     #[test]
