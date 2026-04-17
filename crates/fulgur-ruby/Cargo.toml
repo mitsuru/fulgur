@@ -1,0 +1,26 @@
+[package]
+name = "fulgur-ruby"
+version = "0.0.1"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+description = "Ruby bindings for fulgur — offline HTML/CSS to PDF conversion"
+publish = false
+
+[lib]
+name = "fulgur"
+crate-type = ["cdylib", "rlib"]
+
+[features]
+ruby-api = ["dep:magnus", "dep:rb-sys"]
+
+[dependencies]
+fulgur = { path = "../fulgur" }
+base64 = "0.22"
+magnus = { version = "0.7", optional = true }
+rb-sys = { version = "0.9", optional = true }
+# Send/Sync 保証 (Engine) のコンパイル時 assertion で使用。
+# ext/fulgur/Cargo.toml にも同じ依存を追加していること。
+static_assertions = "1.1"

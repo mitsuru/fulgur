@@ -1,15 +1,19 @@
 # frozen_string_literal: true
 
-# Fulgur — Ruby bindings for fulgur (HTML/CSS to PDF).
-#
-# This is a placeholder gem. The implementation is under active development.
-# See https://github.com/mitsuru/fulgur for details.
-module Fulgur
-  VERSION = "0.0.1"
+require_relative "fulgur/version"
 
-  def self.placeholder
-    raise NotImplementedError,
-      "fulgur gem is not yet implemented. " \
-      "See https://github.com/mitsuru/fulgur for progress."
-  end
+begin
+  minor = RUBY_VERSION[/\A\d+\.\d+/]
+  require_relative "fulgur/#{minor}/fulgur"
+rescue LoadError
+  require_relative "fulgur/fulgur"
 end
+
+module Fulgur
+  class Error < StandardError; end
+  class RenderError < Error; end
+  class AssetError < Error; end
+end
+
+require_relative "fulgur/margin"
+require_relative "fulgur/asset_bundle"
