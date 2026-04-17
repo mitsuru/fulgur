@@ -84,7 +84,7 @@ impl Engine {
         // correctly.
         let (mut doc, link_gcpm) = crate::blitz_adapter::parse_html_with_local_resources(
             &html,
-            self.config.content_width(),
+            self.config.content_width() / crate::convert::PX_TO_PT,
             fonts,
             self.base_path.as_deref(),
         );
@@ -111,8 +111,8 @@ impl Engine {
         }
 
         let ctx = crate::blitz_adapter::PassContext {
-            viewport_width: self.config.content_width(),
-            viewport_height: self.config.content_height(),
+            viewport_width: self.config.content_width() / crate::convert::PX_TO_PT,
+            viewport_height: self.config.content_height() / crate::convert::PX_TO_PT,
             font_data: fonts,
         };
         crate::blitz_adapter::apply_passes(&mut doc, &passes, &ctx);
@@ -256,14 +256,14 @@ impl Engine {
 
         let (mut doc, _link_gcpm) = crate::blitz_adapter::parse_html_with_local_resources(
             html,
-            self.config.content_width(),
+            self.config.content_width() / crate::convert::PX_TO_PT,
             fonts,
             self.base_path.as_deref(),
         );
 
         let ctx = crate::blitz_adapter::PassContext {
-            viewport_width: self.config.content_width(),
-            viewport_height: self.config.content_height(),
+            viewport_width: self.config.content_width() / crate::convert::PX_TO_PT,
+            viewport_height: self.config.content_height() / crate::convert::PX_TO_PT,
             font_data: fonts,
         };
         let passes: Vec<Box<dyn crate::blitz_adapter::DomPass>> = Vec::new();

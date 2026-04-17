@@ -415,8 +415,8 @@ pub fn render_to_pdf_with_gcpm(
                 );
                 let measure_doc = crate::blitz_adapter::parse_and_layout(
                     &measure_html,
-                    content_width,
-                    page_size.height,
+                    content_width / crate::convert::PX_TO_PT,
+                    page_size.height / crate::convert::PX_TO_PT,
                     font_data,
                 );
                 get_body_child_dimension(&measure_doc, true)
@@ -439,8 +439,8 @@ pub fn render_to_pdf_with_gcpm(
                 );
                 let measure_doc = crate::blitz_adapter::parse_and_layout(
                     &measure_html,
-                    fixed_width,
-                    page_size.height,
+                    fixed_width / crate::convert::PX_TO_PT,
+                    page_size.height / crate::convert::PX_TO_PT,
                     font_data,
                 );
                 get_body_child_dimension(&measure_doc, false)
