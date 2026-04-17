@@ -72,7 +72,7 @@ jobs:
           if-no-files-found: error
 
   smoke-test:
-    name: Smoke test (${{ matrix.platform }})
+    name: Smoke test (${{ matrix.platform }} / Ruby ${{ matrix.ruby }})
     needs: [build-precompiled]
     strategy:
       fail-fast: false
@@ -80,19 +80,27 @@ jobs:
         include:
           - platform: x86_64-linux
             runner: ubuntu-latest
+            ruby: "3.1"
+          - platform: x86_64-linux
+            runner: ubuntu-latest
+            ruby: "3.4"
           - platform: aarch64-linux
             runner: ubuntu-24.04-arm
+            ruby: "3.3"
           - platform: x86_64-darwin
             runner: macos-13
+            ruby: "3.3"
           - platform: arm64-darwin
             runner: macos-latest
+            ruby: "3.3"
           - platform: x64-mingw-ucrt
             runner: windows-latest
+            ruby: "3.3"
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: ruby/setup-ruby@7372622e62b60b3cb750dcd2b9e32c247ffec26a  # v1.302.0
         with:
-          ruby-version: "3.3"
+          ruby-version: ${{ matrix.ruby }}
       - uses: actions/download-artifact@v4
         with:
           name: cross-gem-${{ matrix.platform }}
