@@ -1,0 +1,14 @@
+# frozen_string_literal: true
+
+require "bundler/gem_tasks"
+require "rake/extensiontask"
+require "rspec/core/rake_task"
+
+RSpec::Core::RakeTask.new(:spec)
+
+Rake::ExtensionTask.new("fulgur") do |ext|
+  ext.lib_dir = "lib/fulgur"
+  ext.source_pattern = "*.{rs,toml}"
+end
+
+task default: %i[compile spec]

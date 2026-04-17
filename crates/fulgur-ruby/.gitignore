@@ -1,0 +1,8 @@
+/target
+/tmp
+/.bundle
+/vendor
+/Gemfile.lock
+/lib/fulgur/*.so
+/ext/fulgur/target
+/ext/fulgur/Cargo.lock

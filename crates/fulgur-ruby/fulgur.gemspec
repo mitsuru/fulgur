@@ -1,22 +1,25 @@
-Gem::Specification.new do |s|
-  s.name        = "fulgur"
-  s.version     = "0.0.1"
-  s.summary     = "Ruby bindings for fulgur — offline HTML/CSS to PDF conversion"
-  s.description = <<~DESC
-    Ruby bindings for fulgur, an offline, deterministic HTML/CSS to PDF
-    conversion library written in Rust. This is a name reservation;
-    the implementation is under active development.
-  DESC
-  s.authors     = ["Mitsuru Hayasaka"]
-  s.email       = "hayasaka.mitsuru@gmail.com"
-  s.homepage    = "https://github.com/mitsuru/fulgur"
-  s.licenses    = ["MIT", "Apache-2.0"]
-  s.metadata    = {
-    "source_code_uri"   => "https://github.com/mitsuru/fulgur",
-    "changelog_uri"     => "https://github.com/mitsuru/fulgur/blob/main/CHANGELOG.md",
-    "bug_tracker_uri"   => "https://github.com/mitsuru/fulgur/issues",
-  }
+# frozen_string_literal: true
 
-  s.required_ruby_version = ">= 3.1"
-  s.files = ["lib/fulgur.rb", "README.md", "LICENSE-MIT"]
+require_relative "lib/fulgur/version"
+
+Gem::Specification.new do |spec|
+  spec.name = "fulgur"
+  spec.version = Fulgur::VERSION
+  spec.authors = ["Mitsuru Hayasaka"]
+  spec.email = ["hayasaka.mitsuru@gmail.com"]
+
+  spec.summary = "Offline HTML/CSS → PDF conversion"
+  spec.description = "Ruby bindings for fulgur, a deterministic HTML/CSS to PDF rendering engine."
+  spec.homepage = "https://github.com/mitsuru/fulgur"
+  spec.license = "Apache-2.0"
+  spec.required_ruby_version = ">= 3.3.0"
+
+  spec.metadata["allowed_push_host"] = "https://rubygems.org"
+  spec.metadata["source_code_uri"] = "https://github.com/mitsuru/fulgur"
+
+  spec.files = Dir["lib/**/*.rb", "ext/**/*.{rs,toml,rb}", "Cargo.toml", "README.md"]
+  spec.require_paths = ["lib"]
+  spec.extensions = ["ext/fulgur/extconf.rb"]
+
+  spec.add_dependency "rb_sys", "~> 0.9"
 end
