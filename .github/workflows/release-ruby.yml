@@ -1,0 +1,156 @@
+name: Release (Ruby / RubyGems)
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Skip publish step (build + smoke test only)'
+        required: false
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build-source-gem:
+    name: Build source gem
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oxidize-rb/actions/setup-ruby-and-rust@e5f9a49a7812a078584072f6e3f657ad247c8771  # v1.4.4
+        with:
+          ruby-version: "3.3"
+          rustup-toolchain: stable
+          bundler-cache: true
+          cargo-cache: true
+          working-directory: crates/fulgur-ruby
+      - name: Build source gem
+        working-directory: crates/fulgur-ruby
+        run: bundle exec rake build
+      - uses: actions/upload-artifact@v4
+        with:
+          name: source-gem
+          path: crates/fulgur-ruby/pkg/*.gem
+          if-no-files-found: error
+
+  build-precompiled:
+    name: Build precompiled gem (${{ matrix.platform }})
+    strategy:
+      fail-fast: false
+      matrix:
+        platform:
+          - x86_64-linux
+          - x86_64-linux-musl
+          - aarch64-linux
+          - aarch64-linux-musl
+          - x86_64-darwin
+          - arm64-darwin
+          - x64-mingw-ucrt
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ruby/setup-ruby@7372622e62b60b3cb750dcd2b9e32c247ffec26a  # v1.302.0
+        with:
+          ruby-version: "3.3"
+          bundler-cache: true
+          working-directory: crates/fulgur-ruby
+      - uses: oxidize-rb/cross-gem-action@80f59339d90789841d772f412fe4a8b201a8cfa2  # v7
+        with:
+          platform: ${{ matrix.platform }}
+          ruby-versions: "3.1,3.2,3.3,3.4"
+          directory: crates/fulgur-ruby
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cross-gem-${{ matrix.platform }}
+          path: crates/fulgur-ruby/pkg/*.gem
+          if-no-files-found: error
+
+  smoke-test:
+    name: Smoke test (${{ matrix.platform }})
+    needs: [build-precompiled]
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: x86_64-linux
+            runner: ubuntu-latest
+          - platform: aarch64-linux
+            runner: ubuntu-24.04-arm
+          - platform: x86_64-darwin
+            runner: macos-13
+          - platform: arm64-darwin
+            runner: macos-latest
+          - platform: x64-mingw-ucrt
+            runner: windows-latest
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: ruby/setup-ruby@7372622e62b60b3cb750dcd2b9e32c247ffec26a  # v1.302.0
+        with:
+          ruby-version: "3.3"
+      - uses: actions/download-artifact@v4
+        with:
+          name: cross-gem-${{ matrix.platform }}
+          path: pkg
+      - name: Install gem (unix)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          shopt -s failglob
+          gem install --local pkg/*.gem
+      - name: Install gem (windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $gem = Get-ChildItem pkg/*.gem | Select-Object -First 1
+          if (-not $gem) { throw "No gem found in pkg/" }
+          gem install --local $gem.FullName
+      - name: Smoke test
+        shell: bash
+        run: |
+          ruby -e '
+            require "fulgur"
+            engine = Fulgur::Engine.new
+            pdf = engine.render_html("<p>hi</p>")
+            raise "not a Fulgur::Pdf: #{pdf.class}" unless pdf.is_a?(Fulgur::Pdf)
+            raise "too short: #{pdf.bytesize}" unless pdf.bytesize > 100
+            s = pdf.to_s
+            raise "bad header: #{s[0, 5].inspect}" unless s[0, 5] == "%PDF-".b
+            puts "OK: #{pdf.bytesize} bytes"
+          '
+
+  publish:
+    name: Publish to RubyGems
+    needs: [build-source-gem, build-precompiled, smoke-test]
+    if: github.event_name == 'release' || (github.event_name == 'workflow_dispatch' && !fromJSON(inputs.dry_run))
+    runs-on: ubuntu-latest
+    environment: rubygems
+    permissions:
+      id-token: write
+    steps:
+      - uses: ruby/setup-ruby@7372622e62b60b3cb750dcd2b9e32c247ffec26a  # v1.302.0
+        with:
+          ruby-version: "3.3"
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - uses: rubygems/configure-rubygems-credentials@6f94374a7eb4cdf600b093bbcd94079187872fac  # main
+        with:
+          role-to-assume: rg_oidc_akr_mitsuru_fulgur
+      - name: List gems to publish
+        shell: bash
+        run: ls -la dist/*.gem
+      - name: Push gems
+        shell: bash
+        run: |
+          shopt -s failglob
+          for gem in dist/*.gem; do
+            echo "Pushing $gem"
+            gem push "$gem"
+          done
