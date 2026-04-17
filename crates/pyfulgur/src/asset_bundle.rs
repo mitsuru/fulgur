@@ -1,19 +1,8 @@
+use crate::error::map_fulgur_error;
 use fulgur::AssetBundle;
-use fulgur::Error as FulgurError;
-use pyo3::exceptions::{PyFileNotFoundError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::PyBytes;
 use std::path::PathBuf;
-
-/// 一時的な inline error mapping (Task 9 で crate::error::map_fulgur_error に置き換え).
-fn map_fulgur_error(err: FulgurError) -> PyErr {
-    match err {
-        FulgurError::Io(io_err) if io_err.kind() == std::io::ErrorKind::NotFound => {
-            PyFileNotFoundError::new_err(io_err.to_string())
-        }
-        _ => PyValueError::new_err(err.to_string()),
-    }
-}
 
 #[pyclass(name = "AssetBundle", module = "pyfulgur")]
 pub struct PyAssetBundle {

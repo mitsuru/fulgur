@@ -9,6 +9,7 @@
 use pyo3::prelude::*;
 
 mod asset_bundle;
+mod error;
 mod margin;
 mod page_size;
 
@@ -30,5 +31,6 @@ fn pyfulgur(_py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyPageSize>()?;
     m.add_class::<PyMargin>()?;
     m.add_class::<PyAssetBundle>()?;
+    error::register(m)?;
     Ok(())
 }
