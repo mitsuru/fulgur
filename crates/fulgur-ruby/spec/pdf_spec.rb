@@ -44,4 +44,41 @@ RSpec.describe Fulgur::Pdf do
       expect(pdf.to_data_uri).to start_with("data:application/pdf;base64,")
     end
   end
+
+  describe "#write_to_path" do
+    it "writes binary PDF to file" do
+      Dir.mktmpdir do |dir|
+        path = File.join(dir, "out.pdf")
+        pdf.write_to_path(path)
+        expect(File.binread(path)).to eq(pdf.to_s)
+      end
+    end
+
+    it "raises an IO-related error for invalid path" do
+      expect { pdf.write_to_path("/nonexistent/dir/out.pdf") }
+        .to raise_error(StandardError)
+    end
+  end
+
+  describe "#write_to_io" do
+    it "writes binary PDF to StringIO" do
+      io = StringIO.new
+      pdf.write_to_io(io)
+      expect(io.string.force_encoding(Encoding::ASCII_8BIT)).to eq(pdf.to_s)
+    end
+
+    it "total bytes written equals pdf.bytesize" do
+      io = StringIO.new
+      pdf.write_to_io(io)
+      expect(io.string.bytesize).to eq(pdf.bytesize)
+    end
+
+    it "calls binmode on the IO object" do
+      io = StringIO.new
+      # StringIO responds to binmode (noop on Ruby 3+ but defined).
+      expect(io).to receive(:binmode).at_least(:once).and_call_original
+      allow(io).to receive(:write).and_call_original
+      pdf.write_to_io(io)
+    end
+  end
 end
