@@ -1,31 +1,40 @@
-# NOTE: placeholder build uses setuptools. Real builds will use maturin.
 [build-system]
-requires = ["setuptools>=68.0"]
-build-backend = "setuptools.build_meta"
+requires = ["maturin>=1.7,<2.0"]
+build-backend = "maturin"
 
 [project]
 name = "pyfulgur"
-version = "0.0.1"
+version = "0.0.2"
 description = "Python bindings for fulgur — offline HTML/CSS to PDF conversion"
 readme = "README.md"
-license = {text = "MIT OR Apache-2.0"}
+license = { text = "MIT OR Apache-2.0" }
 requires-python = ">=3.9"
 authors = [
     { name = "Mitsuru Hayasaka", email = "hayasaka.mitsuru@gmail.com" },
 ]
 keywords = ["pdf", "html", "css", "conversion", "typesetting"]
 classifiers = [
-    "Development Status :: 1 - Planning",
+    "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: Implementation :: CPython",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
     "Programming Language :: Rust",
     "Topic :: Text Processing :: Markup :: HTML",
+    "Topic :: Software Development :: Libraries :: Python Modules",
 ]
 
 [project.urls]
 Repository = "https://github.com/mitsuru/fulgur"
 Documentation = "https://github.com/mitsuru/fulgur"
+Changelog = "https://github.com/mitsuru/fulgur/blob/main/CHANGELOG.md"
 
-[tool.setuptools.packages.find]
-where = ["."]
+[project.optional-dependencies]
+test = ["pytest>=7"]
+
+[tool.maturin]
+module-name = "pyfulgur"
+manifest-path = "Cargo.toml"
+features = ["extension-module"]
