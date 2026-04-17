@@ -181,32 +181,42 @@ fn width_key(w: f32) -> u32 {
 
 /// Get a layout dimension of the first non-zero child of `<body>` in a Blitz document.
 /// When `use_width` is true, returns max-content width; otherwise returns height.
+///
+/// Returned value is in PDF pt. Blitz's internal layout is in CSS px, so we
+/// multiply by `PX_TO_PT` on the way out — matching the convention used at
+/// the convert.rs boundary (`layout_in_pt`). This keeps the GCPM margin-box
+/// measure caches in the same unit (pt) as `page_size` / `margin`, which
+/// `compute_edge_layout` assumes when distributing along the edge.
 fn get_body_child_dimension(doc: &blitz_html::HtmlDocument, use_width: bool) -> f32 {
     use std::ops::Deref;
     let root = doc.root_element();
     let base_doc = doc.deref();
-    if let Some(root_node) = base_doc.get_node(root.id) {
-        for &child_id in &root_node.children {
-            if let Some(child) = base_doc.get_node(child_id) {
-                if let blitz_dom::NodeData::Element(elem) = &child.data {
-                    if elem.name.local.as_ref() == "body" {
-                        for &body_child_id in &child.children {
-                            if let Some(body_child) = base_doc.get_node(body_child_id) {
-                                let size = &body_child.final_layout.size;
-                                let v = if use_width { size.width } else { size.height };
-                                if v > 0.0 {
-                                    return v;
+
+    let px: f32 = 'outer: {
+        if let Some(root_node) = base_doc.get_node(root.id) {
+            for &child_id in &root_node.children {
+                if let Some(child) = base_doc.get_node(child_id) {
+                    if let blitz_dom::NodeData::Element(elem) = &child.data {
+                        if elem.name.local.as_ref() == "body" {
+                            for &body_child_id in &child.children {
+                                if let Some(body_child) = base_doc.get_node(body_child_id) {
+                                    let size = &body_child.final_layout.size;
+                                    let v = if use_width { size.width } else { size.height };
+                                    if v > 0.0 {
+                                        break 'outer v;
+                                    }
                                 }
                             }
+                            let size = &child.final_layout.size;
+                            break 'outer if use_width { size.width } else { size.height };
                         }
-                        let size = &child.final_layout.size;
-                        return if use_width { size.width } else { size.height };
                     }
                 }
             }
         }
-    }
-    0.0
+        0.0
+    };
+    crate::convert::px_to_pt(px)
 }
 
 /// Render a Pageable tree to PDF bytes with GCPM margin box support.
@@ -415,8 +425,8 @@ pub fn render_to_pdf_with_gcpm(
                 );
                 let measure_doc = crate::blitz_adapter::parse_and_layout(
                     &measure_html,
-                    content_width,
-                    page_size.height,
+                    crate::convert::pt_to_px(content_width),
+                    crate::convert::pt_to_px(page_size.height),
                     font_data,
                 );
                 get_body_child_dimension(&measure_doc, true)
@@ -439,8 +449,8 @@ pub fn render_to_pdf_with_gcpm(
                 );
                 let measure_doc = crate::blitz_adapter::parse_and_layout(
                     &measure_html,
-                    fixed_width,
-                    page_size.height,
+                    crate::convert::pt_to_px(fixed_width),
+                    crate::convert::pt_to_px(page_size.height),
                     font_data,
                 );
                 get_body_child_dimension(&measure_doc, false)
@@ -500,8 +510,8 @@ pub fn render_to_pdf_with_gcpm(
                 );
                 let render_doc = crate::blitz_adapter::parse_and_layout(
                     &render_html,
-                    rect.width,
-                    rect.height,
+                    crate::convert::pt_to_px(rect.width),
+                    crate::convert::pt_to_px(rect.height),
                     font_data,
                 );
                 let dummy_store = RunningElementStore::new();
