@@ -36,5 +36,6 @@ fn pyfulgur(_py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyEngineBuilder>()?;
     m.add_class::<PyEngine>()?;
     error::register(m)?;
+    m.add("__version__", env!("CARGO_PKG_VERSION"))?;
     Ok(())
 }
