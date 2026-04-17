@@ -88,7 +88,7 @@ jobs:
             runner: ubuntu-24.04-arm
             ruby: "3.3"
           - platform: x86_64-darwin
-            runner: macos-13
+            runner: macos-15-intel
             ruby: "3.3"
           - platform: arm64-darwin
             runner: macos-latest
@@ -162,8 +162,24 @@ jobs:
       - name: Push gems
         shell: bash
         run: |
+          set -euo pipefail
           shopt -s failglob
+          fail=0
           for gem in dist/*.gem; do
-            echo "Pushing $gem"
-            gem push "$gem"
+            echo "::group::Pushing $gem"
+            if output=$(gem push "$gem" 2>&1); then
+              echo "$output"
+              echo "::endgroup::"
+            else
+              echo "$output"
+              echo "::endgroup::"
+              # Treat "already pushed" as a skip (idempotent re-runs).
+              if printf '%s' "$output" | grep -qE 'Repushing of gem versions is not allowed|has already been pushed'; then
+                echo "::notice file=$gem::already published, skipping"
+              else
+                echo "::error file=$gem::push failed"
+                fail=1
+              fi
+            fi
           done
+          exit "$fail"

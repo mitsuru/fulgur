@@ -31,7 +31,7 @@ jobs:
             runner: ubuntu-24.04-arm
             manylinux: "2014"
           - target: x86_64-apple-darwin
-            runner: macos-13
+            runner: macos-15-intel
           - target: aarch64-apple-darwin
             runner: macos-latest
           - target: x86_64-pc-windows-msvc
@@ -77,7 +77,7 @@ jobs:
             artifact: wheels-x86_64-unknown-linux-gnu
           - os: ubuntu-24.04-arm
             artifact: wheels-aarch64-unknown-linux-gnu
-          - os: macos-13
+          - os: macos-15-intel
             artifact: wheels-x86_64-apple-darwin
           - os: macos-latest
             artifact: wheels-aarch64-apple-darwin
@@ -120,7 +120,7 @@ jobs:
   publish:
     name: Publish to PyPI
     needs: [build-wheels, build-sdist, smoke-test]
-    if: github.event_name == 'release' || (github.event_name == 'workflow_dispatch' && !fromJSON(inputs.dry_run))
+    if: github.event_name == 'release' || (github.event_name == 'workflow_dispatch' && !inputs.dry_run)
     runs-on: ubuntu-latest
     environment: pypi
     permissions:
@@ -130,12 +130,12 @@ jobs:
         with:
           path: dist
           merge-multiple: true
-      - uses: pypa/gh-action-pypi-publish@release/v1
+      - uses: pypa/gh-action-pypi-publish@cef221092ed1bacb1cc03d23a2d87d1d172e277b  # release/v1
 
   publish-testpypi:
     name: Publish to TestPyPI
     needs: [build-wheels, build-sdist, smoke-test]
-    if: github.event_name == 'workflow_dispatch' && fromJSON(inputs.dry_run)
+    if: github.event_name == 'workflow_dispatch' && inputs.dry_run
     runs-on: ubuntu-latest
     environment: testpypi
     permissions:
@@ -145,6 +145,6 @@ jobs:
         with:
           path: dist
           merge-multiple: true
-      - uses: pypa/gh-action-pypi-publish@release/v1
+      - uses: pypa/gh-action-pypi-publish@cef221092ed1bacb1cc03d23a2d87d1d172e277b  # release/v1
         with:
           repository-url: https://test.pypi.org/legacy/

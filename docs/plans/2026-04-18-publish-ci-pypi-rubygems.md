@@ -139,7 +139,7 @@ py-limited-api = "cp39"
 **Step 3: workspace build 検証**
 
 ```bash
-cd /home/ubuntu/fulgur/.worktrees/publish-ci && cargo check --workspace
+cd "$(git rev-parse --show-toplevel)" && cargo check --workspace
 ```
 
 Expected: Finished success
@@ -735,7 +735,7 @@ git commit -m "docs(readme): link release setup guide"
 全タスク完了後:
 
 ```bash
-cd /home/ubuntu/fulgur/.worktrees/publish-ci
+cd "$(git rev-parse --show-toplevel)"
 
 # YAML syntax
 python3 -c "import yaml; yaml.safe_load(open('.github/workflows/release-prepare.yml'))"
@@ -759,11 +759,20 @@ Expected: 6〜7 commits、lint エラー 0、cargo check 成功。
 
 ---
 
+## Security: Action SHA pin policy
+
+認証情報を扱う workflow（publish 系）の GitHub Actions は **full-length commit SHA で pin する** のがデフォルトポリシー。
+
+- **必須**: `pypa/gh-action-pypi-publish`, `rubygems/configure-rubygems-credentials`, `PyO3/maturin-action`, `oxidize-rb/*`, `ruby/setup-ruby`, `oxidize-rb/cross-gem-action` 等の 3rd-party action
+- **例外**: まだ stable tag / 互換リリースが無く SHA 固定しにくい場合に限り、一時的に `@main` を使用してよい。ただし必ず新規 release / tag 公開を追跡し、公開され次第速やかに commit SHA pin に移行する
+- **許容**: `actions/checkout`, `actions/setup-python`, `actions/upload-artifact`, `actions/download-artifact` 等の GitHub 公式 1st-party actions は major-version tag (`@v4`) 可。SHA pin への段階的移行は推奨だが必須ではない
+
+本 PR 時点で `rubygems/configure-rubygems-credentials` のみ stable tag が無く `@main` を一時的に使用（例外に該当）。Safe alternative として SHA pin しているが、tag 公開後は合わせる。
+
 ## Known Limitations
 
 1. **Actual publish は実リリースまで動作確認不可** — TestPyPI dry-run でも "upload 成功"しか確認できない。PyPI / RubyGems 本番 publish の動作は初回リリースで検証する。
-2. **`rubygems/configure-rubygems-credentials@main`** は main branch 参照（2026年時点で stable release は pin 困難）。セキュリティ的には commit SHA pin を推奨だが、action の更新頻度とバランスを見て `@main` 運用で開始。問題が出たら `@v1` タグが切られるのを待って pin。
-3. **`role-to-assume` の値は登録後に確定** — RELEASE_SETUP.md の手順 4 で実値を取得し、Task 5 の workflow file の該当行を別 PR で更新する必要がある。
-4. **smoke test の API 呼び出しは verified facts に基づく** — Python: `pyfulgur.Engine()` ctor + `render_html()` returns bytes。Ruby: `Fulgur::Engine.new` + `render_html()` returns `Fulgur::Pdf` with `.bytesize`。binding 側 API が変わったら更新。
-5. **release-prepare.yml は workspace 共通バージョン前提** — 将来バインディングを独立バージョニングする場合はロジック変更必要。
-6. **`oxidize-rb/cross-gem-action@v9`** タグの存在確認は未実施。実際に push して CI で失敗したら最新タグに合わせる。
+2. **`rubygems/configure-rubygems-credentials@main`** は main branch ベースの SHA pin（2026年時点で stable release が無い）。上記 SHA pin policy の「例外」に該当。tag 公開され次第 tag based SHA pin に更新する。
+3. **smoke test の API 呼び出しは verified facts に基づく** — Python: `pyfulgur.Engine()` ctor + `render_html()` returns bytes。Ruby: `Fulgur::Engine.new` + `render_html()` returns `Fulgur::Pdf` with `.bytesize`。binding 側 API が変わったら更新。
+4. **release-prepare.yml は workspace 共通バージョン前提** — 将来バインディングを独立バージョニングする場合はロジック変更必要。
+5. **`oxidize-rb/cross-gem-action` は v9 予定していたが実在は v7**（実装時判明、v7 の SHA で pin）。node16 DeprecationWarning 可能性あるが publish はブロックしない。
