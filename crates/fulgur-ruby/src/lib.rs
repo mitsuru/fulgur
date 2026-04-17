@@ -6,7 +6,7 @@
 
 #![cfg(feature = "ruby-api")]
 
-use magnus::{Error, define_module, prelude::*};
+use magnus::{Error, define_module};
 
 #[cfg(test)]
 mod assertions {
