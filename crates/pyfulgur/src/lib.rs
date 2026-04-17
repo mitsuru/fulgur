@@ -8,6 +8,10 @@
 
 use pyo3::prelude::*;
 
+mod page_size;
+
+use page_size::PyPageSize;
+
 /// fulgur 公開型が Send + Sync であることを compile time に保証する。
 /// fulgur-d3r で保証済みだが、将来の regression を早期検知するため明示する。
 #[cfg(test)]
@@ -18,6 +22,7 @@ mod assertions {
 }
 
 #[pymodule]
-fn pyfulgur(_py: Python<'_>, _m: &Bound<'_, PyModule>) -> PyResult<()> {
+fn pyfulgur(_py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
+    m.add_class::<PyPageSize>()?;
     Ok(())
 }
