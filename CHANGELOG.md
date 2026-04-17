@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [Unreleased]
+
+### Added
+
+- **pyfulgur**: Python bindings for fulgur via PyO3 + maturin. Provides `Engine`, `EngineBuilder`, `AssetBundle`, `PageSize`, `Margin`, and `RenderError`. GIL is released during `render_html` / `render_html_to_file`. Ships as a manylinux/macOS/Windows wheel (v0.0.2).
+
 ## [0.4.5] - 2026-04-16
 
 ### Bug Fixes
