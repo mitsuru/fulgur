@@ -112,6 +112,63 @@ pub struct PyEngine {
 
 #[pymethods]
 impl PyEngine {
+    #[new]
+    #[pyo3(signature = (
+        *,
+        page_size = None,
+        margin = None,
+        landscape = None,
+        title = None,
+        author = None,
+        lang = None,
+        bookmarks = None,
+        assets = None,
+    ))]
+    fn new(
+        page_size: Option<&Bound<'_, PyAny>>,
+        margin: Option<PyMargin>,
+        landscape: Option<bool>,
+        title: Option<String>,
+        author: Option<String>,
+        lang: Option<String>,
+        bookmarks: Option<bool>,
+        assets: Option<&Bound<'_, PyAssetBundle>>,
+    ) -> PyResult<Self> {
+        let mut b = Engine::builder();
+        if let Some(v) = page_size {
+            let size = if let Ok(ps) = v.extract::<PyPageSize>() {
+                ps.inner
+            } else if let Ok(s) = v.extract::<String>() {
+                parse_page_size_str(&s)?
+            } else {
+                return Err(PyValueError::new_err("page_size must be PageSize or str"));
+            };
+            b = b.page_size(size);
+        }
+        if let Some(m) = margin {
+            b = b.margin(m.inner);
+        }
+        if let Some(v) = landscape {
+            b = b.landscape(v);
+        }
+        if let Some(t) = title {
+            b = b.title(t);
+        }
+        if let Some(a) = author {
+            b = b.author(a);
+        }
+        if let Some(l) = lang {
+            b = b.lang(l);
+        }
+        if let Some(v) = bookmarks {
+            b = b.bookmarks(v);
+        }
+        if let Some(bundle) = assets {
+            b = b.assets(bundle.borrow_mut().take_inner());
+        }
+        Ok(Self { inner: b.build() })
+    }
+
     #[staticmethod]
     fn builder() -> PyEngineBuilder {
         PyEngineBuilder::new()
