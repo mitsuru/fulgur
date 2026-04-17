@@ -113,7 +113,7 @@ fn debug_print_tree(doc: &blitz_dom::BaseDocument, node_id: usize, depth: usize)
     let Some(node) = doc.get_node(node_id) else {
         return;
     };
-    let layout = node.final_layout;
+    let (x, y, width, height) = layout_in_pt(&node.final_layout);
     let indent = "  ".repeat(depth);
     let tag = match &node.data {
         NodeData::Element(e) => e.name.local.to_string(),
@@ -124,10 +124,10 @@ fn debug_print_tree(doc: &blitz_dom::BaseDocument, node_id: usize, depth: usize)
     eprintln!(
         "{indent}{tag} id={} pos=({},{}) size={}x{} inline_root={}",
         node_id,
-        layout.location.x,
-        layout.location.y,
-        layout.size.width,
-        layout.size.height,
+        x,
+        y,
+        width,
+        height,
         node.flags.is_inline_root()
     );
     for &child_id in &node.children {
@@ -215,8 +215,8 @@ fn maybe_wrap_transform(
     let Some(styles) = node.primary_styles() else {
         return child;
     };
-    let layout = node.final_layout;
-    match crate::blitz_adapter::compute_transform(&styles, layout.size.width, layout.size.height) {
+    let (_, _, width, height) = layout_in_pt(&node.final_layout);
+    match crate::blitz_adapter::compute_transform(&styles, width, height) {
         Some((matrix, origin)) => Box::new(TransformWrapperPageable::new(child, matrix, origin)),
         None => child,
     }
@@ -507,9 +507,7 @@ fn convert_node_inner(
     depth: usize,
 ) -> Box<dyn Pageable> {
     let node = doc.get_node(node_id).unwrap();
-    let layout = node.final_layout;
-    let height = layout.size.height;
-    let width = layout.size.width;
+    let (_, _, width, height) = layout_in_pt(&node.final_layout);
 
     // Check if this is a list item with an outside marker (must be before inline root check).
     //
@@ -1039,7 +1037,7 @@ fn collect_positioned_children(
             continue;
         }
 
-        let child_layout = child_node.final_layout;
+        let (cx, cy, cw, ch) = layout_in_pt(&child_node.final_layout);
 
         // Zero-size leaf nodes (whitespace text, etc.) — skip, but first
         // harvest any string-set entries so `string-set: name attr(...)` on
@@ -1050,33 +1048,15 @@ fn collect_positioned_children(
         // branch can emit it. Without this, `<span class="icon"></span>`
         // + `span::before { content: url(...); display: block }` silently
         // drops the image even though the empty-children branch is wired up.
-        if child_layout.size.height == 0.0
-            && child_layout.size.width == 0.0
+        if ch == 0.0
+            && cw == 0.0
             && child_node.children.is_empty()
             && !node_has_block_pseudo_image(doc, child_node)
             && !node_has_inline_pseudo_image(doc, child_node)
         {
-            emit_orphan_string_set_markers(
-                child_id,
-                child_layout.location.x,
-                child_layout.location.y,
-                ctx,
-                &mut result,
-            );
-            emit_counter_op_markers(
-                child_id,
-                child_layout.location.x,
-                child_layout.location.y,
-                ctx,
-                &mut result,
-            );
-            emit_orphan_bookmark_marker(
-                child_id,
-                child_layout.location.x,
-                child_layout.location.y,
-                ctx,
-                &mut result,
-            );
+            emit_orphan_string_set_markers(child_id, cx, cy, ctx, &mut result);
+            emit_counter_op_markers(child_id, cx, cy, ctx, &mut result);
+            emit_orphan_bookmark_marker(child_id, cx, cy, ctx, &mut result);
             if let Some(marker) = take_running_marker(child_id, ctx) {
                 pending_running_markers.push(marker);
             }
@@ -1086,31 +1066,10 @@ fn collect_positioned_children(
         // Zero-size container (thead, tbody, tr, etc.) — flatten children
         // into the parent. Harvest the container's own string-set entries
         // before recursing so they aren't dropped.
-        if child_layout.size.height == 0.0
-            && child_layout.size.width == 0.0
-            && !child_node.children.is_empty()
-        {
-            emit_orphan_string_set_markers(
-                child_id,
-                child_layout.location.x,
-                child_layout.location.y,
-                ctx,
-                &mut result,
-            );
-            emit_counter_op_markers(
-                child_id,
-                child_layout.location.x,
-                child_layout.location.y,
-                ctx,
-                &mut result,
-            );
-            emit_orphan_bookmark_marker(
-                child_id,
-                child_layout.location.x,
-                child_layout.location.y,
-                ctx,
-                &mut result,
-            );
+        if ch == 0.0 && cw == 0.0 && !child_node.children.is_empty() {
+            emit_orphan_string_set_markers(child_id, cx, cy, ctx, &mut result);
+            emit_counter_op_markers(child_id, cx, cy, ctx, &mut result);
+            emit_orphan_bookmark_marker(child_id, cx, cy, ctx, &mut result);
             if let Some(marker) = take_running_marker(child_id, ctx) {
                 pending_running_markers.push(marker);
             }
@@ -1145,8 +1104,8 @@ fn collect_positioned_children(
         }
         result.push(PositionedChild {
             child: child_pageable,
-            x: child_layout.location.x,
-            y: child_layout.location.y,
+            x: cx,
+            y: cy,
         });
     }
 
@@ -1197,9 +1156,7 @@ fn wrap_replaced_in_block_style<F>(
 where
     F: FnOnce(f32, f32, f32, bool) -> Box<dyn Pageable>,
 {
-    let layout = node.final_layout;
-    let width = layout.size.width;
-    let height = layout.size.height;
+    let (_, _, width, height) = layout_in_pt(&node.final_layout);
 
     let style = extract_block_style(node, assets);
     let (opacity, visible) = extract_opacity_visible(node);
@@ -1403,8 +1360,7 @@ fn compute_content_box(node: &Node, style: &BlockStyle) -> ContentBox {
     let (left_inset, top_inset) = style.content_inset();
     let right_inset = style.border_widths[1] + style.padding[1];
     let bottom_inset = style.border_widths[2] + style.padding[2];
-    let border_w = node.final_layout.size.width;
-    let border_h = node.final_layout.size.height;
+    let (_, _, border_w, border_h) = layout_in_pt(&node.final_layout);
     ContentBox {
         origin_x: left_inset,
         origin_y: top_inset,
@@ -1765,9 +1721,7 @@ fn convert_table(
     ctx: &mut ConvertContext<'_>,
     depth: usize,
 ) -> Box<dyn Pageable> {
-    let layout = node.final_layout;
-    let width = layout.size.width;
-    let height = layout.size.height;
+    let (_, _, width, height) = layout_in_pt(&node.final_layout);
     let style = extract_block_style(node, ctx.assets);
 
     let mut header_cells: Vec<PositionedChild> = Vec::new();
@@ -1844,10 +1798,10 @@ fn collect_table_cells(
     // Without this, ops on these intermediate nodes stay in
     // `ctx.counter_ops_by_node` forever and never propagate.
     {
-        let layout = node.final_layout;
+        let (x, y, _, _) = layout_in_pt(&node.final_layout);
         let out: &mut Vec<PositionedChild> = if is_header { header_cells } else { body_cells };
-        emit_counter_op_markers(node_id, layout.location.x, layout.location.y, ctx, out);
-        emit_orphan_bookmark_marker(node_id, layout.location.x, layout.location.y, ctx, out);
+        emit_counter_op_markers(node_id, x, y, ctx, out);
+        emit_orphan_bookmark_marker(node_id, x, y, ctx, out);
     }
 
     for &child_id in &node.children {
@@ -1861,13 +1815,10 @@ fn collect_table_cells(
             continue;
         }
 
-        let child_layout = child_node.final_layout;
+        let (cx, cy, cw, ch) = layout_in_pt(&child_node.final_layout);
 
         // Zero-size container (tr, thead, tbody) — recurse into children
-        if child_layout.size.height == 0.0
-            && child_layout.size.width == 0.0
-            && !child_node.children.is_empty()
-        {
+        if ch == 0.0 && cw == 0.0 && !child_node.children.is_empty() {
             let child_is_header = is_header || is_table_section(child_node, "thead");
             collect_table_cells(
                 doc,
@@ -1882,7 +1833,7 @@ fn collect_table_cells(
         }
 
         // Skip zero-size leaves
-        if child_layout.size.height == 0.0 && child_layout.size.width == 0.0 {
+        if ch == 0.0 && cw == 0.0 {
             continue;
         }
 
@@ -1890,8 +1841,8 @@ fn collect_table_cells(
         let cell_pageable = convert_node(doc, child_id, ctx, depth + 1);
         let positioned = PositionedChild {
             child: cell_pageable,
-            x: child_layout.location.x,
-            y: child_layout.location.y,
+            x: cx,
+            y: cy,
         };
 
         if is_header {
@@ -2112,8 +2063,7 @@ fn extract_block_style(node: &Node, assets: Option<&AssetBundle>) -> BlockStyle 
         ];
 
         // Border radii
-        let width = layout.size.width;
-        let height = layout.size.height;
+        let (width, height) = size_in_pt(layout.size);
         let resolve_radius =
             |r: &style::values::computed::length_percentage::NonNegativeLengthPercentage,
              basis: f32|
@@ -3054,15 +3004,10 @@ mod tests {
             .before
             .expect("::before pseudo");
         let pseudo = doc.get_node(before_id).unwrap();
-        let parent_layout = doc.get_node(h1_id).unwrap().final_layout.size;
+        let (parent_w, parent_h) = size_in_pt(doc.get_node(h1_id).unwrap().final_layout.size);
 
-        let img = build_pseudo_image(
-            pseudo,
-            parent_layout.width,
-            parent_layout.height,
-            Some(&bundle),
-        )
-        .expect("build_pseudo_image should return Some for content: url()");
+        let img = build_pseudo_image(pseudo, parent_w, parent_h, Some(&bundle))
+            .expect("build_pseudo_image should return Some for content: url()");
         assert_eq!(img.width, 48.0);
         assert_eq!(img.height, 48.0);
     }
@@ -3091,15 +3036,9 @@ mod tests {
         let h1_id = find_h1(&doc);
         let before_id = doc.get_node(h1_id).unwrap().before.unwrap();
         let pseudo = doc.get_node(before_id).unwrap();
-        let parent_layout = doc.get_node(h1_id).unwrap().final_layout.size;
+        let (parent_w, parent_h) = size_in_pt(doc.get_node(h1_id).unwrap().final_layout.size);
 
-        let img = build_pseudo_image(
-            pseudo,
-            parent_layout.width,
-            parent_layout.height,
-            Some(&bundle),
-        )
-        .unwrap();
+        let img = build_pseudo_image(pseudo, parent_w, parent_h, Some(&bundle)).unwrap();
         assert_eq!(img.width, 20.0);
         assert_eq!(img.height, 20.0);
     }
@@ -3678,9 +3617,11 @@ mod tests {
 
         let mut images = Vec::new();
         collect_images(&*tree, &mut images);
+        // 24 CSS px * 0.75 = 18 pt after the layout_in_pt migration (fulgur-9ul).
         assert!(
-            images.iter().any(|(w, h)| *w == 24.0 && *h == 24.0),
-            "expected a 24x24 ImagePageable from content: url() on normal element, got {:?}",
+            images.iter().any(|(w, h)| *w == 18.0 && *h == 18.0),
+            "expected an 18x18 pt ImagePageable from content: url() on normal element \
+             (width/height: 24px × PX_TO_PT), got {:?}",
             images
         );
     }
