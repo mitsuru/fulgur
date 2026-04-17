@@ -9,8 +9,10 @@
 //! `render_html` / `render_html_to_file` は Task 7 以降で追加する。
 
 use crate::asset_bundle::RbAssetBundle;
+use crate::error::map_fulgur_error;
 use crate::margin::RbMargin;
 use crate::page_size::extract as extract_page_size;
+use crate::pdf::RbPdf;
 use fulgur::{Engine, EngineBuilder};
 use magnus::{
     Error, Module, RModule, Ruby, Value, function, method,
@@ -130,8 +132,21 @@ fn builder_build(b: magnus::typed_data::Obj<RbEngineBuilder>) -> Result<RbEngine
 
 #[magnus::wrap(class = "Fulgur::Engine", free_immediately, size)]
 pub struct RbEngine {
-    #[allow(dead_code)] // Task 7 で render_html から参照される
     pub(crate) inner: Engine,
+}
+
+impl RbEngine {
+    /// HTML 文字列を PDF バイト列に変換し、`Fulgur::Pdf` でラップして返す。
+    ///
+    /// GVL 解放や base_path 対応は後続タスクで追加する。Task 7 では最小の同期版。
+    fn render_html(&self, html: String) -> Result<RbPdf, Error> {
+        let ruby = Ruby::get().expect("ruby vm");
+        let bytes = self
+            .inner
+            .render_html(&html)
+            .map_err(|e| map_fulgur_error(&ruby, e))?;
+        Ok(RbPdf::new(bytes))
+    }
 }
 
 /// kwargs-only constructor。positional args は受け付けない。
@@ -203,6 +218,7 @@ pub fn define(_ruby: &Ruby, fulgur: &RModule) -> Result<(), Error> {
     let engine = fulgur.define_class("Engine", magnus::class::object())?;
     engine.define_singleton_method("new", function!(engine_new, -1))?;
     engine.define_singleton_method("builder", function!(engine_builder, 0))?;
+    engine.define_method("render_html", method!(RbEngine::render_html, 1))?;
 
     let builder = fulgur.define_class("EngineBuilder", magnus::class::object())?;
     builder.define_method("page_size", method!(builder_page_size, 1))?;

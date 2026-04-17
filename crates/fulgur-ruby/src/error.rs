@@ -20,7 +20,6 @@ fn class(ruby: &Ruby, name: &str) -> Result<ExceptionClass, Error> {
 /// - `Asset` / `UnsupportedFontFormat` → `Fulgur::AssetError`
 ///
 /// lookup に失敗した場合は `RuntimeError` にフォールバックする。
-#[allow(dead_code)] // Task 3 以降で engine バインディングから呼び出される。
 pub fn map_fulgur_error(ruby: &Ruby, err: FulgurError) -> Error {
     match err {
         FulgurError::Io(io_err) => match io_err.kind() {

@@ -13,6 +13,7 @@ mod engine;
 mod error;
 mod margin;
 mod page_size;
+mod pdf;
 
 #[cfg(test)]
 mod assertions {
@@ -27,6 +28,7 @@ fn init(ruby: &magnus::Ruby) -> Result<(), Error> {
     page_size::define(ruby, &fulgur)?;
     margin::define(ruby, &fulgur)?;
     asset_bundle::define(ruby, &fulgur)?;
+    pdf::define(ruby, &fulgur)?;
     engine::define(ruby, &fulgur)?;
     Ok(())
 }
