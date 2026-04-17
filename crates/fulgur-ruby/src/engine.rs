@@ -6,7 +6,8 @@
 //!   `#author`, `#lang`, `#bookmarks`: setter は `self` を返してチェーンを成立させる。
 //! - `EngineBuilder#build`: `Engine` を返す。2 回目の呼び出しは RuntimeError。
 //!
-//! `render_html` / `render_html_to_file` は Task 7 以降で追加する。
+//! `Engine#render_html` は `Fulgur::Pdf` を返し、`#render_html_to_file` は
+//! PDF をそのままファイルに書き出す。どちらもレンダリング中は GVL を解放する。
 
 use crate::asset_bundle::RbAssetBundle;
 use crate::error::map_fulgur_error;
@@ -175,6 +176,35 @@ impl RbEngine {
             Err(e) => Err(map_fulgur_error(&ruby, e)),
         }
     }
+
+    /// HTML を PDF に変換してファイルに書き出す。`render_html` と同じく GVL を
+    /// 解放して実行する。
+    fn render_html_to_file(&self, html: String, path: String) -> Result<(), Error> {
+        struct Args {
+            engine: *const Engine,
+            html: String,
+            path: std::path::PathBuf,
+        }
+        // SAFETY: `render_html` と同じ不変条件。`Engine: Send + Sync` は
+        // compile-time に assert されている。`without_gvl` は呼び出し元を
+        // block するため、closure 実行中に `self` (= *engine) は生きている。
+        unsafe impl Send for Args {}
+
+        let args = Args {
+            engine: &self.inner as *const Engine,
+            html,
+            path: std::path::PathBuf::from(path),
+        };
+        let result: Result<(), fulgur::Error> = crate::gvl::without_gvl(args, |a| {
+            // SAFETY: `a.engine` は呼び出し元の `&self.inner` から作った
+            // pointer。`without_gvl` の block 中は self が生存している。
+            let engine: &Engine = unsafe { &*a.engine };
+            engine.render_html_to_file(&a.html, &a.path)
+        });
+
+        let ruby = Ruby::get().expect("ruby vm");
+        result.map_err(|e| map_fulgur_error(&ruby, e))
+    }
 }
 
 /// kwargs-only constructor。positional args は受け付けない。
@@ -247,6 +277,10 @@ pub fn define(_ruby: &Ruby, fulgur: &RModule) -> Result<(), Error> {
     engine.define_singleton_method("new", function!(engine_new, -1))?;
     engine.define_singleton_method("builder", function!(engine_builder, 0))?;
     engine.define_method("render_html", method!(RbEngine::render_html, 1))?;
+    engine.define_method(
+        "render_html_to_file",
+        method!(RbEngine::render_html_to_file, 2),
+    )?;
 
     let builder = fulgur.define_class("EngineBuilder", magnus::class::object())?;
     builder.define_method("page_size", method!(builder_page_size, 1))?;
