@@ -2023,16 +2023,16 @@ fn extract_block_style(node: &Node, assets: Option<&AssetBundle>) -> BlockStyle 
     let layout = node.final_layout;
     let mut style = BlockStyle {
         border_widths: [
-            layout.border.top,
-            layout.border.right,
-            layout.border.bottom,
-            layout.border.left,
+            layout.border.top * PX_TO_PT,
+            layout.border.right * PX_TO_PT,
+            layout.border.bottom * PX_TO_PT,
+            layout.border.left * PX_TO_PT,
         ],
         padding: [
-            layout.padding.top,
-            layout.padding.right,
-            layout.padding.bottom,
-            layout.padding.left,
+            layout.padding.top * PX_TO_PT,
+            layout.padding.right * PX_TO_PT,
+            layout.padding.bottom * PX_TO_PT,
+            layout.padding.left * PX_TO_PT,
         ],
         ..Default::default()
     };
