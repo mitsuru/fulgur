@@ -63,4 +63,34 @@ RSpec.describe Fulgur::Engine do
       expect { b.build }.to raise_error(/already been built/)
     end
   end
+
+  describe "GVL release" do
+    # render_html が GVL を解放している限り、Ruby 側の別スレッド (ticker) は
+    # レンダリング中にも進行できる。GVL が解放されていない場合、ticker は
+    # render_html 完了まで走れず counter はほぼ 0 のまま。これは時間ベースの
+    # ヒューリスティックであり、極端に遅い CI 環境では counter が伸びにくい
+    # 可能性があるため、閾値はかなり保守的に設定している。
+    it "allows concurrent Ruby threads during render_html" do
+      engine = described_class.new
+      html = File.read(File.expand_path("fixtures/simple.html", __dir__))
+
+      counter = 0
+      mutex = Mutex.new
+      ticker_done = false
+
+      ticker = Thread.new do
+        80.times do
+          mutex.synchronize { counter += 1 }
+          sleep 0.003
+        end
+        ticker_done = true
+      end
+
+      10.times { engine.render_html(html) }
+      ticker.join(10)
+
+      expect(ticker_done).to be true
+      expect(counter).to be >= 10
+    end
+  end
 end

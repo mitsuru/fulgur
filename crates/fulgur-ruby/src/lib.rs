@@ -11,6 +11,7 @@ use magnus::{Error, define_module};
 mod asset_bundle;
 mod engine;
 mod error;
+mod gvl;
 mod margin;
 mod page_size;
 mod pdf;

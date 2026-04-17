@@ -138,14 +138,42 @@ pub struct RbEngine {
 impl RbEngine {
     /// HTML 文字列を PDF バイト列に変換し、`Fulgur::Pdf` でラップして返す。
     ///
-    /// GVL 解放や base_path 対応は後続タスクで追加する。Task 7 では最小の同期版。
+    /// レンダリング本体は GVL を解放して実行するため、他の Ruby スレッド
+    /// (Thread.new 等) が並行して進める。GVL 解放中のクロージャ内では
+    /// Ruby VM に触れてはならないので、エラー変換 (`map_fulgur_error`) は
+    /// GVL 再取得後に行う。
     fn render_html(&self, html: String) -> Result<RbPdf, Error> {
+        // `Engine: Send + Sync` は `src/lib.rs` の `assert_impl_all!` で
+        // コンパイル時に検証済み。raw pointer に一段落としてクロージャへ
+        // 渡し、GVL 解放スレッド側で `&Engine` に戻す。
+        struct Args {
+            engine: *const Engine,
+            html: String,
+        }
+        // SAFETY: `Engine: Sync` なので複数スレッドから &Engine 経由で
+        // read-only 参照するのは安全。raw pointer 自体は !Send のため
+        // 明示的に unsafe impl で Send を付与する。self (RbEngine) は
+        // `without_gvl` の間 block される呼び出し側スタックに生きている
+        // ので、dangling にはならない。
+        unsafe impl Send for Args {}
+
+        let args = Args {
+            engine: &self.inner as *const Engine,
+            html,
+        };
+        let result: Result<Vec<u8>, fulgur::Error> = crate::gvl::without_gvl(args, |a| {
+            // SAFETY: `a.engine` は呼び出し元の `&self.inner` から作った
+            // pointer。`without_gvl` は呼び出し元を block しているため、
+            // この closure が走っている間 `self` は生存している。
+            let engine: &Engine = unsafe { &*a.engine };
+            engine.render_html(&a.html)
+        });
+
         let ruby = Ruby::get().expect("ruby vm");
-        let bytes = self
-            .inner
-            .render_html(&html)
-            .map_err(|e| map_fulgur_error(&ruby, e))?;
-        Ok(RbPdf::new(bytes))
+        match result {
+            Ok(bytes) => Ok(RbPdf::new(bytes)),
+            Err(e) => Err(map_fulgur_error(&ruby, e)),
+        }
     }
 }
 
