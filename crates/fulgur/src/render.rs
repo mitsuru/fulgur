@@ -510,8 +510,8 @@ pub fn render_to_pdf_with_gcpm(
                 );
                 let render_doc = crate::blitz_adapter::parse_and_layout(
                     &render_html,
-                    rect.width,
-                    rect.height,
+                    crate::convert::pt_to_px(rect.width),
+                    crate::convert::pt_to_px(rect.height),
                     font_data,
                 );
                 let dummy_store = RunningElementStore::new();

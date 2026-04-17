@@ -603,11 +603,11 @@ fn convert_node_inner(
         // `normal`, matching the same heuristic Blitz uses internally.
         let line_height = {
             use style::values::computed::font::LineHeight;
-            let font_size_pt = styles.clone_font_size().used_size().px() * PX_TO_PT;
+            let font_size_pt = px_to_pt(styles.clone_font_size().used_size().px());
             match styles.clone_line_height() {
                 LineHeight::Normal => font_size_pt * DEFAULT_LINE_HEIGHT_RATIO,
                 LineHeight::Number(num) => font_size_pt * num.0,
-                LineHeight::Length(value) => value.0.px() * PX_TO_PT,
+                LineHeight::Length(value) => px_to_pt(value.0.px()),
             }
         };
 
@@ -658,18 +658,18 @@ fn convert_node_inner(
 
         // Derive font_size and line_height from computed styles.
         let (font_size_pt, line_height) = if let Some(styles) = node.primary_styles() {
-            let fs = styles.clone_font_size().used_size().px() * PX_TO_PT;
+            let fs = px_to_pt(styles.clone_font_size().used_size().px());
             let lh = {
                 use style::values::computed::font::LineHeight;
                 match styles.clone_line_height() {
                     LineHeight::Normal => fs * DEFAULT_LINE_HEIGHT_RATIO,
                     LineHeight::Number(num) => fs * num.0,
-                    LineHeight::Length(value) => value.0.px() * PX_TO_PT,
+                    LineHeight::Length(value) => px_to_pt(value.0.px()),
                 }
             };
             (fs, lh)
         } else {
-            (12.0 * PX_TO_PT, 12.0 * PX_TO_PT * DEFAULT_LINE_HEIGHT_RATIO)
+            (px_to_pt(12.0), px_to_pt(12.0) * DEFAULT_LINE_HEIGHT_RATIO)
         };
 
         let color = get_text_color(doc, node_id);
@@ -1643,9 +1643,15 @@ fn resolve_pseudo_size(size: &style::values::computed::Size, parent_width: f32) 
     use style::values::generics::length::GenericSize;
     match size {
         GenericSize::LengthPercentage(lp) => {
-            // NonNegativeLengthPercentage is a tuple struct with `.0` being
-            // the inner LengthPercentage.
-            Some(lp.0.resolve(Length::new(parent_width)).px())
+            // Stylo resolves length-percentages in CSS px space: absolute
+            // lengths (`48px`) come back as raw px, while percentages scale
+            // against whatever basis we hand in. Feeding it a CSS px basis
+            // and converting the result to pt keeps both branches consistent
+            // with the docstring's "f32 in pt" contract. The caller's basis
+            // is already pt (from Pageable tree geometry), so round-trip
+            // via pt → px → resolve → pt.
+            let basis_px = pt_to_px(parent_width);
+            Some(px_to_pt(lp.0.resolve(Length::new(basis_px)).px()))
         }
         // auto / min-content / max-content / fit-content / stretch etc. are
         // all treated as "not specified" here. The `make_image_pageable`
@@ -2032,16 +2038,16 @@ fn extract_block_style(node: &Node, assets: Option<&AssetBundle>) -> BlockStyle 
     let layout = node.final_layout;
     let mut style = BlockStyle {
         border_widths: [
-            layout.border.top * PX_TO_PT,
-            layout.border.right * PX_TO_PT,
-            layout.border.bottom * PX_TO_PT,
-            layout.border.left * PX_TO_PT,
+            px_to_pt(layout.border.top),
+            px_to_pt(layout.border.right),
+            px_to_pt(layout.border.bottom),
+            px_to_pt(layout.border.left),
         ],
         padding: [
-            layout.padding.top * PX_TO_PT,
-            layout.padding.right * PX_TO_PT,
-            layout.padding.bottom * PX_TO_PT,
-            layout.padding.left * PX_TO_PT,
+            px_to_pt(layout.padding.top),
+            px_to_pt(layout.padding.right),
+            px_to_pt(layout.padding.bottom),
+            px_to_pt(layout.padding.left),
         ],
         ..Default::default()
     };
@@ -2081,9 +2087,10 @@ fn extract_block_style(node: &Node, assets: Option<&AssetBundle>) -> BlockStyle 
             |r: &style::values::computed::length_percentage::NonNegativeLengthPercentage,
              basis: f32|
              -> f32 {
-                r.0.resolve(style::values::computed::Length::new(basis))
-                    .px()
-                    * PX_TO_PT
+                px_to_pt(
+                    r.0.resolve(style::values::computed::Length::new(basis))
+                        .px(),
+                )
             };
 
         let tl = styles.clone_border_top_left_radius();
@@ -2134,10 +2141,10 @@ fn extract_block_style(node: &Node, assets: Option<&AssetBundle>) -> BlockStyle 
                 continue; // fully transparent — skip
             }
             style.box_shadows.push(crate::pageable::BoxShadow {
-                offset_x: shadow.base.horizontal.px(),
-                offset_y: shadow.base.vertical.px(),
-                blur: blur_px,
-                spread: shadow.spread.px(),
+                offset_x: px_to_pt(shadow.base.horizontal.px()),
+                offset_y: px_to_pt(shadow.base.vertical.px()),
+                blur: px_to_pt(blur_px),
+                spread: px_to_pt(shadow.spread.px()),
                 color: [r, g, b, a],
                 inset: false,
             });
@@ -2321,7 +2328,7 @@ fn convert_lp_to_bg(lp: &style::values::computed::LengthPercentage) -> BgLengthP
     if let Some(pct) = lp.to_percentage() {
         BgLengthPercentage::Percentage(pct.0)
     } else {
-        BgLengthPercentage::Length(lp.to_length().map(|l| l.px()).unwrap_or(0.0))
+        BgLengthPercentage::Length(lp.to_length().map(|l| px_to_pt(l.px())).unwrap_or(0.0))
     }
 }
 
@@ -2421,8 +2428,8 @@ fn size_raster_marker(
     line_height: f32,
 ) -> Option<(f32, f32)> {
     let (iw, ih) = ImagePageable::decode_dimensions(data, format)?;
-    let intrinsic_w = iw as f32 * PX_TO_PT;
-    let intrinsic_h = ih as f32 * PX_TO_PT;
+    let intrinsic_w = px_to_pt(iw as f32);
+    let intrinsic_h = px_to_pt(ih as f32);
     Some(crate::pageable::clamp_marker_size(
         intrinsic_w,
         intrinsic_h,
@@ -2466,8 +2473,8 @@ fn resolve_list_marker(
         AssetKind::Svg => {
             let tree = usvg::Tree::from_data(data, &usvg::Options::default()).ok()?;
             let size = tree.size();
-            let intrinsic_w = size.width() * PX_TO_PT;
-            let intrinsic_h = size.height() * PX_TO_PT;
+            let intrinsic_w = px_to_pt(size.width());
+            let intrinsic_h = px_to_pt(size.height());
             let (width, height) =
                 crate::pageable::clamp_marker_size(intrinsic_w, intrinsic_h, line_height);
             let svg = SvgPageable::new(Arc::new(tree), width, height);
@@ -3022,13 +3029,15 @@ mod tests {
 
         let img = build_pseudo_image(pseudo, parent_w, parent_h, Some(&bundle))
             .expect("build_pseudo_image should return Some for content: url()");
-        assert_eq!(img.width, 48.0);
-        assert_eq!(img.height, 48.0);
+        // 48 CSS px × 0.75 = 36 pt
+        assert_eq!(img.width, 36.0);
+        assert_eq!(img.height, 36.0);
     }
 
     #[test]
     fn test_build_pseudo_image_width_only_uses_intrinsic_aspect() {
-        // icon.png is 32x32 so aspect = 1.0. width=20 → height=20.
+        // icon.png is 32x32 so aspect = 1.0. width:20px → 15 pt, height
+        // back-propagates via intrinsic aspect → 15 pt.
         let icon_bytes = std::fs::read(
             std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
                 .parent()
@@ -3053,8 +3062,8 @@ mod tests {
         let (parent_w, parent_h) = size_in_pt(doc.get_node(h1_id).unwrap().final_layout.size);
 
         let img = build_pseudo_image(pseudo, parent_w, parent_h, Some(&bundle)).unwrap();
-        assert_eq!(img.width, 20.0);
-        assert_eq!(img.height, 20.0);
+        assert_eq!(img.width, 15.0);
+        assert_eq!(img.height, 15.0);
     }
 
     #[test]
@@ -3180,8 +3189,8 @@ mod tests {
         let mut images = Vec::new();
         collect_images(&*tree, &mut images);
         assert!(
-            images.iter().any(|(w, h)| *w == 24.0 && *h == 24.0),
-            "expected a 24x24 ImagePageable from ::before pseudo, got {:?}",
+            images.iter().any(|(w, h)| *w == 18.0 && *h == 18.0),
+            "expected an 18x18 pt ImagePageable (24 CSS px × 0.75) from ::before pseudo, got {:?}",
             images
         );
     }
@@ -3269,8 +3278,8 @@ mod tests {
         let mut images = Vec::new();
         collect_images(&*tree, &mut images);
         assert!(
-            images.iter().any(|(w, h)| *w == 16.0 && *h == 16.0),
-            "childless element ::before pseudo should emit a 16x16 image; got {:?}",
+            images.iter().any(|(w, h)| *w == 12.0 && *h == 12.0),
+            "childless element ::before pseudo should emit a 12x12 pt image (16 CSS px × 0.75); got {:?}",
             images
         );
     }
@@ -3324,8 +3333,8 @@ mod tests {
         let mut images = Vec::new();
         walk_all_children(&*tree, &mut |p| collect_images(p, &mut images));
         assert!(
-            images.iter().any(|(w, h)| *w == 18.0 && *h == 18.0),
-            "zero-size block leaf with block pseudo should emit an 18x18 image; got {:?}",
+            images.iter().any(|(w, h)| *w == 13.5 && *h == 13.5),
+            "zero-size block leaf with block pseudo should emit a 13.5x13.5 pt image (18 CSS px × 0.75); got {:?}",
             images
         );
     }
@@ -3370,8 +3379,8 @@ mod tests {
         let mut images = Vec::new();
         walk_all_children(&*tree, &mut |p| collect_images(p, &mut images));
         assert!(
-            images.iter().any(|(w, h)| *w == 12.0 && *h == 12.0),
-            "list item with text + block pseudo should emit a 12x12 image; got {:?}",
+            images.iter().any(|(w, h)| *w == 9.0 && *h == 9.0),
+            "list item with text + block pseudo should emit a 9x9 pt image (12 CSS px × 0.75); got {:?}",
             images
         );
     }
@@ -3549,8 +3558,9 @@ mod tests {
         let img = build_inline_pseudo_image(pseudo, 800.0, 600.0, Some(&bundle));
         assert!(img.is_some(), "should return Some for inline pseudo");
         let img = img.unwrap();
-        assert_eq!(img.width, 24.0);
-        assert_eq!(img.height, 24.0);
+        // 24 CSS px × 0.75 = 18 pt
+        assert_eq!(img.width, 18.0);
+        assert_eq!(img.height, 18.0);
     }
 
     #[test]
