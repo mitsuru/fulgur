@@ -73,10 +73,47 @@ OIDC claim (repo + workflow + environment) で自動照合されるため、`rol
 
 保護ルール不要 (OIDC claim で scope されるため)。
 
+## GitHub App (release publisher)
+
+`release.yml` の最終 `gh release edit --draft=false` は `release:published` イベントを
+発火させ、`release-python.yml` / `release-ruby.yml` を連鎖起動する。しかし GitHub の
+無限ループ防止仕様により **`GITHUB_TOKEN` で発火したイベントは別 workflow を起動しない**
+([docs](https://docs.github.com/en/actions/using-workflows/triggering-a-workflow#triggering-a-workflow-from-a-workflow))。
+そのため GitHub App token で publish する必要がある。
+
+### App 作成手順
+
+1. <https://github.com/settings/apps/new> で新規 App を作成 (個人アカウント所有でも可)
+   - GitHub App name: `fulgur-release-bot` 等 (任意・グローバル一意)
+   - Homepage URL: 任意 (例: リポジトリ URL)
+   - Webhook: "Active" のチェックを外す
+   - Repository permissions:
+     - **Contents: Read and write** (release 作成・編集に必要)
+   - Where can this GitHub App be installed?: "Only on this account"
+2. 作成後の App 設定画面で:
+   - **App ID** を控える (数値)
+   - **Private keys** → "Generate a private key" で `.pem` をダウンロード
+3. 左メニュー "Install App" から対象リポジトリ (`mitsuru/fulgur`) に install
+   - "Only select repositories" で fulgur のみに限定
+
+### リポジトリ secrets に登録
+
+Settings → Secrets and variables → Actions → New repository secret:
+
+- `RELEASE_APP_ID`: 上記 App ID (数値)
+- `RELEASE_APP_PRIVATE_KEY`: ダウンロードした `.pem` ファイルの内容全体
+  (`-----BEGIN RSA PRIVATE KEY-----` から `-----END RSA PRIVATE KEY-----` まで)
+
+### 動作確認
+
+次回 release で GitHub Actions の `release.yml` → `release` job が成功したあと、
+Actions タブで `release-python.yml` / `release-ruby.yml` が自動的に `release` イベントで
+起動することを確認する。
+
 ## Release 手順
 
 1. `release-prepare.yml` を `workflow_dispatch` で起動 (version 入力)
 2. 作成された `release/vX.Y.Z` PR を merge
-3. `release.yml` が tag + crates.io publish + GitHub Release publish
+3. `release.yml` が tag + crates.io publish + GitHub Release publish (App token)
 4. `release: published` で `release-python.yml` と `release-ruby.yml` が並行発火
 5. 数分〜十数分後に PyPI / RubyGems へ反映

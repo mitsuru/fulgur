@@ -135,9 +135,20 @@ jobs:
           path: artifacts
           merge-multiple: true
 
+      # GITHUB_TOKEN で発火した release:published は別 workflow を起動しない
+      # (無限ループ防止仕様)。release-python.yml / release-ruby.yml を連鎖発火
+      # させるため、App token で publish する。
+      # 手順は docs/RELEASE_SETUP.md を参照。
+      - name: Generate App token for release publish
+        id: app-token
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ secrets.RELEASE_APP_ID }}
+          private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+
       - name: Upload binaries and publish release
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
         run: |
           VERSION="${{ needs.publish.outputs.version }}"
           REPO="${{ github.repository }}"
@@ -149,6 +160,6 @@ jobs:
               --draft \
               --repo "$REPO"
           fi
-          # Upload binaries and publish
+          # Upload binaries and publish (App token → release:published が連鎖発火)
           gh release upload "v$VERSION" artifacts/* --repo "$REPO"
           gh release edit "v$VERSION" --draft=false --repo "$REPO"
