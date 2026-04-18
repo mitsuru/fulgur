@@ -2,11 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
-## [0.5.3] - 2026-04-18
+## [0.5.4] - 2026-04-18
 
 ### Bug Fixes
 
 - drop remote-* config to use default GITHUB_TOKEN
+- store signatures on dedicated cla-signatures branch
 
 ### Documentation
 
@@ -27,6 +28,12 @@ All notable changes to this project will be documented in this file.
 
 - update repository URLs to fulgur-rs/fulgur
 - merge main into docs/add-cla — resolve README badge conflict
+- migrate crates.io publish to Trusted Publisher
+- use App token for tag push (workflows permission)
+
+### Release
+
+- v0.5.3
 
 ## [0.5.2] - 2026-04-18
 
