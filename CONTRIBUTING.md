@@ -41,9 +41,13 @@ and all your future contributions to this repository are covered.
 
 ### For employed contributors
 
-If you are contributing as part of your employment, please ensure you have your
-employer's permission. A future Corporate CLA (CCLA) may be required for
-company-wide contributions; contact the maintainer if this applies.
+If you are contributing as part of your employment, your employer must sign the
+[Corporate Contributor License Agreement (CCLA)](CCLA.md) before you submit a
+pull request. The CCLA is signed out of band (not via the bot): complete
+Schedule A, have an authorized representative sign, and submit via pull request
+or email as described in the CCLA's Signing Procedure section. Once signed, all
+listed Designated Contributors can contribute without signing the ICLA
+separately.
 
 ## Development Workflow
 
