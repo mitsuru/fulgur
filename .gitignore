@@ -1,6 +1,5 @@
 /target
 /tmp
 .worktrees
-.beads/issues.jsonl
 **/.env
 **/.env.*
