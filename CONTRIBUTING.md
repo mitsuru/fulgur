@@ -43,11 +43,19 @@ and all your future contributions to this repository are covered.
 
 If you are contributing as part of your employment, your employer must sign the
 [Corporate Contributor License Agreement (CCLA)](CCLA.md) before you submit a
-pull request. The CCLA is signed out of band (not via the bot): complete
-Schedule A, have an authorized representative sign, and submit via pull request
-or email as described in the CCLA's Signing Procedure section. Once signed, all
-listed Designated Contributors can contribute without signing the ICLA
-separately.
+pull request. The CCLA is signed out of band (not via the bot):
+
+1. Complete Schedule A with your Designated Contributors.
+2. Have an authorized representative sign.
+3. To coordinate submission, open a
+   [GitHub issue](https://github.com/fulgur-rs/fulgur/issues/new) tagged `cla`
+   — the maintainer will respond with the canonical submission channel (signed
+   PDF via pull request to `.github/corporate-signatures/`, or email for
+   companies that cannot publish the signed PDF publicly).
+
+Once signed, all listed Designated Contributors can contribute without signing
+the ICLA separately. See the [CCLA's Signing Procedure](CCLA.md#7-signing-procedure)
+for full details.
 
 ## Development Workflow
 
