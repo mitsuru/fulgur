@@ -78,14 +78,18 @@ cargo run --bin fulgur -- render input.html -o output.pdf
 
 Before submitting a PR, please verify:
 
-- [ ] Code compiles without errors (`cargo build`)
-- [ ] Tests pass (`cargo test`)
+- [ ] Tests pass (`cargo test -p fulgur` — substitute the appropriate crate if
+      your change is in bindings)
 - [ ] Clippy is clean (`cargo clippy`)
 - [ ] Formatting is correct (`cargo fmt --check`)
-- [ ] Markdown files lint cleanly (`npx markdownlint-cli2 '**/*.md'`)
+- [ ] Markdown files lint cleanly (`npx markdownlint-cli2 '**/*.md'`, if docs
+      changed)
 - [ ] New behavior has tests
 - [ ] Documentation is updated if user-facing behavior changes
 - [ ] CLA has been signed (first-time contributors only)
+
+The PR template reproduces the core commands as a ticklist; both should stay
+in sync.
 
 ## Commit messages
 

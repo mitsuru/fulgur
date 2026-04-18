@@ -25,10 +25,10 @@
 
 By opening this pull request, I confirm that:
 
-- [ ] I have read the [Contributing Guide](../CONTRIBUTING.md)
-- [ ] I have read the [CLA](../CLA.md) and agree to its terms. (First-time
-      contributors: the CLA Assistant bot will comment on this PR with sign-in
-      instructions.)
+- [ ] I have read the [Contributing Guide](https://github.com/fulgur-rs/fulgur/blob/main/CONTRIBUTING.md)
+- [ ] I have read the [CLA](https://github.com/fulgur-rs/fulgur/blob/main/CLA.md)
+      and agree to its terms. (First-time contributors: the CLA Assistant bot
+      will comment on this PR with sign-in instructions.)
 
 ## Related issues
 
