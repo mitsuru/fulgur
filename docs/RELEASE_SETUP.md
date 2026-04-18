@@ -12,6 +12,31 @@ pyfulgur と fulgur gem はどちらも PyPI / RubyGems に未登録の可能性
   OIDC claim で自動的に project が作成される。
 - **既存 publisher 追加**: 既に project が存在する場合は publisher を追加登録。
 
+## crates.io Trusted Publisher
+
+`release.yml` の `publish` job は `rust-lang/crates-io-auth-action@v1` で
+OIDC token を取得し、crates.io に publish する。長期 PAT
+(`CARGO_REGISTRY_TOKEN`) を secrets に持つ必要はない。
+
+各 crate (`fulgur`, `fulgur-cli`) で Trusted Publisher を登録する:
+
+1. <https://crates.io/> にログイン (crate owner アカウント)
+2. 各 crate の Settings → "Trusted Publishing" タブを開く
+   (例: <https://crates.io/crates/fulgur/settings>)
+3. "Add" で以下を登録:
+   - Repository owner: `fulgur-rs`
+   - Repository name: `fulgur`
+   - Workflow filename: `release.yml`
+   - Environment: `release`
+4. `fulgur-cli` も同様に登録
+
+新規 crate の場合は先に <https://crates.io/settings/tokens> 的に
+"Pending Trusted Publisher" で名前を予約してから初回 publish で
+OIDC 経由の採用が確定する。
+
+登録完了後、旧 secret `CARGO_REGISTRY_TOKEN` は不要なので Settings →
+Secrets and variables → Actions から削除してよい。
+
 ## PyPI Trusted Publisher
 
 ### Production (pypi.org)
