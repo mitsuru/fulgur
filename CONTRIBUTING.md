@@ -39,6 +39,12 @@ I have read the CLA Document and I hereby sign the CLA
 That's it. The bot will record your signature in `.github/cla-signatures.json`
 and all your future contributions to this repository are covered.
 
+> **Note on CLA revisions.** The current CLA and CCLA are marked as v1.0
+> DRAFT pending legal review. When the documents are revised to v2.0, we
+> may ask existing signatories to re-sign the updated version; we will
+> announce the change and the re-sign window in the repository before
+> requiring it.
+
 ### For employed contributors
 
 If you are contributing as part of your employment, your employer must sign the
