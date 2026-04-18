@@ -15,7 +15,12 @@ default = ["ruby-api"]
 ruby-api = ["dep:magnus", "dep:rb-sys"]
 
 [dependencies]
-fulgur = { path = "../../../fulgur" }
+# cross-gem-action は `directory: crates/fulgur-ruby` しか container にマウントしない
+# ため、`path = "../../../fulgur"` では cargo がパスを解決できない。crates.io 公開版
+# を参照する (release 時は release.yml → release: published → release-ruby.yml の順で
+# 発火するため、この時点で fulgur のバージョンは crates.io に存在する)。
+# release-prepare.yml が sed でこの行のバージョンを同期する。
+fulgur = "0.4.5"
 base64 = "0.22"
 magnus = { version = "0.7", optional = true }
 rb-sys = { version = "0.9", optional = true }

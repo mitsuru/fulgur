@@ -1,20 +1,31 @@
 # frozen_string_literal: true
 
 require "bundler/gem_tasks"
-require "rb_sys/extensiontask"
+require "rake/extensiontask"
 require "rspec/core/rake_task"
 
 RSpec::Core::RakeTask.new(:spec)
 
-gemspec = Gem::Specification.load("fulgur.gemspec")
-
-# RbSys::ExtensionTask extends Rake::ExtensionTask with rb-sys-dock integration.
-# cross_compile / cross_platform は RUBY_TARGET 環境変数から自動設定される
-# (oxidize-rb/cross-gem-action が rake-compiler-dock 内で設定する)。
-# これにより `rake native:<platform>` タスクが動的に生成される。
-RbSys::ExtensionTask.new("fulgur", gemspec) do |ext|
+# Rake::ExtensionTask with explicit cross_compile + cross_platform.
+# RbSys::ExtensionTask は cargo metadata inference が dual-Cargo.toml (ext/fulgur と
+# crates/fulgur-ruby で package 名が異なる) に合わず使えない。Rake::ExtensionTask は
+# metadata inference をせず、ext/fulgur/extconf.rb が生成する Makefile 経由で cargo を
+# 呼ぶ設計なので、cross-gem-action + rake-compiler-dock 環境下で native:<platform>
+# タスクが動く。
+# cross_platform は release-ruby.yml の build-precompiled マトリクスと一致させること。
+Rake::ExtensionTask.new("fulgur") do |ext|
   ext.lib_dir = "lib/fulgur"
   ext.source_pattern = "*.{rs,toml}"
+  ext.cross_compile = true
+  ext.cross_platform = %w[
+    x86_64-linux
+    x86_64-linux-musl
+    aarch64-linux
+    aarch64-linux-musl
+    x86_64-darwin
+    arm64-darwin
+    x64-mingw-ucrt
+  ]
 end
 
 task default: %i[compile spec]
