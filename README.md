@@ -1,9 +1,9 @@
 # Fulgur
 
 [![codecov](https://codecov.io/gh/fulgur-rs/fulgur/graph/badge.svg)](https://codecov.io/gh/fulgur-rs/fulgur)
-[![Coverage](https://raw.githubusercontent.com/mitsuru/octocovs/main/badges/mitsuru/fulgur/coverage.svg)](https://github.com/mitsuru/octocovs)
-[![Code to Test Ratio](https://raw.githubusercontent.com/mitsuru/octocovs/main/badges/mitsuru/fulgur/ratio.svg)](https://github.com/mitsuru/octocovs)
-[![Test Execution Time](https://raw.githubusercontent.com/mitsuru/octocovs/main/badges/mitsuru/fulgur/time.svg)](https://github.com/mitsuru/octocovs)
+[![Coverage](https://raw.githubusercontent.com/mitsuru/octocovs/main/badges/fulgur-rs/fulgur/coverage.svg)](https://github.com/mitsuru/octocovs)
+[![Code to Test Ratio](https://raw.githubusercontent.com/mitsuru/octocovs/main/badges/fulgur-rs/fulgur/ratio.svg)](https://github.com/mitsuru/octocovs)
+[![Test Execution Time](https://raw.githubusercontent.com/mitsuru/octocovs/main/badges/fulgur-rs/fulgur/time.svg)](https://github.com/mitsuru/octocovs)
 
 A modern, lightweight alternative to wkhtmltopdf. Converts HTML/CSS to PDF without a browser engine.
 
@@ -217,3 +217,19 @@ multi-tenant SaaS), see the
 [threat model](docs/security/threat-model.md)
 ([日本語](docs/security/threat-model.ja.md)) for the full analysis of
 attack vectors and mitigations.
+
+## Contributing
+
+Contributions are welcome! Please read the [Contributing Guide](CONTRIBUTING.md)
+before opening a pull request. All contributors must sign the
+[Contributor License Agreement](CLA.md) — a bot will guide you through the
+one-time sign-off on your first PR.
+
+## License
+
+Fulgur is dual-licensed under either of:
+
+- [Apache License, Version 2.0](LICENSE-APACHE)
+- [MIT License](LICENSE-MIT)
+
+at your option.
