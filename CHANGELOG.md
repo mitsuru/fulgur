@@ -2,6 +2,32 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.5.3] - 2026-04-18
+
+### Bug Fixes
+
+- drop remote-* config to use default GITHUB_TOKEN
+
+### Documentation
+
+- add Contributor License Agreement and contributing guide
+- set Lutom LLC. as the CLA contracting party
+- address review feedback from coderabbit and Devin
+- add draft Corporate Contributor License Agreement (CCLA)
+- apply opportunistic hardening to CLA v1.0
+- fix jurisdiction to Osaka District Court
+- address CodeRabbit review — bilingual completeness and operational contacts
+- align ICLA moral rights wording with CCLA
+- require CCLA for employed contributors in ICLA 3(c)
+- elaborate CCLA signing procedure and Schedule A rules
+- refine design principles — drop fd 1 line, add 3 from memory
+- note possible re-sign on v2.0 CLA/CCLA revision
+
+### Miscellaneous
+
+- update repository URLs to fulgur-rs/fulgur
+- merge main into docs/add-cla — resolve README badge conflict
+
 ## [0.5.2] - 2026-04-18
 
 ### CI
@@ -14,6 +40,10 @@ All notable changes to this project will be documented in this file.
 
 - upgrade pyo3 0.22 → 0.28
 - bump minimum maturin to 1.9.4 for pyo3 0.28
+
+### Release
+
+- v0.5.2
 
 ## [0.5.1] - 2026-04-18
 
