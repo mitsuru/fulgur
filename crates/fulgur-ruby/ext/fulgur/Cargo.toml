@@ -3,7 +3,9 @@
 [package]
 name = "fulgur"
 version = "0.0.1"
-edition = "2021"
+# crates/fulgur-ruby/Cargo.toml と同じ src を共有 (path = "../../src/lib.rs")。
+# workspace と同じ edition 2024 に揃える。
+edition = "2024"
 
 [lib]
 name = "fulgur"

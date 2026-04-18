@@ -33,4 +33,8 @@ Rake::ExtensionTask.new("fulgur", fulgur_gemspec) do |ext|
   ext.cross_platform = [ENV["RUBY_TARGET"]].compact
 end
 
-task default: %i[compile spec]
+# spec タスクは rspec guard と連動して条件付きで default に含める。
+# rb-sys-dock container など rspec 未 install 環境では spec を除外する。
+default_tasks = [:compile]
+default_tasks << :spec if Rake::Task.task_defined?(:spec)
+task default: default_tasks
