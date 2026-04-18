@@ -30,7 +30,7 @@ jobs:
         with:
           path-to-signatures: '.github/cla-signatures.json'
           path-to-document: 'https://github.com/fulgur-rs/fulgur/blob/main/CLA.md'
-          branch: 'main'
+          branch: 'cla-signatures'
           allowlist: 'dependabot[bot],github-actions[bot],renovate[bot]'
           custom-notsigned-prcomment: >
             Thank you for your pull request! Before we can merge this contribution,
