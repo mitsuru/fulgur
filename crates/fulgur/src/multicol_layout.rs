@@ -360,45 +360,22 @@ pub fn compute_multicol_layout(
         vertical_margins_are_collapsible: Line::FALSE,
     };
 
-    let mut measured: Vec<(NodeId, Size<f32>)> = Vec::with_capacity(children.len());
-    for &child in &children {
-        let output = tree.compute_child_layout(child, child_inputs);
-        measured.push((child, output.size));
-    }
-
-    // 4. column-fill: balance
+    // 4. column-fill: balance (computed inside layout_column_group).
     let avail_h = match inputs.available_space.height {
         AvailableSpace::Definite(h) => h,
         _ => f32::INFINITY,
     };
-    let total_h: f32 = measured.iter().map(|(_, s)| s.height).sum();
-    let budget = if total_h <= 0.0 {
-        0.0
-    } else if total_h >= avail_h * n as f32 {
-        // Content overflows → auto: fill columns to avail_h
-        avail_h
-    } else {
-        balance_budget(&measured, n, avail_h, total_h)
-    };
 
-    // Distribute into columns. Children that are taller than the budget
-    // stay as a single block (no Taffy-level splitting here; page-break
-    // handling still lives in paginate.rs).
-    let mut placements: Vec<(NodeId, Point<f32>, Size<f32>)> = Vec::with_capacity(children.len());
-    let mut col_idx: u32 = 0;
-    let mut col_y: f32 = 0.0;
-    for (child_id, size) in &measured {
-        // Decide first whether this child forces a break to the next column
-        // — the `col_x` captured BEFORE the check would otherwise stay on
-        // the old column.
-        if col_y > 0.0 && col_y + size.height > budget && col_idx + 1 < n {
-            col_idx += 1;
-            col_y = 0.0;
-        }
-        let col_x = col_idx as f32 * (col_w + gap);
-        placements.push((*child_id, Point { x: col_x, y: col_y }, *size));
-        col_y += size.height;
-    }
+    let (placements, container_h) = layout_column_group(
+        tree,
+        col_w,
+        gap,
+        n,
+        avail_h,
+        &children,
+        /* y_offset = */ 0.0,
+        child_inputs,
+    );
 
     // 5. Write child positions back into Taffy's storage.
     for (child_id, location, size) in &placements {
@@ -418,13 +395,7 @@ pub fn compute_multicol_layout(
         tree.set_unrounded_layout(*child_id, &layout);
     }
 
-    // 6. Container size = width × max(column_bottom).
-    let column_bottoms = placements
-        .iter()
-        .map(|(_, loc, sz)| loc.y + sz.height)
-        .fold(0.0f32, f32::max);
-    let container_h = column_bottoms.max(0.0);
-
+    // 6. Container size = width × segment height.
     taffy::LayoutOutput {
         size: Size {
             width: container_w,
@@ -439,6 +410,72 @@ pub fn compute_multicol_layout(
         bottom_margin: CollapsibleMarginSet::ZERO,
         margins_can_collapse_through: false,
     }
+}
+
+/// Place `children` into `n` columns of `col_w`, stacking them vertically
+/// starting at `y_offset`. `avail_h` is the per-column budget ceiling
+/// (for balance / auto fallback); measurement happens inside via Taffy.
+///
+/// Returns `(placements, segment_height)` where `segment_height` is the
+/// max column bottom relative to `y_offset` (i.e. the vertical extent
+/// this segment contributes to the container).
+#[allow(clippy::too_many_arguments, clippy::type_complexity)]
+fn layout_column_group(
+    tree: &mut FulgurLayoutTree<'_>,
+    col_w: f32,
+    gap: f32,
+    n: u32,
+    avail_h: f32,
+    children: &[NodeId],
+    y_offset: f32,
+    child_inputs: taffy::tree::LayoutInput,
+) -> (Vec<(NodeId, Point<f32>, Size<f32>)>, f32) {
+    // 1. Measure
+    let mut measured: Vec<(NodeId, Size<f32>)> = Vec::with_capacity(children.len());
+    for &child in children {
+        let output = tree.compute_child_layout(child, child_inputs);
+        measured.push((child, output.size));
+    }
+
+    // 2. Balance budget
+    let total_h: f32 = measured.iter().map(|(_, s)| s.height).sum();
+    let budget = if total_h <= 0.0 {
+        0.0
+    } else if total_h >= avail_h * n as f32 {
+        avail_h
+    } else {
+        balance_budget(&measured, n, avail_h, total_h)
+    };
+
+    // 3. Distribute
+    let mut placements: Vec<(NodeId, Point<f32>, Size<f32>)> = Vec::with_capacity(children.len());
+    let mut col_idx: u32 = 0;
+    let mut col_y: f32 = 0.0;
+    for (child_id, size) in &measured {
+        if col_y > 0.0 && col_y + size.height > budget && col_idx + 1 < n {
+            col_idx += 1;
+            col_y = 0.0;
+        }
+        let col_x = col_idx as f32 * (col_w + gap);
+        placements.push((
+            *child_id,
+            Point {
+                x: col_x,
+                y: y_offset + col_y,
+            },
+            *size,
+        ));
+        col_y += size.height;
+    }
+
+    // 4. Segment height = tallest column bottom relative to y_offset
+    let seg_h = placements
+        .iter()
+        .map(|(_, loc, sz)| (loc.y - y_offset) + sz.height)
+        .fold(0.0f32, f32::max)
+        .max(0.0);
+
+    (placements, seg_h)
 }
 
 /// Linear search for the smallest per-column budget (starting from `total / n`
@@ -1154,5 +1191,40 @@ mod tests {
             "the multicol's ancestor should have absorbed the height delta: \
              pre={outer_h_pre}, post={outer_h_post}"
         );
+    }
+
+    #[test]
+    fn layout_column_group_matches_legacy_flat_balance() {
+        // Baseline: a container with no column-span: all children, laid out
+        // through the new `layout_column_group` helper, must produce the
+        // same placements as the current compute_multicol_layout.
+        let html = r#"<!doctype html><html><body>
+            <div style="column-count: 2; column-gap: 0;">
+              <p>alpha alpha alpha alpha</p>
+              <p>beta beta beta beta</p>
+              <p>gamma gamma gamma gamma</p>
+              <p>delta delta delta delta</p>
+            </div>
+        </body></html>"#;
+        let mut doc = crate::blitz_adapter::parse(html, 400.0, &[]);
+        crate::blitz_adapter::resolve(&mut doc);
+
+        let mut tree = FulgurLayoutTree::new(&mut doc);
+        tree.layout_multicol_subtrees();
+
+        // Sanity: two distinct x positions exist after the refactor.
+        let mc_id = collect_multicol_node_ids(&doc)[0];
+        let mc_node_id = NodeId::from(mc_id);
+        let child_count = doc.child_count(mc_node_id);
+        let mut xs: Vec<f32> = (0..child_count)
+            .map(|i| {
+                doc.get_unrounded_layout(doc.get_child_id(mc_node_id, i))
+                    .location
+                    .x
+            })
+            .collect();
+        xs.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        xs.dedup_by(|a, b| (*a - *b).abs() < 0.1);
+        assert!(xs.len() >= 2, "expected ≥2 column x positions");
     }
 }
