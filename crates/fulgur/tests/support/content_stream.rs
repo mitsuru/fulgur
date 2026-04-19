@@ -14,40 +14,56 @@ pub struct OpCounts {
 }
 
 /// Run `qpdf --qdf --object-streams=disable` on `pdf_bytes` and count
-/// PDF operators. Returns `None` if qpdf is not installed (tests should
-/// skip instead of fail — CI always has it, local devs may not).
+/// PDF operators. Returns `None` only when qpdf is not installed (tests
+/// should skip — CI always has it, local devs may not). Any other
+/// failure panics so that bugs don't silently appear as skipped tests.
 pub fn count_ops(pdf_bytes: &[u8]) -> Option<OpCounts> {
-    let tmp = tempfile::NamedTempFile::new().ok()?;
-    let out = tempfile::NamedTempFile::new().ok()?;
-    std::fs::write(tmp.path(), pdf_bytes).ok()?;
+    // Probe: qpdf binary present? If not, return None (skip). If present,
+    // any subsequent failure is a real bug and should panic rather than
+    // silently skip, so tests don't pretend to pass.
+    let probe = Command::new("qpdf").arg("--version").status();
+    if probe.map(|s| !s.success()).unwrap_or(true) {
+        return None;
+    }
+
+    let tmp = tempfile::NamedTempFile::new().expect("create tempfile");
+    let out = tempfile::NamedTempFile::new().expect("create tempfile");
+    std::fs::write(tmp.path(), pdf_bytes).expect("write tmp pdf");
 
     let status = Command::new("qpdf")
         .args(["--qdf", "--object-streams=disable"])
         .arg(tmp.path())
         .arg(out.path())
         .status()
-        .ok()?;
-    if !status.success() {
-        return None;
-    }
+        .expect("spawn qpdf");
+    assert!(status.success(), "qpdf --qdf failed: {:?}", status);
 
-    let qdf = std::fs::read_to_string(out.path()).ok()?;
+    // `qpdf --qdf` does NOT strip binary streams (embedded fonts, inline
+    // images, etc.), so the output is not valid UTF-8. Scan bytes
+    // directly — PDF operators we care about are ASCII-only and sit at
+    // the end of a line, so suffix matching on byte slices works.
+    let qdf = std::fs::read(out.path()).expect("read qdf output");
     let mut c = OpCounts::default();
-    for line in qdf.lines() {
-        let l = line.trim_end();
-        if l.ends_with(" m") || l == "m" {
+    for raw in qdf.split(|&b| b == b'\n') {
+        // Strip trailing \r on CRLF lines.
+        let line: &[u8] = if raw.last() == Some(&b'\r') {
+            &raw[..raw.len() - 1]
+        } else {
+            raw
+        };
+        if line.ends_with(b" m") || line == b"m" {
             c.m += 1;
-        } else if l.ends_with(" l") || l == "l" {
+        } else if line.ends_with(b" l") || line == b"l" {
             c.l += 1;
-        } else if l.ends_with(" re") {
+        } else if line.ends_with(b" re") {
             c.re += 1;
-        } else if l == "S" || l.ends_with(" S") {
+        } else if line == b"S" || line.ends_with(b" S") {
             c.s_stroke += 1;
-        } else if l == "q" {
+        } else if line == b"q" {
             c.q += 1;
-        } else if l == "BT" {
+        } else if line == b"BT" {
             c.bt += 1;
-        } else if l.ends_with(" RG") {
+        } else if line.ends_with(b" RG") {
             c.rg_stroke += 1;
         }
     }

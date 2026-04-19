@@ -1,0 +1,696 @@
+# Rect Borders (fulgur-0ls) Implementation Plan
+
+> **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
+
+**Goal:** Consolidate 4-line per-cell border strokes into a single stroked rectangle (`re + S`) when borders are uniform and there is no `border-radius`. Target: `m/l` 1,172 → <200 on `examples/table-header/`, with no visual regression.
+
+**Architecture:** Add a new branch in `pageable.rs::draw_block_border` that triggers on `uniform_width && uniform_style && !has_radius() && style != None`. Use krilla 0.7's `PathBuilder::push_rect` to emit a single closed-rectangle subpath, stroked once. Solid/Dashed/Dotted styles collapse to one rect stroke; Double collapses to two concentric rect strokes; 3D styles (Groove/Ridge/Inset/Outset) keep the 4-line path because their colors vary per side.
+
+**Tech Stack:** Rust, krilla 0.7 (`geom::PathBuilder::push_rect`, `geom::Rect::from_xywh`), qpdf (content-stream introspection in tests), cargo.
+
+**Baseline (2026-04-19, `examples/table-header/` → `/tmp/table-header-before.pdf`, 37,640 bytes):**
+
+| op  | count | meaning                        |
+|-----|------:|--------------------------------|
+| m   |   822 | moveto                         |
+| l   |   670 | lineto                         |
+| re  |     0 | rectangle                      |
+| S   |   783 | stroke                         |
+| q   |   826 | save graphics state            |
+| BT  |   170 | begin text                     |
+| RG  |   646 | set stroke color RGB           |
+
+---
+
+## Task 0: Add a content-stream introspection helper
+
+**Goal:** Let integration tests assert operator counts from a rendered PDF. This is the only reliable way to verify our change end-to-end, because krilla's `Path` is opaque to callers.
+
+**Files:**
+
+- Create: `crates/fulgur/tests/support/content_stream.rs`
+- Modify: `crates/fulgur/tests/support/mod.rs` (create if missing) to re-export it
+- Reference: `crates/fulgur/tests/background_test.rs` for how existing integration tests are structured
+
+**Step 1: Write the helper**
+
+```rust
+// crates/fulgur/tests/support/content_stream.rs
+use std::process::Command;
+
+/// Counts of PDF content-stream operators after a qpdf `--qdf` expansion.
+/// Only tracks the operators we care about in border/text optimization work.
+#[derive(Debug, Default, Clone)]
+pub struct OpCounts {
+    pub m: usize,
+    pub l: usize,
+    pub re: usize,
+    pub s_stroke: usize,
+    pub q: usize,
+    pub bt: usize,
+    pub rg_stroke: usize,
+}
+
+/// Run `qpdf --qdf --object-streams=disable` on `pdf_bytes` and count
+/// PDF operators. Returns `None` only when qpdf is not installed (tests
+/// should skip — CI always has it, local devs may not). Any other
+/// failure panics so that bugs don't silently appear as skipped tests.
+pub fn count_ops(pdf_bytes: &[u8]) -> Option<OpCounts> {
+    // Probe: qpdf binary present? If not, return None (skip). If present,
+    // any subsequent failure is a real bug and should panic rather than
+    // silently skip, so tests don't pretend to pass.
+    let probe = Command::new("qpdf").arg("--version").status();
+    if probe.map(|s| !s.success()).unwrap_or(true) {
+        return None;
+    }
+
+    let tmp = tempfile::NamedTempFile::new().expect("create tempfile");
+    let out = tempfile::NamedTempFile::new().expect("create tempfile");
+    std::fs::write(tmp.path(), pdf_bytes).expect("write tmp pdf");
+
+    let status = Command::new("qpdf")
+        .args(["--qdf", "--object-streams=disable"])
+        .arg(tmp.path())
+        .arg(out.path())
+        .status()
+        .expect("spawn qpdf");
+    assert!(status.success(), "qpdf --qdf failed: {:?}", status);
+
+    // `qpdf --qdf` does NOT strip binary streams (embedded fonts, inline
+    // images, etc.), so the output is not valid UTF-8. Scan bytes
+    // directly — PDF operators we care about are ASCII-only and sit at
+    // the end of a line, so suffix matching on byte slices works.
+    let qdf = std::fs::read(out.path()).expect("read qdf output");
+    let mut c = OpCounts::default();
+    for raw in qdf.split(|&b| b == b'\n') {
+        // Strip trailing \r on CRLF lines.
+        let line: &[u8] = if raw.last() == Some(&b'\r') {
+            &raw[..raw.len() - 1]
+        } else {
+            raw
+        };
+        if line.ends_with(b" m") || line == b"m" {
+            c.m += 1;
+        } else if line.ends_with(b" l") || line == b"l" {
+            c.l += 1;
+        } else if line.ends_with(b" re") {
+            c.re += 1;
+        } else if line == b"S" || line.ends_with(b" S") {
+            c.s_stroke += 1;
+        } else if line == b"q" {
+            c.q += 1;
+        } else if line == b"BT" {
+            c.bt += 1;
+        } else if line.ends_with(b" RG") {
+            c.rg_stroke += 1;
+        }
+    }
+    Some(c)
+}
+```
+
+**Step 2: Wire it into the test support module**
+
+```rust
+// crates/fulgur/tests/support/mod.rs
+pub mod content_stream;
+```
+
+If `mod.rs` doesn't exist, create the file. If it already has other helpers, append the `pub mod content_stream;` line.
+
+**Step 3: Add `tempfile` to `[dev-dependencies]` if missing**
+
+Inspect `crates/fulgur/Cargo.toml`. If `tempfile` is not already under `[dev-dependencies]`, add:
+
+```toml
+[dev-dependencies]
+tempfile = "3"
+```
+
+**Step 4: Verify it compiles**
+
+Run: `cargo test -p fulgur --lib --tests --no-run`
+Expected: clean build, no errors.
+
+**Step 5: Commit**
+
+```bash
+git add crates/fulgur/tests/support/content_stream.rs \
+        crates/fulgur/tests/support/mod.rs \
+        crates/fulgur/Cargo.toml
+git commit -m "test(fulgur): add content-stream operator count helper for fulgur-0ls"
+```
+
+---
+
+## Task 1: Pin current behavior with a failing regression test
+
+**Goal:** Lock in the intended outcome before writing production code. The test will render `examples/table-header/index.html`, count operators, and assert `re > 0` (we expect rect strokes) and `m < 300` (we expect a large drop). It should fail on current code.
+
+**Files:**
+
+- Create: `crates/fulgur/tests/rect_borders_test.rs`
+
+**Step 1: Write the failing test**
+
+```rust
+// crates/fulgur/tests/rect_borders_test.rs
+mod support;
+use support::content_stream::count_ops;
+
+use fulgur::asset::AssetBundle;
+use fulgur::config::PageSize;
+use fulgur::engine::Engine;
+use std::path::PathBuf;
+
+fn render_example(name: &str) -> Vec<u8> {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .join("examples")
+        .join(name);
+    let html = std::fs::read_to_string(root.join("index.html")).unwrap();
+
+    let engine = Engine::builder()
+        .page_size(PageSize::A4)
+        .base_path(root)
+        .build();
+
+    engine
+        .render_html(&html)
+        .expect("render_html should succeed")
+}
+
+#[test]
+fn table_header_uses_rect_for_uniform_borders() {
+    let pdf = render_example("table-header");
+    let Some(counts) = count_ops(&pdf) else {
+        eprintln!("qpdf not installed — skipping");
+        return;
+    };
+
+    // After rect-borders: uniform cell borders should be single `re`
+    // strokes, not 4 `m+l` per cell. Threshold is generous; tighter
+    // locking comes in Task 7.
+    assert!(
+        counts.re > 50,
+        "expected re > 50 (rect-stroked cell borders), got re={} m={} l={}",
+        counts.re, counts.m, counts.l
+    );
+    assert!(
+        counts.m < 400,
+        "expected m < 400 (line strokes collapsed into rects), got m={} (re={})",
+        counts.m, counts.re
+    );
+}
+```
+
+Adjust the `Engine::builder()` call if the real API surface differs — verify against `crates/fulgur/src/engine.rs` before writing. (CLAUDE.md confirms the builder signature: `Engine::builder().page_size(...).base_path(...).build()` + `render_html(html)`.)
+
+**Step 2: Run the test — expect FAIL**
+
+Run: `cargo test -p fulgur --test rect_borders_test -- --nocapture`
+Expected: FAIL with `expected re > 50, got re=0 m=822 l=670`.
+
+If qpdf is missing locally the test prints a skip message and passes — that's fine; CI has qpdf.
+
+**Step 3: Commit**
+
+```bash
+git add crates/fulgur/tests/rect_borders_test.rs
+git commit -m "test(fulgur): add failing regression test for rect-based borders (fulgur-0ls)"
+```
+
+---
+
+## Task 2: Add `build_rect_path` + `stroke_rect` helpers
+
+**Goal:** Introduce the two helpers the new branch will use. No behavior change yet.
+
+**Files:**
+
+- Modify: `crates/fulgur/src/pageable.rs` (insert near `stroke_line` around line 1237-1253)
+
+**Step 1: Add helpers immediately after `stroke_line`**
+
+```rust
+/// Build a krilla `Path` for the axis-aligned rectangle at (x,y) with
+/// size (w,h). Returns `None` if `w <= 0` or `h <= 0` (krilla rejects
+/// degenerate rects).
+fn build_rect_path(x: f32, y: f32, w: f32, h: f32) -> Option<krilla::geom::Path> {
+    let rect = krilla::geom::Rect::from_xywh(x, y, w, h)?;
+    let mut pb = krilla::geom::PathBuilder::new();
+    pb.push_rect(rect);
+    pb.finish()
+}
+
+/// Helper to stroke an axis-aligned rectangle with a given stroke.
+/// Emits a single `re + S` in the PDF content stream (versus 4 × `m/l/S`
+/// from abutting `stroke_line` calls).
+fn stroke_rect(
+    canvas: &mut Canvas<'_, '_>,
+    x: f32,
+    y: f32,
+    w: f32,
+    h: f32,
+    stroke: krilla::paint::Stroke,
+) {
+    if let Some(path) = build_rect_path(x, y, w, h) {
+        canvas.surface.set_stroke(Some(stroke));
+        canvas.surface.draw_path(&path);
+    }
+}
+```
+
+**Step 2: Verify it compiles**
+
+Run: `cargo build -p fulgur`
+Expected: clean.
+
+**Step 3: Run all existing tests — must still pass (no wiring yet)**
+
+Run: `cargo test -p fulgur --lib`
+Expected: 445 passed, 0 failed.
+
+**Step 4: Commit**
+
+```bash
+git add crates/fulgur/src/pageable.rs
+git commit -m "refactor(fulgur): add build_rect_path and stroke_rect helpers (fulgur-0ls)"
+```
+
+---
+
+## Task 3: Integrate new branch into `draw_block_border` for Solid
+
+**Goal:** Add the new uniform/no-radius branch, handle `Solid` only. Make the Task 1 regression test pass.
+
+**Files:**
+
+- Modify: `crates/fulgur/src/pageable.rs::draw_block_border` (currently at lines 1357-1464)
+
+**Step 1: Add the new branch**
+
+Current shape:
+
+```rust
+if style.has_radius() && uniform_width && uniform_style && st != BorderStyleValue::None {
+    // single rounded-rect stroke — existing
+} else {
+    // 4 × draw_border_line — existing
+}
+```
+
+New shape:
+
+```rust
+if style.has_radius() && uniform_width && uniform_style && st != BorderStyleValue::None {
+    // single rounded-rect stroke — unchanged
+} else if !style.has_radius()
+    && uniform_width
+    && uniform_style
+    && st != BorderStyleValue::None
+    && matches!(
+        st,
+        BorderStyleValue::Solid | BorderStyleValue::Dashed | BorderStyleValue::Dotted
+    )
+{
+    // Single rect stroke (re + S). inset by width/2 so the stroked
+    // rectangle's outer edge sits at (x, y, w, h).
+    let opacity = krilla::num::NormalizedF32::new(bc[3] as f32 / 255.0)
+        .unwrap_or(krilla::num::NormalizedF32::ONE);
+    let inset = bt / 2.0;
+    let base = colored_stroke(bc, bt, opacity);
+    if let Some(styled) = apply_border_style(base, st, bt) {
+        canvas.surface.set_fill(None);
+        stroke_rect(
+            canvas,
+            x + inset,
+            y + inset,
+            (w - inset * 2.0).max(0.0),
+            (h - inset * 2.0).max(0.0),
+            styled,
+        );
+        canvas.surface.set_stroke(None);
+    }
+} else {
+    // 4 × draw_border_line — unchanged
+}
+```
+
+Restrict the `matches!` to `Solid` only in this task — remove `Dashed | Dotted` for now:
+
+```rust
+    && matches!(st, BorderStyleValue::Solid)
+```
+
+We add the other styles in Task 4 and 5.
+
+**Step 2: Run the regression test — expect PASS**
+
+Run: `cargo test -p fulgur --test rect_borders_test -- --nocapture`
+Expected: PASS — `re > 50`, `m < 400` once table-header cells collapse.
+
+**Step 3: Run the full unit-test suite**
+
+Run: `cargo test -p fulgur --lib`
+Expected: 445 passed, 0 failed.
+
+**Step 4: Run integration tests**
+
+Run: `cargo test -p fulgur --tests`
+Expected: all pass. If `border_radius_test` or `background_test` fail, investigate — we should not have touched those code paths.
+
+**Step 5: Commit**
+
+```bash
+git add crates/fulgur/src/pageable.rs
+git commit -m "perf(fulgur): stroke uniform borders as a single rect (fulgur-0ls)
+
+Collapse 4-line border strokes into one re+S for cells with
+uniform width, uniform style (Solid), and no border-radius."
+```
+
+---
+
+## Task 4: Extend the new branch to Dashed/Dotted
+
+**Goal:** Include `Dashed` and `Dotted` in the consolidated path. Confirm visual and content-stream behavior.
+
+**Files:**
+
+- Modify: `crates/fulgur/src/pageable.rs::draw_block_border` (the `matches!` guard)
+
+**Step 1: Write a failing test**
+
+Add to `crates/fulgur/tests/rect_borders_test.rs`:
+
+```rust
+#[test]
+fn dashed_uniform_border_uses_rect() {
+    use fulgur::asset::AssetBundle;
+    use fulgur::config::PageSize;
+    use fulgur::engine::Engine;
+
+    let html = r#"
+        <html><head><style>
+            .b { width: 200px; height: 100px; border: 3px dashed #333; }
+        </style></head><body><div class="b"></div></body></html>
+    "#;
+
+    let engine = Engine::builder().page_size(PageSize::A4).build();
+    let pdf = engine.render_html(html).unwrap();
+
+    let Some(counts) = count_ops(&pdf) else { return; };
+
+    // One re (the div's border), zero unnecessary lineto.
+    assert!(counts.re >= 1, "expected re >= 1, got re={}", counts.re);
+    assert!(counts.l == 0, "expected l == 0, got l={}", counts.l);
+}
+```
+
+Run: `cargo test -p fulgur --test rect_borders_test dashed_uniform_border_uses_rect -- --nocapture`
+Expected: FAIL on current code (Dashed still takes 4-line path).
+
+**Step 2: Broaden the branch guard**
+
+Change the guard in `draw_block_border`:
+
+```rust
+    && matches!(
+        st,
+        BorderStyleValue::Solid | BorderStyleValue::Dashed | BorderStyleValue::Dotted
+    )
+```
+
+**Step 3: Run the new test — expect PASS**
+
+Run: `cargo test -p fulgur --test rect_borders_test -- --nocapture`
+Expected: PASS.
+
+**Step 4: Re-run all unit tests**
+
+Run: `cargo test -p fulgur --lib`
+Expected: 445 passed.
+
+**Step 5: Commit**
+
+```bash
+git add crates/fulgur/src/pageable.rs crates/fulgur/tests/rect_borders_test.rs
+git commit -m "perf(fulgur): consolidate dashed/dotted uniform borders into rect stroke (fulgur-0ls)"
+```
+
+---
+
+## Task 5: Handle Double style with 2 concentric rects
+
+**Goal:** `border-style: double` should emit 2 `re + S` strokes (outer + inner ring) instead of 8 line strokes.
+
+**Files:**
+
+- Modify: `crates/fulgur/src/pageable.rs::draw_block_border`
+
+**Step 1: Write a failing test**
+
+```rust
+#[test]
+fn double_uniform_border_uses_two_rects() {
+    use fulgur::config::PageSize;
+    use fulgur::engine::Engine;
+
+    let html = r#"
+        <html><head><style>
+            .b { width: 200px; height: 100px; border: 9px double #444; }
+        </style></head><body><div class="b"></div></body></html>
+    "#;
+
+    let engine = Engine::builder().page_size(PageSize::A4).build();
+    let pdf = engine.render_html(html).unwrap();
+
+    let Some(counts) = count_ops(&pdf) else { return; };
+    assert_eq!(counts.re, 2, "expected re == 2 (outer + inner), got {}", counts.re);
+    assert_eq!(counts.l, 0, "expected l == 0, got {}", counts.l);
+}
+```
+
+Run: FAIL on current code.
+
+**Step 2: Extend the uniform branch**
+
+Add a sub-match on `Double`:
+
+```rust
+} else if !style.has_radius()
+    && uniform_width
+    && uniform_style
+    && matches!(
+        st,
+        BorderStyleValue::Solid
+            | BorderStyleValue::Dashed
+            | BorderStyleValue::Dotted
+            | BorderStyleValue::Double
+    )
+{
+    let opacity = krilla::num::NormalizedF32::new(bc[3] as f32 / 255.0)
+        .unwrap_or(krilla::num::NormalizedF32::ONE);
+    canvas.surface.set_fill(None);
+    if st == BorderStyleValue::Double {
+        // Two concentric strokes, each (bt/3) wide.
+        // Outer ring: inset by (bt/3)/2 = bt/6.
+        // Inner ring: inset by bt - (bt/3)/2 = bt * 5/6.
+        let thin_w = bt / 3.0;
+        let outer_inset = thin_w / 2.0;
+        let inner_inset = bt - thin_w / 2.0;
+        let stroke_thin = colored_stroke(bc, thin_w, opacity);
+        stroke_rect(
+            canvas,
+            x + outer_inset,
+            y + outer_inset,
+            (w - outer_inset * 2.0).max(0.0),
+            (h - outer_inset * 2.0).max(0.0),
+            stroke_thin.clone(),
+        );
+        stroke_rect(
+            canvas,
+            x + inner_inset,
+            y + inner_inset,
+            (w - inner_inset * 2.0).max(0.0),
+            (h - inner_inset * 2.0).max(0.0),
+            stroke_thin,
+        );
+    } else {
+        let inset = bt / 2.0;
+        let base = colored_stroke(bc, bt, opacity);
+        if let Some(styled) = apply_border_style(base, st, bt) {
+            stroke_rect(
+                canvas,
+                x + inset,
+                y + inset,
+                (w - inset * 2.0).max(0.0),
+                (h - inset * 2.0).max(0.0),
+                styled,
+            );
+        }
+    }
+    canvas.surface.set_stroke(None);
+}
+```
+
+**Step 3: Run the new test — expect PASS**
+
+Run: `cargo test -p fulgur --test rect_borders_test double_uniform_border_uses_two_rects -- --nocapture`
+Expected: PASS.
+
+**Step 4: Re-run the full suite**
+
+Run: `cargo test -p fulgur`
+Expected: all pass.
+
+**Step 5: Commit**
+
+```bash
+git add crates/fulgur/src/pageable.rs crates/fulgur/tests/rect_borders_test.rs
+git commit -m "perf(fulgur): consolidate double borders into 2 rect strokes (fulgur-0ls)"
+```
+
+---
+
+## Task 6: VRT full run + update goldens if intentionally changed
+
+**Goal:** Confirm no visual regression across the full VRT suite, accept minor expected differences around dash phase/stroke join.
+
+**Files:**
+
+- Update (if needed): `crates/fulgur-vrt/goldens/*.png`
+
+**Step 1: Run the VRT suite**
+
+Run: `cargo test -p fulgur-vrt`
+Expected: 0 failed. If any fixture fails, inspect the diff image.
+
+**Step 2: If visual diffs appear**
+
+Likely suspects:
+- `table-header`: dash phase along each edge may shift (previously 4 separate dash origins, now 1 ring); for solid tables this shouldn't show
+- `border-*` fixtures: check stroke join at corners
+
+For each affected fixture:
+
+1. Visually inspect `crates/fulgur-vrt/diff_out/*.png` (the rendered diff)
+2. If the new rendering is correct (dash continuous around the rectangle instead of restarting per edge), regenerate the golden:
+
+```bash
+UPDATE_GOLDENS=1 cargo test -p fulgur-vrt <fixture_name>
+```
+
+3. If the new rendering is *wrong* (e.g. miter spike at corner when it should be square), revert: narrow the `matches!` guard to exclude the problematic style for now, and file a follow-up issue.
+
+**Step 3: Commit golden updates (only if changes were intentional)**
+
+```bash
+git add crates/fulgur-vrt/goldens/
+git commit -m "test(fulgur-vrt): refresh goldens for rect-border stroke change (fulgur-0ls)"
+```
+
+---
+
+## Task 7: Lock in the improvement with tight thresholds
+
+**Goal:** Replace the loose Task 1 thresholds with counts that reflect the actual post-change state, so any regression is caught.
+
+**Files:**
+
+- Modify: `crates/fulgur/tests/rect_borders_test.rs::table_header_uses_rect_for_uniform_borders`
+
+**Step 1: Capture the new numbers**
+
+```bash
+cargo run --release -q -p fulgur-cli -- \
+  render examples/table-header/index.html -o /tmp/table-header-after.pdf
+qpdf --qdf --object-streams=disable /tmp/table-header-after.pdf /tmp/table-header-after.qdf
+grep -cE ' m$|^m$' /tmp/table-header-after.qdf      # expect ≪ 822
+grep -cE ' l$|^l$' /tmp/table-header-after.qdf      # expect ≪ 670
+grep -cE ' re$' /tmp/table-header-after.qdf          # expect > 0
+ls -la /tmp/table-header-after.pdf                    # size should shrink
+```
+
+Record the numbers.
+
+**Step 2: Update the regression test with tighter thresholds**
+
+In `crates/fulgur/tests/rect_borders_test.rs`, replace the loose assertions with the actual values, plus ~10% headroom:
+
+```rust
+assert!(
+    counts.re >= <measured_re>,
+    "expected re >= <measured_re>, got {}", counts.re
+);
+assert!(
+    counts.m <= <measured_m + 10%>,
+    "expected m <= X, got {}", counts.m
+);
+assert!(
+    counts.l <= <measured_l + 10%>,
+    "expected l <= X, got {}", counts.l
+);
+```
+
+**Step 3: Run the test — expect PASS**
+
+Run: `cargo test -p fulgur --test rect_borders_test -- --nocapture`
+Expected: PASS.
+
+**Step 4: Commit**
+
+```bash
+git add crates/fulgur/tests/rect_borders_test.rs
+git commit -m "test(fulgur): tighten rect-border regression thresholds (fulgur-0ls)"
+```
+
+---
+
+## Task 8: Final verification + record metrics on the beads issue
+
+**Goal:** Final full-suite run and write the measured improvement onto the beads issue for future reference.
+
+**Step 1: Full-suite run**
+
+Run (from worktree root):
+
+```bash
+cargo fmt --check
+cargo clippy -- -D warnings
+cargo test -p fulgur
+cargo test -p fulgur-vrt
+```
+
+Expected: all clean.
+
+**Step 2: Record metrics**
+
+Append a note to the beads issue with before/after counts:
+
+```bash
+bd update fulgur-0ls --append-notes "## Result (table-header)
+
+| op   | before | after | delta |
+|------|-------:|------:|------:|
+| m    |    822 |  <M>  | ...   |
+| l    |    670 |  <L>  | ...   |
+| re   |      0 |  <R>  | +...  |
+| S    |    783 |  <S>  | ...   |
+| size | 37640B | <B>B  | ...   |
+"
+```
+
+**Step 3: Flush beads**
+
+```bash
+bd sync --flush-only
+```
+
+**Step 4: Done**
+
+Hand back to `superpowers:verification-before-completion` and `superpowers:finishing-a-development-branch` per the Impl skill's Step 6.
