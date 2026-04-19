@@ -82,3 +82,35 @@ fn dashed_uniform_border_keeps_per_edge_phase() {
         counts.l,
     );
 }
+
+#[test]
+fn double_uniform_border_uses_two_rects() {
+    let html = r#"
+        <html><head><style>
+            .b { width: 200px; height: 100px; border: 9px double #444; }
+        </style></head><body><div class="b"></div></body></html>
+    "#;
+
+    let engine = Engine::builder().page_size(PageSize::A4).build();
+    let pdf = engine.render_html(html).unwrap();
+
+    let Some(counts) = count_ops(&pdf) else {
+        eprintln!("qpdf not installed — skipping");
+        return;
+    };
+
+    // Double-style uniform border collapses into TWO closed rect subpaths
+    // (outer ring + inner ring). Each rect: m + 3l + h. So total m==2, l==6.
+    // Dash phase does not apply — Double is 2 static solid rings — so this
+    // is safe per-edge (unlike Dashed/Dotted).
+    assert_eq!(
+        counts.m, 2,
+        "expected m == 2 (outer + inner ring), got m={} l={}",
+        counts.m, counts.l,
+    );
+    assert_eq!(
+        counts.l, 6,
+        "expected l == 6 (3 edges per rect × 2 rects), got m={} l={}",
+        counts.m, counts.l,
+    );
+}

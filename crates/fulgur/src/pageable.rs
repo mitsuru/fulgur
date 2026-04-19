@@ -1429,24 +1429,52 @@ fn draw_block_border(
     } else if !style.has_radius()
         && uniform_width
         && uniform_style
-        && matches!(st, BorderStyleValue::Solid)
+        && matches!(st, BorderStyleValue::Solid | BorderStyleValue::Double)
     {
         let opacity = krilla::num::NormalizedF32::new(bc[3] as f32 / 255.0)
             .unwrap_or(krilla::num::NormalizedF32::ONE);
-        let inset = bt / 2.0;
-        let base = colored_stroke(bc, bt, opacity);
-        if let Some(styled) = apply_border_style(base, st, bt) {
-            canvas.surface.set_fill(None);
+        canvas.surface.set_fill(None);
+
+        if st == BorderStyleValue::Double {
+            // Two concentric thin strokes, each bt/3 wide.
+            // Outer ring stroked through its centerline — inset = (bt/3)/2 = bt/6.
+            // Inner ring inset = bt - (bt/3)/2 = bt * 5/6.
+            let thin_w = bt / 3.0;
+            let outer_inset = thin_w / 2.0;
+            let inner_inset = bt - thin_w / 2.0;
+            let stroke_thin = colored_stroke(bc, thin_w, opacity);
             stroke_rect(
                 canvas,
-                x + inset,
-                y + inset,
-                (w - inset * 2.0).max(0.0),
-                (h - inset * 2.0).max(0.0),
-                styled,
+                x + outer_inset,
+                y + outer_inset,
+                (w - outer_inset * 2.0).max(0.0),
+                (h - outer_inset * 2.0).max(0.0),
+                stroke_thin.clone(),
             );
-            canvas.surface.set_stroke(None);
+            stroke_rect(
+                canvas,
+                x + inner_inset,
+                y + inner_inset,
+                (w - inner_inset * 2.0).max(0.0),
+                (h - inner_inset * 2.0).max(0.0),
+                stroke_thin,
+            );
+        } else {
+            // Existing Solid path — keep unchanged.
+            let inset = bt / 2.0;
+            let base = colored_stroke(bc, bt, opacity);
+            if let Some(styled) = apply_border_style(base, st, bt) {
+                stroke_rect(
+                    canvas,
+                    x + inset,
+                    y + inset,
+                    (w - inset * 2.0).max(0.0),
+                    (h - inset * 2.0).max(0.0),
+                    styled,
+                );
+            }
         }
+        canvas.surface.set_stroke(None);
     } else {
         let opacity = krilla::num::NormalizedF32::new(bc[3] as f32 / 255.0)
             .unwrap_or(krilla::num::NormalizedF32::ONE);
