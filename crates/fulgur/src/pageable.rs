@@ -1252,6 +1252,42 @@ fn stroke_line(
     }
 }
 
+/// Returns `None` for non-positive width or height (krilla rejects degenerate rects).
+fn build_rect_path(x: f32, y: f32, w: f32, h: f32) -> Option<krilla::geom::Path> {
+    let rect = krilla::geom::Rect::from_xywh(x, y, w, h)?;
+    let mut pb = krilla::geom::PathBuilder::new();
+    pb.push_rect(rect);
+    pb.finish()
+}
+
+/// Stroke the rectangle inset on all sides by `inset`.
+/// One `draw_path` call emits a single closed subpath (m+3l+h in krilla;
+/// future `re`), replacing 4 abutting `stroke_line` calls.
+fn stroke_inset_rect(
+    canvas: &mut Canvas<'_, '_>,
+    x: f32,
+    y: f32,
+    w: f32,
+    h: f32,
+    inset: f32,
+    stroke: krilla::paint::Stroke,
+) {
+    let path = build_rect_path(
+        x + inset,
+        y + inset,
+        (w - inset * 2.0).max(0.0),
+        (h - inset * 2.0).max(0.0),
+    );
+    if let Some(path) = path {
+        canvas.surface.set_stroke(Some(stroke));
+        canvas.surface.draw_path(&path);
+    }
+}
+
+fn alpha_to_opacity(alpha: u8) -> krilla::num::NormalizedF32 {
+    krilla::num::NormalizedF32::new(alpha as f32 / 255.0).unwrap_or(krilla::num::NormalizedF32::ONE)
+}
+
 /// Create a stroke with a specific color and width, inheriting opacity from base.
 fn colored_stroke(
     color: &[u8; 4],
@@ -1386,8 +1422,7 @@ fn draw_block_border(
             let base = krilla::paint::Stroke {
                 paint: krilla::color::rgb::Color::new(bc[0], bc[1], bc[2]).into(),
                 width: bt,
-                opacity: krilla::num::NormalizedF32::new(bc[3] as f32 / 255.0)
-                    .unwrap_or(krilla::num::NormalizedF32::ONE),
+                opacity: alpha_to_opacity(bc[3]),
                 ..Default::default()
             };
             if let Some(styled) = apply_border_style(base, st, bt) {
@@ -1397,9 +1432,30 @@ fn draw_block_border(
                 canvas.surface.set_stroke(None);
             }
         }
+    } else if !style.has_radius()
+        && uniform_width
+        && uniform_style
+        && matches!(st, BorderStyleValue::Solid | BorderStyleValue::Double)
+    {
+        let opacity = alpha_to_opacity(bc[3]);
+        canvas.surface.set_fill(None);
+
+        if st == BorderStyleValue::Double {
+            // Double = 3 equal bands (border/gap/border): thin_w = bt/3.
+            // Stroke centerlines: outer at bt/6, inner at bt*5/6.
+            let thin_w = bt / 3.0;
+            let stroke_thin = colored_stroke(bc, thin_w, opacity);
+            stroke_inset_rect(canvas, x, y, w, h, thin_w / 2.0, stroke_thin.clone());
+            stroke_inset_rect(canvas, x, y, w, h, bt - thin_w / 2.0, stroke_thin);
+        } else {
+            let base = colored_stroke(bc, bt, opacity);
+            if let Some(styled) = apply_border_style(base, st, bt) {
+                stroke_inset_rect(canvas, x, y, w, h, bt / 2.0, styled);
+            }
+        }
+        canvas.surface.set_stroke(None);
     } else {
-        let opacity = krilla::num::NormalizedF32::new(bc[3] as f32 / 255.0)
-            .unwrap_or(krilla::num::NormalizedF32::ONE);
+        let opacity = alpha_to_opacity(bc[3]);
         canvas.surface.set_fill(None);
 
         // top: normal=(0,+half) points down=inward, so outward_sign=-1
