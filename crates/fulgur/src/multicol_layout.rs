@@ -681,4 +681,304 @@ mod tests {
         let laid_out = tree.layout_multicol_subtrees();
         assert_eq!(laid_out, 2);
     }
+
+    // ── resolve_column_layout: count only ───────────────────────────
+    #[test]
+    fn resolve_count_only_three_columns() {
+        let (n, w) = resolve_column_layout(300.0, Some(3), None, 10.0);
+        assert_eq!(n, 3);
+        assert!((w - 93.333_33).abs() < 1e-3, "got {w}");
+    }
+
+    #[test]
+    fn resolve_count_only_one_column_no_gap_subtraction() {
+        let (n, w) = resolve_column_layout(400.0, Some(1), None, 10.0);
+        assert_eq!(n, 1);
+        assert_eq!(w, 400.0);
+    }
+
+    #[test]
+    fn resolve_count_only_zero_clamps_to_one() {
+        let (n, w) = resolve_column_layout(400.0, Some(0), None, 10.0);
+        assert_eq!(n, 1);
+        assert_eq!(w, 400.0);
+    }
+
+    // ── resolve_column_layout: width only ───────────────────────────
+    #[test]
+    fn resolve_width_only_derives_count() {
+        // (400 + 10) / (180 + 10) = 2.157 → floor = 2
+        let (n, w) = resolve_column_layout(400.0, None, Some(180.0), 10.0);
+        assert_eq!(n, 2);
+        // (400 - 10) / 2 = 195
+        assert!((w - 195.0).abs() < 1e-3);
+    }
+
+    #[test]
+    fn resolve_width_only_too_wide_collapses_to_one() {
+        let (n, w) = resolve_column_layout(200.0, None, Some(400.0), 10.0);
+        assert_eq!(n, 1);
+        assert_eq!(w, 200.0);
+    }
+
+    #[test]
+    fn resolve_width_only_zero_gap() {
+        let (n, w) = resolve_column_layout(300.0, None, Some(100.0), 0.0);
+        assert_eq!(n, 3);
+        assert!((w - 100.0).abs() < 1e-3);
+    }
+
+    // ── resolve_column_layout: both present ─────────────────────────
+    #[test]
+    fn resolve_both_count_wins_when_narrower() {
+        // count=2 vs width-derived-max = floor((600+10)/(100+10)) = 5 → 2 used.
+        let (n, w) = resolve_column_layout(600.0, Some(2), Some(100.0), 10.0);
+        assert_eq!(n, 2);
+        assert!((w - 295.0).abs() < 1e-3);
+    }
+
+    #[test]
+    fn resolve_both_width_cap_wins_when_count_too_high() {
+        let (n, w) = resolve_column_layout(400.0, Some(10), Some(180.0), 10.0);
+        assert_eq!(n, 2);
+        assert!((w - 195.0).abs() < 1e-3);
+    }
+
+    // ── resolve_column_layout: edge cases ───────────────────────────
+    #[test]
+    fn resolve_neither_present_falls_back_to_single_column() {
+        let (n, w) = resolve_column_layout(400.0, None, None, 10.0);
+        assert_eq!(n, 1);
+        assert_eq!(w, 400.0);
+    }
+
+    #[test]
+    fn resolve_zero_content_width_never_produces_negative() {
+        let (n, w) = resolve_column_layout(0.0, Some(3), None, 10.0);
+        assert_eq!(n, 3);
+        assert!(w >= 0.0, "column width must be clamped non-negative");
+    }
+
+    #[test]
+    fn resolve_gap_exceeds_content_width_clamps_col_width_to_zero() {
+        let (n, w) = resolve_column_layout(50.0, Some(3), None, 40.0);
+        assert_eq!(n, 3);
+        assert_eq!(w, 0.0);
+    }
+
+    #[test]
+    fn resolve_width_zero_degenerates_safely() {
+        // column-width: 0 would divide by gap only; guard against it.
+        let (n, w) = resolve_column_layout(300.0, None, Some(0.0), 10.0);
+        assert_eq!(n, 1);
+        assert_eq!(w, 300.0);
+    }
+
+    // ── balance_budget / fits_in_n_columns ──────────────────────────
+    fn fake_sized(n: usize, h: f32) -> Vec<(NodeId, Size<f32>)> {
+        (0..n)
+            .map(|i| {
+                (
+                    NodeId::from(i),
+                    Size {
+                        width: 100.0,
+                        height: h,
+                    },
+                )
+            })
+            .collect()
+    }
+
+    #[test]
+    fn balance_budget_converges_at_ideal_when_divisible() {
+        // 4 children × 10pt = 40pt total, n=2 → ideal = 20pt budget which
+        // packs exactly 2 per column.
+        let children = fake_sized(4, 10.0);
+        let budget = balance_budget(
+            &children, 2, /* avail_h = */ 100.0, /* total_h = */ 40.0,
+        );
+        assert!(
+            (budget - 20.0).abs() < 0.01,
+            "expected budget ≈ 20, got {budget}"
+        );
+    }
+
+    #[test]
+    fn balance_budget_grows_when_ideal_leaves_overflow() {
+        // 5 children × 10pt, n=2: ideal = 25pt. Packing at 25pt fits 2+1
+        // with 2 overflow lines → balance grows.
+        let children = fake_sized(5, 10.0);
+        let budget = balance_budget(
+            &children, 2, /* avail_h = */ 100.0, /* total_h = */ 50.0,
+        );
+        assert!((25.0..=100.0).contains(&budget));
+        // At whatever budget balance settled on, fits_in_n_columns must be
+        // true — that's the stop condition.
+        assert!(fits_in_n_columns(&children, 2, budget));
+    }
+
+    #[test]
+    fn balance_budget_caps_at_avail_h_when_content_overflows() {
+        // 10 children × 10pt = 100pt total, n=2, avail_h=30 → cannot fit
+        // in 2 × 30pt columns. Returns avail_h as the auto fallback.
+        let children = fake_sized(10, 10.0);
+        let budget = balance_budget(
+            &children, 2, /* avail_h = */ 30.0, /* total_h = */ 100.0,
+        );
+        assert!((budget - 30.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn fits_in_n_columns_detects_overflow() {
+        let children = fake_sized(6, 10.0);
+        assert!(fits_in_n_columns(&children, 2, 30.0)); // 3 per col at 30pt
+        assert!(!fits_in_n_columns(&children, 2, 20.0)); // 2 per col → 2 left over
+    }
+
+    // ── propagate_height_delta: edge cases ──────────────────────────
+    /// Walk a document and dump (node_id, y, height) for every node with
+    /// a non-zero final_layout size. Used for delta-propagation assertions.
+    fn node_layouts(doc: &BaseDocument) -> Vec<(usize, f32, f32)> {
+        let mut out = Vec::new();
+        fn walk(doc: &BaseDocument, id: usize, out: &mut Vec<(usize, f32, f32)>) {
+            let Some(node) = doc.get_node(id) else { return };
+            let sz = node.unrounded_layout.size;
+            if sz.width > 0.0 || sz.height > 0.0 {
+                out.push((id, node.unrounded_layout.location.y, sz.height));
+            }
+            for &c in &node.children {
+                walk(doc, c, out);
+            }
+        }
+        walk(doc, doc.root_element().id, &mut out);
+        out
+    }
+
+    #[test]
+    fn propagate_delta_zero_is_no_op() {
+        let html = r#"<!doctype html><html><body>
+            <p>before</p><p>after</p>
+        </body></html>"#;
+        let mut doc = crate::blitz_adapter::parse(html, 400.0, &[]);
+        crate::blitz_adapter::resolve(&mut doc);
+        let before = node_layouts(&doc);
+        let root_id = doc.root_element().id;
+        propagate_height_delta(&mut doc, root_id, 0.0);
+        assert_eq!(node_layouts(&doc), before);
+    }
+
+    #[test]
+    fn propagate_delta_stops_at_root_without_panicking() {
+        // The document root has no parent → loop exits on the first
+        // `.parent` lookup without mutating anything.
+        let html = r#"<!doctype html><html><body><p>x</p></body></html>"#;
+        let mut doc = crate::blitz_adapter::parse(html, 400.0, &[]);
+        crate::blitz_adapter::resolve(&mut doc);
+        let before = node_layouts(&doc);
+        let root_id = doc.root_element().id;
+        propagate_height_delta(&mut doc, root_id, 10.0);
+        assert_eq!(node_layouts(&doc), before);
+    }
+
+    #[test]
+    fn propagate_delta_leaves_earlier_siblings_alone() {
+        // "before" comes BEFORE the multicol; its y must not change when
+        // the multicol's height shrinks.
+        let html = r#"<!doctype html><html><body>
+            <p id="before">before</p>
+            <div id="mc" style="column-count: 2;">
+              <p>a</p><p>b</p><p>c</p><p>d</p>
+            </div>
+            <p id="after">after</p>
+        </body></html>"#;
+        let mut doc = crate::blitz_adapter::parse(html, 400.0, &[]);
+        crate::blitz_adapter::resolve(&mut doc);
+
+        let before_id = {
+            let mut found = None;
+            fn walk(doc: &BaseDocument, id: usize, out: &mut Option<usize>) {
+                if out.is_some() {
+                    return;
+                }
+                let Some(node) = doc.get_node(id) else { return };
+                if let Some(ed) = node.element_data()
+                    && ed
+                        .attrs()
+                        .iter()
+                        .any(|a| a.name.local.as_ref() == "id" && a.value.as_str() == "before")
+                {
+                    *out = Some(id);
+                    return;
+                }
+                for &c in &node.children {
+                    walk(doc, c, out);
+                }
+            }
+            walk(&doc, doc.root_element().id, &mut found);
+            found.expect("before node")
+        };
+
+        let before_y_pre = doc.get_node(before_id).unwrap().unrounded_layout.location.y;
+
+        let mut tree = FulgurLayoutTree::new(&mut doc);
+        tree.layout_multicol_subtrees();
+
+        let before_y_post = doc.get_node(before_id).unwrap().unrounded_layout.location.y;
+        assert!(
+            (before_y_pre - before_y_post).abs() < 0.01,
+            "earlier sibling y should not move: pre={before_y_pre}, post={before_y_post}"
+        );
+    }
+
+    #[test]
+    fn propagate_delta_walks_multiple_ancestor_levels() {
+        // Nested structure so the propagation pass has to walk through
+        // multiple levels of parent containers. Both the outer wrapper
+        // and the root-element should absorb the multicol's height delta.
+        let html = r#"<!doctype html><html><body>
+            <div id="outer">
+              <div id="mc" style="column-count: 2;">
+                <p>a</p><p>b</p><p>c</p><p>d</p>
+              </div>
+            </div>
+        </body></html>"#;
+        let mut doc = crate::blitz_adapter::parse(html, 400.0, &[]);
+        crate::blitz_adapter::resolve(&mut doc);
+
+        let outer_id = {
+            let mut found = None;
+            fn walk(doc: &BaseDocument, id: usize, out: &mut Option<usize>) {
+                if out.is_some() {
+                    return;
+                }
+                let Some(node) = doc.get_node(id) else { return };
+                if let Some(ed) = node.element_data()
+                    && ed
+                        .attrs()
+                        .iter()
+                        .any(|a| a.name.local.as_ref() == "id" && a.value.as_str() == "outer")
+                {
+                    *out = Some(id);
+                    return;
+                }
+                for &c in &node.children {
+                    walk(doc, c, out);
+                }
+            }
+            walk(&doc, doc.root_element().id, &mut found);
+            found.expect("outer div")
+        };
+
+        let outer_h_pre = doc.get_node(outer_id).unwrap().unrounded_layout.size.height;
+
+        let mut tree = FulgurLayoutTree::new(&mut doc);
+        tree.layout_multicol_subtrees();
+
+        let outer_h_post = doc.get_node(outer_id).unwrap().unrounded_layout.size.height;
+        assert!(
+            (outer_h_pre - outer_h_post).abs() > 0.1,
+            "the multicol's ancestor should have absorbed the height delta: \
+             pre={outer_h_pre}, post={outer_h_post}"
+        );
+    }
 }
