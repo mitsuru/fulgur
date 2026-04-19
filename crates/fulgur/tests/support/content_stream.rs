@@ -21,9 +21,11 @@ pub fn count_ops(pdf_bytes: &[u8]) -> Option<OpCounts> {
     // Probe: qpdf binary present? If not, return None (skip). If present,
     // any subsequent failure is a real bug and should panic rather than
     // silently skip, so tests don't pretend to pass.
-    let probe = Command::new("qpdf").arg("--version").status();
-    if probe.map(|s| !s.success()).unwrap_or(true) {
-        return None;
+    match Command::new("qpdf").arg("--version").status() {
+        Ok(status) if status.success() => {}
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return None,
+        Ok(status) => panic!("qpdf --version failed: {:?}", status),
+        Err(err) => panic!("failed to execute qpdf --version: {err}"),
     }
 
     // tempdir + plain paths: NamedTempFile keeps an open handle, which on
