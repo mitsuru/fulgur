@@ -2,7 +2,7 @@
 
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
 
-**Goal:** Consolidate 4-line per-cell border strokes into a single stroked rectangle (`re + S`) when borders are uniform and there is no `border-radius`. Target: `m/l` 1,172 → <200 on `examples/table-header/`, with no visual regression.
+**Goal:** Consolidate 4-line per-cell border strokes into a single stroked rectangle when borders are uniform and there is no `border-radius`. Target: `m + l` 1,492 → ~680 on `examples/table-header/` (54% reduction). krilla 0.7 does not emit the PDF `re` operator from `PathBuilder::push_rect`; the win comes from fewer strokes per cell, not from rect-op emission. (A krilla upstream PR to expose `Content::rect` would push this further — tracked separately.)
 
 **Architecture:** Add a new branch in `pageable.rs::draw_block_border` that triggers on `uniform_width && uniform_style && !has_radius() && style != None`. Use krilla 0.7's `PathBuilder::push_rect` to emit a single closed-rectangle subpath, stroked once. Solid/Dashed/Dotted styles collapse to one rect stroke; Double collapses to two concentric rect strokes; 3D styles (Groove/Ridge/Inset/Outset) keep the 4-line path because their colors vary per side.
 
@@ -191,18 +191,21 @@ fn table_header_uses_rect_for_uniform_borders() {
         return;
     };
 
-    // After rect-borders: uniform cell borders should be single `re`
-    // strokes, not 4 `m+l` per cell. Threshold is generous; tighter
-    // locking comes in Task 7.
+    // Task 3 collapses 4 abutting strokes per cell into one rect path.
+    // krilla 0.7 does not emit the PDF `re` operator — `PathBuilder::push_rect`
+    // decomposes to `m + 3l + h`. We measure the real win via combined
+    // line-segment count rather than rect count.
+    // Baseline (pre-Task-3): m=822, l=670 (total 1492).
+    // After Task 3: m≈170, l≈510 (total ≈680).
     assert!(
-        counts.re > 50,
-        "expected re > 50 (rect-stroked cell borders), got re={} m={} l={}",
-        counts.re, counts.m, counts.l
+        counts.m < 300,
+        "expected m < 300 (moveto collapsed into single rect paths), got m={} l={}",
+        counts.m, counts.l,
     );
     assert!(
-        counts.m < 400,
-        "expected m < 400 (line strokes collapsed into rects), got m={} (re={})",
-        counts.m, counts.re
+        counts.m + counts.l < 900,
+        "expected m+l < 900 (rect paths share a single subpath), got m={} l={}",
+        counts.m, counts.l,
     );
 }
 ```
@@ -212,7 +215,7 @@ Adjust the `Engine::builder()` call if the real API surface differs — verify a
 **Step 2: Run the test — expect FAIL**
 
 Run: `cargo test -p fulgur --test rect_borders_test -- --nocapture`
-Expected: FAIL with `expected re > 50, got re=0 m=822 l=670`.
+Expected: FAIL with `expected m < 300, got m=822 l=670` on unmodified code. Task 3 makes this pass.
 
 If qpdf is missing locally the test prints a skip message and passes — that's fine; CI has qpdf.
 
@@ -351,7 +354,10 @@ We add the other styles in Task 4 and 5.
 **Step 2: Run the regression test — expect PASS**
 
 Run: `cargo test -p fulgur --test rect_borders_test -- --nocapture`
-Expected: PASS — `re > 50`, `m < 400` once table-header cells collapse.
+Expected: PASS — `m < 300` and `m + l < 900` once table-header cells collapse
+(measured: `m=170`, `l=510`, `m+l=680`, 54% drop from 1,492). krilla 0.7
+emits rect paths as `m + 3l + h` rather than the PDF `re` operator, so we do
+not assert on `re`; the win is still real.
 
 **Step 3: Run the full unit-test suite**
 
@@ -378,6 +384,12 @@ uniform width, uniform style (Solid), and no border-radius."
 ## Task 4: Extend the new branch to Dashed/Dotted
 
 **Goal:** Include `Dashed` and `Dotted` in the consolidated path. Confirm visual and content-stream behavior.
+
+**Note on assertions:** krilla 0.7 does not emit the PDF `re` operator
+(see Task 3 note). For single-rect cases the produced PDF has exactly
+one `m + 3l + h` subpath per stroke call. When writing assertions for
+this task, prefer `counts.m <= 1` (single rectangle path) over
+`counts.re >= 1`.
 
 **Files:**
 
@@ -446,7 +458,7 @@ git commit -m "perf(fulgur): consolidate dashed/dotted uniform borders into rect
 
 ## Task 5: Handle Double style with 2 concentric rects
 
-**Goal:** `border-style: double` should emit 2 `re + S` strokes (outer + inner ring) instead of 8 line strokes.
+**Goal:** `border-style: double` should emit 2 stroked rectangles (outer + inner ring) instead of 8 line strokes. Each rect is one `m + 3l + h` subpath (krilla 0.7 does not emit the PDF `re` operator — see Task 3 note), so assert `counts.m == 2` and `counts.l == 6` rather than `counts.re == 2`.
 
 **Files:**
 
@@ -604,38 +616,49 @@ git commit -m "test(fulgur-vrt): refresh goldens for rect-border stroke change (
 
 - Modify: `crates/fulgur/tests/rect_borders_test.rs::table_header_uses_rect_for_uniform_borders`
 
+**Note:** krilla 0.7 does not emit the PDF `re` operator, so we measure
+the improvement via `m` (moveto count), `l` (lineto count), combined
+`m + l` (total line-segment ops), and raw PDF byte size. Do not assert
+on `counts.re` — it will be 0 regardless of how many rect paths we
+emit.
+
 **Step 1: Capture the new numbers**
 
 ```bash
 cargo run --release -q -p fulgur-cli -- \
   render examples/table-header/index.html -o /tmp/table-header-after.pdf
 qpdf --qdf --object-streams=disable /tmp/table-header-after.pdf /tmp/table-header-after.qdf
-grep -cE ' m$|^m$' /tmp/table-header-after.qdf      # expect ≪ 822
-grep -cE ' l$|^l$' /tmp/table-header-after.qdf      # expect ≪ 670
-grep -cE ' re$' /tmp/table-header-after.qdf          # expect > 0
-ls -la /tmp/table-header-after.pdf                    # size should shrink
+grep -cE ' m$|^m$' /tmp/table-header-after.qdf      # expect ≈ 170 (was 822)
+grep -cE ' l$|^l$' /tmp/table-header-after.qdf      # expect ≈ 510 (was 670)
+ls -la /tmp/table-header-after.pdf                    # size should shrink from 37,640B
 ```
 
-Record the numbers.
+Record the numbers: `m`, `l`, `m + l`, and PDF byte size.
 
 **Step 2: Update the regression test with tighter thresholds**
 
-In `crates/fulgur/tests/rect_borders_test.rs`, replace the loose assertions with the actual values, plus ~10% headroom:
+In `crates/fulgur/tests/rect_borders_test.rs`, replace the Task 1
+assertions with values tied to the measurement. Add ~10% headroom
+for per-environment variance (font fallback, etc.):
 
 ```rust
 assert!(
-    counts.re >= <measured_re>,
-    "expected re >= <measured_re>, got {}", counts.re
+    counts.m <= <measured_m * 1.1>,
+    "expected m <= X, got m={} l={}", counts.m, counts.l
 );
 assert!(
-    counts.m <= <measured_m + 10%>,
-    "expected m <= X, got {}", counts.m
+    counts.l <= <measured_l * 1.1>,
+    "expected l <= X, got m={} l={}", counts.m, counts.l
 );
 assert!(
-    counts.l <= <measured_l + 10%>,
-    "expected l <= X, got {}", counts.l
+    counts.m + counts.l <= <measured_m+l * 1.1>,
+    "expected m+l <= X, got m={} l={}", counts.m, counts.l
 );
 ```
+
+Optionally record the PDF byte size before/after as a comment in the
+test (not an assertion — byte counts are too environment-sensitive for
+CI).
 
 **Step 3: Run the test — expect PASS**
 
@@ -675,13 +698,19 @@ Append a note to the beads issue with before/after counts:
 ```bash
 bd update fulgur-0ls --append-notes "## Result (table-header)
 
-| op   | before | after | delta |
-|------|-------:|------:|------:|
-| m    |    822 |  <M>  | ...   |
-| l    |    670 |  <L>  | ...   |
-| re   |      0 |  <R>  | +...  |
-| S    |    783 |  <S>  | ...   |
-| size | 37640B | <B>B  | ...   |
+| op    | before | after | delta |
+|-------|-------:|------:|------:|
+| m     |    822 |  <M>  | ...   |
+| l     |    670 |  <L>  | ...   |
+| m + l |   1492 | <M+L> | ...   |
+| S     |    783 |  <S>  | ...   |
+| size  | 37640B | <B>B  | ...   |
+
+Note: krilla 0.7 does not emit the PDF \`re\` operator from
+\`PathBuilder::push_rect\` — it decomposes to \`m + 3l + h\`. The
+saving comes from fewer strokes per cell (one \`draw_path\` replaces
+4 abutting \`stroke_line\` calls), not from rect-op emission. A krilla
+upstream PR exposing \`Content::rect\` would unlock further savings.
 "
 ```
 

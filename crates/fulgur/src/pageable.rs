@@ -1255,8 +1255,6 @@ fn stroke_line(
 /// Build a krilla `Path` for the axis-aligned rectangle at (x,y) with
 /// size (w,h). Returns `None` if `w <= 0` or `h <= 0` (krilla rejects
 /// degenerate rects).
-// used by draw_block_border in next commit
-#[allow(dead_code)]
 fn build_rect_path(x: f32, y: f32, w: f32, h: f32) -> Option<krilla::geom::Path> {
     let rect = krilla::geom::Rect::from_xywh(x, y, w, h)?;
     let mut pb = krilla::geom::PathBuilder::new();
@@ -1264,11 +1262,11 @@ fn build_rect_path(x: f32, y: f32, w: f32, h: f32) -> Option<krilla::geom::Path>
     pb.finish()
 }
 
-/// Helper to stroke an axis-aligned rectangle with a given stroke.
-/// Emits a single `re + S` in the PDF content stream (versus 4 × `m/l/S`
-/// from abutting `stroke_line` calls).
-// used by draw_block_border in next commit
-#[allow(dead_code)]
+/// Stroke a rectangle as a single closed subpath.
+/// krilla 0.7's `PathBuilder::push_rect` decomposes to `m + 3l + h` rather
+/// than emitting the PDF `re` operator, but the content-stream saving is
+/// still real: one `draw_path` call replaces 4 abutting `stroke_line` calls,
+/// collapsing 4 × (m + l + S) into 1 × (m + 3l + h + S).
 fn stroke_rect(
     canvas: &mut Canvas<'_, '_>,
     x: f32,
@@ -1427,6 +1425,27 @@ fn draw_block_border(
                 canvas.surface.draw_path(&path);
                 canvas.surface.set_stroke(None);
             }
+        }
+    } else if !style.has_radius()
+        && uniform_width
+        && uniform_style
+        && matches!(st, BorderStyleValue::Solid)
+    {
+        let opacity = krilla::num::NormalizedF32::new(bc[3] as f32 / 255.0)
+            .unwrap_or(krilla::num::NormalizedF32::ONE);
+        let inset = bt / 2.0;
+        let base = colored_stroke(bc, bt, opacity);
+        if let Some(styled) = apply_border_style(base, st, bt) {
+            canvas.surface.set_fill(None);
+            stroke_rect(
+                canvas,
+                x + inset,
+                y + inset,
+                (w - inset * 2.0).max(0.0),
+                (h - inset * 2.0).max(0.0),
+                styled,
+            );
+            canvas.surface.set_stroke(None);
         }
     } else {
         let opacity = krilla::num::NormalizedF32::new(bc[3] as f32 / 255.0)

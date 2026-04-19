@@ -33,20 +33,22 @@ fn table_header_uses_rect_for_uniform_borders() {
         return;
     };
 
-    // After rect-borders: uniform cell borders should be single `re`
-    // strokes, not 4 `m+l` per cell. Threshold is generous; tighter
-    // locking comes in Task 7.
+    // Task 3 collapses 4 abutting strokes per cell into one rect path.
+    // krilla 0.7 does not emit the PDF `re` operator — `PathBuilder::push_rect`
+    // decomposes to `m + 3l + h`. We measure the real win via combined
+    // line-segment count rather than rect count.
+    // Baseline (pre-Task-3): m=822, l=670 (total 1492).
+    // After Task 3: m≈170, l≈510 (total ≈680).
     assert!(
-        counts.re > 50,
-        "expected re > 50 (rect-stroked cell borders), got re={} m={} l={}",
-        counts.re,
+        counts.m < 300,
+        "expected m < 300 (moveto collapsed into single rect paths), got m={} l={}",
         counts.m,
-        counts.l
+        counts.l,
     );
     assert!(
-        counts.m < 400,
-        "expected m < 400 (line strokes collapsed into rects), got m={} (re={})",
+        counts.m + counts.l < 900,
+        "expected m+l < 900 (rect paths share a single subpath), got m={} l={}",
         counts.m,
-        counts.re
+        counts.l,
     );
 }
