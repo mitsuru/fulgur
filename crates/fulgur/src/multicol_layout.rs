@@ -2,11 +2,17 @@
 //!
 //! [`FulgurLayoutTree`] wraps a [`blitz_dom::BaseDocument`] as a Taffy
 //! `LayoutPartialTree`, intercepts multicol containers, and routes them
-//! through [`compute_multicol_layout`]. Everything else delegates to
-//! `BaseDocument`'s built-in dispatch. The pattern follows blitz's own
-//! [`blitz_dom::BaseDocument::compute_inline_layout`], where Parley is wired
-//! into Taffy via `compute_leaf_layout`; multicol uses the same mechanism
-//! one layer up.
+//! through [`compute_multicol_layout`]. Direct children are partitioned
+//! by `column-span: all` into alternating `ColumnGroup` / `SpanAll`
+//! segments: columnar segments run through `layout_column_group`
+//! (balance distribution at `col_w`), and `SpanAll` segments occupy the
+//! full container width and stack vertically between column groups.
+//!
+//! Everything else delegates to `BaseDocument`'s built-in dispatch. The
+//! pattern follows blitz's own
+//! [`blitz_dom::BaseDocument::compute_inline_layout`], where Parley is
+//! wired into Taffy via `compute_leaf_layout`; multicol uses the same
+//! mechanism one layer up.
 
 use blitz_dom::BaseDocument;
 use taffy::{
@@ -291,15 +297,19 @@ pub fn resolve_column_layout(
 ///
 /// 1. Read `column-count` / `column-width` / `column-gap` from the node.
 /// 2. Derive `(n, col_w)` from the container width.
-/// 3. Ask Taffy to lay out every child at `known_width = col_w`. Because
-///    the recursion runs through `FulgurLayoutTree::compute_child_layout`,
-///    blitz's inline layout re-breaks Parley lines at the new width
-///    naturally — no ad-hoc reshape plumbing needed.
-/// 4. Greedy `column-fill: balance` over the measured child sizes, with
-///    auto fallback if the content would exceed the available height × N.
-/// 5. Write each child's column-local `(x, y)` back via
-///    `set_unrounded_layout`.
-/// 6. Return the container's balanced size.
+/// 3. Partition direct element children into `ColumnGroup` / `SpanAll`
+///    segments via `partition_children_into_segments` (nested
+///    `column-span: all` inside a non-span child is ignored per CSS
+///    Multi-column Level 1).
+/// 4. For each segment, stacking vertically:
+///    - `ColumnGroup`: delegate to `layout_column_group` at `col_w`
+///      with greedy balance (auto fallback when content overflows
+///      `avail_h * n`).
+///    - `SpanAll`: lay out the child at `container_w` as a single block.
+/// 5. Write each child's placement back via
+///    [`LayoutPartialTree::set_unrounded_layout`] with the per-segment
+///    width (`col_w` for column members, `container_w` for `SpanAll`).
+/// 6. Return the container's total size (`container_w × cursor_y`).
 pub fn compute_multicol_layout(
     tree: &mut FulgurLayoutTree<'_>,
     node_id: NodeId,
