@@ -72,13 +72,29 @@ impl<'a> FulgurLayoutTree<'a> {
         let multicol_ids = collect_multicol_node_ids(self.doc);
         for id in multicol_ids.iter().rev() {
             let node_id = NodeId::from(*id);
-            let prior = self.doc.get_unrounded_layout(node_id).size;
+            let prior_layout = self.doc.get_unrounded_layout(node_id);
+            let prior_final = self
+                .doc
+                .get_node(*id)
+                .map(|n| n.final_layout)
+                .unwrap_or_default();
+            let prior = prior_layout.size;
             let available_space = taffy::Size {
                 width: AvailableSpace::Definite(prior.width),
                 height: AvailableSpace::Definite(prior.height.max(1.0)),
             };
             taffy::compute_root_layout(self, node_id, available_space);
             taffy::round_layout(self, node_id);
+
+            // `compute_root_layout` resets the subtree root's `location`
+            // to (0, 0) because it treats the node as a Taffy root. The
+            // multicol is NOT a root in the full document tree; it sits
+            // at the position blitz originally placed it. Restore that
+            // position in both unrounded and final layouts.
+            if let Some(node) = self.doc.get_node_mut(*id) {
+                node.unrounded_layout.location = prior_layout.location;
+                node.final_layout.location = prior_final.location;
+            }
 
             let new_h = self.doc.get_unrounded_layout(node_id).size.height;
             let delta = new_h - prior.height;
@@ -348,11 +364,14 @@ pub fn compute_multicol_layout(
     let mut col_idx: u32 = 0;
     let mut col_y: f32 = 0.0;
     for (child_id, size) in &measured {
-        let col_x = col_idx as f32 * (col_w + gap);
+        // Decide first whether this child forces a break to the next column
+        // — the `col_x` captured BEFORE the check would otherwise stay on
+        // the old column.
         if col_y > 0.0 && col_y + size.height > budget && col_idx + 1 < n {
             col_idx += 1;
             col_y = 0.0;
         }
+        let col_x = col_idx as f32 * (col_w + gap);
         placements.push((*child_id, Point { x: col_x, y: col_y }, *size));
         col_y += size.height;
     }
