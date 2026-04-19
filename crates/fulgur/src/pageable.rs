@@ -1252,6 +1252,37 @@ fn stroke_line(
     }
 }
 
+/// Build a krilla `Path` for the axis-aligned rectangle at (x,y) with
+/// size (w,h). Returns `None` if `w <= 0` or `h <= 0` (krilla rejects
+/// degenerate rects).
+// used by draw_block_border in next commit
+#[allow(dead_code)]
+fn build_rect_path(x: f32, y: f32, w: f32, h: f32) -> Option<krilla::geom::Path> {
+    let rect = krilla::geom::Rect::from_xywh(x, y, w, h)?;
+    let mut pb = krilla::geom::PathBuilder::new();
+    pb.push_rect(rect);
+    pb.finish()
+}
+
+/// Helper to stroke an axis-aligned rectangle with a given stroke.
+/// Emits a single `re + S` in the PDF content stream (versus 4 × `m/l/S`
+/// from abutting `stroke_line` calls).
+// used by draw_block_border in next commit
+#[allow(dead_code)]
+fn stroke_rect(
+    canvas: &mut Canvas<'_, '_>,
+    x: f32,
+    y: f32,
+    w: f32,
+    h: f32,
+    stroke: krilla::paint::Stroke,
+) {
+    if let Some(path) = build_rect_path(x, y, w, h) {
+        canvas.surface.set_stroke(Some(stroke));
+        canvas.surface.draw_path(&path);
+    }
+}
+
 /// Create a stroke with a specific color and width, inheriting opacity from base.
 fn colored_stroke(
     color: &[u8; 4],
