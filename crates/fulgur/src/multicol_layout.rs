@@ -20,7 +20,6 @@ use taffy::{
 /// only** — nested descendants with `column-span: all` deep inside a
 /// non-span child are ignored (CSS Multi-column Level 1).
 #[derive(Debug)]
-#[allow(dead_code)] // consumed by compute_multicol_layout in task 2
 pub(crate) enum Segment {
     /// Children that participate in the balanced column grid.
     ColumnGroup(Vec<NodeId>),
@@ -31,7 +30,6 @@ pub(crate) enum Segment {
 /// Walk the direct children of `container_id`, grouping runs of non-span
 /// children into `Segment::ColumnGroup` and emitting `Segment::SpanAll`
 /// for each direct child carrying `column-span: all`.
-#[allow(dead_code)] // consumed by compute_multicol_layout in task 2
 pub(crate) fn partition_children_into_segments(
     doc: &BaseDocument,
     container_id: usize,
@@ -337,10 +335,6 @@ pub fn compute_multicol_layout(
     //    our parent is merely sizing us (`ComputeSize`), we need real
     //    child heights to run the balance distribution — without a
     //    completed layout the per-column budget can't be decided.
-    let children: Vec<NodeId> = (0..tree.child_count(node_id))
-        .map(|i| tree.get_child_id(node_id, i))
-        .collect();
-
     let child_inputs = taffy::tree::LayoutInput {
         run_mode: RunMode::PerformLayout,
         sizing_mode: SizingMode::InherentSize,
@@ -360,30 +354,89 @@ pub fn compute_multicol_layout(
         vertical_margins_are_collapsible: Line::FALSE,
     };
 
+    // `column-span: all` children are laid out at the container's full
+    // content width rather than per-column width. Otherwise identical in
+    // shape to `child_inputs` so the rest of blitz's dispatch treats it
+    // the same way.
+    let span_child_inputs = taffy::tree::LayoutInput {
+        run_mode: RunMode::PerformLayout,
+        sizing_mode: SizingMode::InherentSize,
+        axis: RequestedAxis::Both,
+        known_dimensions: Size {
+            width: Some(container_w),
+            height: None,
+        },
+        parent_size: Size {
+            width: Some(container_w),
+            height: inputs.parent_size.height,
+        },
+        available_space: Size {
+            width: AvailableSpace::Definite(container_w),
+            height: AvailableSpace::MaxContent,
+        },
+        vertical_margins_are_collapsible: Line::FALSE,
+    };
+
     // 4. column-fill: balance (computed inside layout_column_group).
     let avail_h = match inputs.available_space.height {
         AvailableSpace::Definite(h) => h,
         _ => f32::INFINITY,
     };
 
-    let (placements, container_h) = layout_column_group(
-        tree,
-        col_w,
-        gap,
-        n,
-        avail_h,
-        &children,
-        /* y_offset = */ 0.0,
-        child_inputs,
-    );
+    // 5. Walk the segments produced by `partition_children_into_segments`
+    //    and dispatch each to the appropriate layout strategy:
+    //
+    //    * `ColumnGroup` → `layout_column_group` at `col_w`, offset by
+    //      the current cursor.
+    //    * `SpanAll` → measure the child at `container_w` and place it
+    //      at `(0, cursor_y)`.
+    //
+    //    Each segment's vertical extent accumulates into `cursor_y`, and
+    //    every placement carries the width it was laid out at
+    //    (`col_w` for columnar children, `container_w` for span-all ones).
+    let segments = partition_children_into_segments(tree.doc, usize::from(node_id));
 
-    // 5. Write child positions back into Taffy's storage.
-    for (child_id, location, size) in &placements {
+    let mut cursor_y: f32 = 0.0;
+    let mut placements: Vec<(NodeId, Point<f32>, Size<f32>, f32)> = Vec::new();
+    for segment in segments {
+        match segment {
+            Segment::ColumnGroup(children) => {
+                let (group_placements, seg_h) = layout_column_group(
+                    tree,
+                    col_w,
+                    gap,
+                    n,
+                    avail_h,
+                    &children,
+                    cursor_y,
+                    child_inputs,
+                );
+                for (child_id, location, size) in group_placements {
+                    placements.push((child_id, location, size, col_w));
+                }
+                cursor_y += seg_h;
+            }
+            Segment::SpanAll(child_id) => {
+                let output = tree.compute_child_layout(child_id, span_child_inputs);
+                let location = Point {
+                    x: 0.0,
+                    y: cursor_y,
+                };
+                placements.push((child_id, location, output.size, container_w));
+                cursor_y += output.size.height;
+            }
+        }
+    }
+
+    // 6. Write child positions back into Taffy's storage. Each placement
+    //    carries its own assigned width (col_w for columnar, container_w
+    //    for span-all).
+    for (child_id, location, size, width) in &placements {
         let layout = taffy::Layout {
             order: 0,
             location: *location,
             size: Size {
-                width: col_w,
+                width: *width,
                 height: size.height,
             },
             content_size: *size,
@@ -395,7 +448,9 @@ pub fn compute_multicol_layout(
         tree.set_unrounded_layout(*child_id, &layout);
     }
 
-    // 6. Container size = width × segment height.
+    let container_h = cursor_y.max(0.0);
+
+    // 7. Container size = width × stacked segment height.
     taffy::LayoutOutput {
         size: Size {
             width: container_w,
@@ -1226,5 +1281,182 @@ mod tests {
         xs.sort_by(|a, b| a.partial_cmp(b).unwrap());
         xs.dedup_by(|a, b| (*a - *b).abs() < 0.1);
         assert!(xs.len() >= 2, "expected ≥2 column x positions");
+    }
+
+    // ── segment dispatch inside compute_multicol_layout ─────────────
+
+    /// Find the layout of a child node of the multicol container by its DOM id.
+    fn layout_of_id(doc: &BaseDocument, html_id: &str) -> taffy::Layout {
+        fn walk(doc: &BaseDocument, node_id: usize, target: &str) -> Option<usize> {
+            let node = doc.get_node(node_id)?;
+            if let Some(ed) = node.element_data()
+                && ed
+                    .attrs()
+                    .iter()
+                    .any(|a| a.name.local.as_ref() == "id" && a.value.as_str() == target)
+            {
+                return Some(node_id);
+            }
+            for &c in &node.children {
+                if let Some(found) = walk(doc, c, target) {
+                    return Some(found);
+                }
+            }
+            None
+        }
+        let id = walk(doc, doc.root_element().id, html_id).expect("id not found");
+        doc.get_unrounded_layout(NodeId::from(id))
+    }
+
+    #[test]
+    fn span_all_occupies_full_container_width() {
+        let html = r#"<!doctype html><html><body>
+            <div id="mc" style="column-count: 2; column-gap: 0;">
+              <p id="before">before</p>
+              <h1 id="title" style="column-span: all;">title</h1>
+              <p id="after">after</p>
+            </div>
+        </body></html>"#;
+        let mut doc = crate::blitz_adapter::parse(html, 400.0, &[]);
+        crate::blitz_adapter::resolve(&mut doc);
+        let mut tree = FulgurLayoutTree::new(&mut doc);
+        tree.layout_multicol_subtrees();
+
+        let mc_w = layout_of_id(&doc, "mc").size.width;
+        let title = layout_of_id(&doc, "title");
+        assert!(
+            (title.size.width - mc_w).abs() < 0.5,
+            "SpanAll width {} should match container width {}",
+            title.size.width,
+            mc_w
+        );
+        assert!(
+            title.location.x.abs() < 0.5,
+            "SpanAll should start at x=0, got {}",
+            title.location.x
+        );
+    }
+
+    #[test]
+    fn segments_stack_vertically() {
+        // segment 0 (ColumnGroup with 'before')
+        // segment 1 (SpanAll 'title')
+        // segment 2 (ColumnGroup with 'after')
+        let html = r#"<!doctype html><html><body>
+            <div id="mc" style="column-count: 2; column-gap: 0;">
+              <p id="before">before</p>
+              <h1 id="title" style="column-span: all;">title</h1>
+              <p id="after">after</p>
+            </div>
+        </body></html>"#;
+        let mut doc = crate::blitz_adapter::parse(html, 400.0, &[]);
+        crate::blitz_adapter::resolve(&mut doc);
+        let mut tree = FulgurLayoutTree::new(&mut doc);
+        tree.layout_multicol_subtrees();
+
+        let before = layout_of_id(&doc, "before");
+        let title = layout_of_id(&doc, "title");
+        let after = layout_of_id(&doc, "after");
+
+        assert!(
+            title.location.y + 0.5 >= before.location.y + before.size.height,
+            "title ({}) must start at or below 'before' bottom ({})",
+            title.location.y,
+            before.location.y + before.size.height
+        );
+        assert!(
+            after.location.y + 0.5 >= title.location.y + title.size.height,
+            "after ({}) must start at or below 'title' bottom ({})",
+            after.location.y,
+            title.location.y + title.size.height
+        );
+    }
+
+    #[test]
+    fn span_at_top_produces_one_segment_below() {
+        let html = r#"<!doctype html><html><body>
+            <div id="mc" style="column-count: 2; column-gap: 0;">
+              <h1 id="title" style="column-span: all;">title</h1>
+              <p id="a">a</p>
+              <p id="b">b</p>
+            </div>
+        </body></html>"#;
+        let mut doc = crate::blitz_adapter::parse(html, 400.0, &[]);
+        crate::blitz_adapter::resolve(&mut doc);
+        let mut tree = FulgurLayoutTree::new(&mut doc);
+        tree.layout_multicol_subtrees();
+
+        let title = layout_of_id(&doc, "title");
+        let a = layout_of_id(&doc, "a");
+        let b = layout_of_id(&doc, "b");
+
+        let title_bottom = title.location.y + title.size.height;
+        assert!(a.location.y + 0.5 >= title_bottom);
+        assert!(b.location.y + 0.5 >= title_bottom);
+
+        assert!(
+            (a.location.x - b.location.x).abs() > 0.5,
+            "a.x={} b.x={} should be in different columns",
+            a.location.x,
+            b.location.x
+        );
+    }
+
+    #[test]
+    fn span_at_end_sits_below_columns() {
+        let html = r#"<!doctype html><html><body>
+            <div id="mc" style="column-count: 2; column-gap: 0;">
+              <p id="a">a</p>
+              <p id="b">b</p>
+              <h1 id="title" style="column-span: all;">title</h1>
+            </div>
+        </body></html>"#;
+        let mut doc = crate::blitz_adapter::parse(html, 400.0, &[]);
+        crate::blitz_adapter::resolve(&mut doc);
+        let mut tree = FulgurLayoutTree::new(&mut doc);
+        tree.layout_multicol_subtrees();
+
+        let a = layout_of_id(&doc, "a");
+        let b = layout_of_id(&doc, "b");
+        let title = layout_of_id(&doc, "title");
+        let col_bottom = (a.location.y + a.size.height).max(b.location.y + b.size.height);
+        assert!(
+            title.location.y + 0.5 >= col_bottom,
+            "title ({}) must sit below column bottom ({})",
+            title.location.y,
+            col_bottom
+        );
+    }
+
+    #[test]
+    fn nested_span_does_not_break_column_layout() {
+        // A descendant span with column-span: all deep inside a non-span
+        // direct child must NOT create a segment break.
+        let html = r#"<!doctype html><html><body>
+            <div id="mc" style="column-count: 2; column-gap: 0;">
+              <p id="a">a <span style="column-span: all;">inline</span> tail</p>
+              <p id="b">b</p>
+            </div>
+        </body></html>"#;
+        let mut doc = crate::blitz_adapter::parse(html, 400.0, &[]);
+        crate::blitz_adapter::resolve(&mut doc);
+        let mut tree = FulgurLayoutTree::new(&mut doc);
+        tree.layout_multicol_subtrees();
+
+        let a = layout_of_id(&doc, "a");
+        let b = layout_of_id(&doc, "b");
+        let mc_w = layout_of_id(&doc, "mc").size.width;
+        assert!(
+            a.size.width < mc_w * 0.9,
+            "'a' width {} looks like full container width {} — nested span leaked out",
+            a.size.width,
+            mc_w
+        );
+        assert!(
+            b.size.width < mc_w * 0.9,
+            "'b' width {} looks like full container width {}",
+            b.size.width,
+            mc_w
+        );
     }
 }
