@@ -33,43 +33,26 @@ fn table_header_uses_rect_for_uniform_borders() {
         return;
     };
 
-    // Task 3 collapses 4 abutting strokes per cell into one rect path.
-    // krilla 0.7 does not emit the PDF `re` operator — `PathBuilder::push_rect`
-    // decomposes to `m + 3l + h`. We measure the real win via combined
-    // line-segment count rather than rect count.
-    // Baseline (pre-Task-3): m=822, l=670 (total 1492).
-    // Measured 2026-04-19: m=170, l=510, m+l=680, PDF=35,125 B.
-    // Thresholds below are measured × ~1.2 safety margin, rounded.
-    assert!(
-        counts.m < 220,
-        "expected m < 220 (measured 170; rect branch regressed?), got m={} l={}",
-        counts.m,
-        counts.l,
-    );
+    // Thresholds are measured baseline × ~1.2 safety margin. A regression
+    // that disables the rect branch pushes m+l back to ~1500.
+    assert!(counts.m < 220, "got m={} l={}", counts.m, counts.l);
     assert!(
         counts.m + counts.l < 800,
-        "expected m+l < 800 (measured 680; rect consolidation regressed?), got m={} l={}",
+        "got m={} l={}",
         counts.m,
         counts.l,
     );
-    // PDF-size bound catches regressions in content-stream verbosity that
-    // wouldn't show up via operator counts alone (e.g. redundant gs state
-    // or duplicated paths without new m/l ops).
-    assert!(
-        pdf.len() < 44_032,
-        "expected PDF size < 44032 B (measured 35125 B × 1.25), got {} B",
-        pdf.len(),
-    );
+    // Size bound catches content-stream verbosity regressions (redundant
+    // gs state, duplicated paths) that operator counts alone miss.
+    assert!(pdf.len() < 44_032, "PDF size {} B", pdf.len());
 }
 
 #[test]
 fn dashed_uniform_border_keeps_per_edge_phase() {
-    // Dashed/dotted borders MUST stay on the 4-line fallback so each edge's
-    // dash phase starts from the edge origin (per-edge symmetry, matching
-    // browsers). Collapsing to a single closed rect path would let dash
-    // phase run continuously around the perimeter, breaking corner
-    // symmetry. See VRT basic/borders.html and plan Task 4 for the revert
-    // rationale.
+    // Per-edge stroking keeps each edge's dash phase starting at the edge
+    // origin, matching how browsers draw CSS dashed borders. Collapsing to
+    // a single closed rect path would run the dash phase around the full
+    // perimeter and break corner symmetry.
     let html = r#"
         <html><head><style>
             .b { width: 200px; height: 100px; border: 3px dashed #333; }
@@ -108,10 +91,8 @@ fn double_uniform_border_uses_two_rects() {
         return;
     };
 
-    // Double = 2 closed rect subpaths. In krilla 0.7 this decomposes to
-    // 2 × (m + 3l + h), so m=2, l=6. A future krilla upgrade emitting
-    // actual `re` operators would produce m=0, l=0, re=2 — accept both.
-    // We pin "exactly 2 rect subpaths" via a combined count.
+    // Double = 2 concentric rect subpaths. Bounds accept both krilla's
+    // current m+3l+h decomposition and a future `re`-operator emission.
     assert!(
         counts.m <= 2 && counts.l <= 6 && counts.re <= 2,
         "expected at most 2 rect subpaths, got m={} l={} re={}",
