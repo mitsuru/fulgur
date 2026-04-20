@@ -2705,10 +2705,16 @@ impl Pageable for MulticolRulePageable {
                 if h_left <= 0.0 || h_right <= 0.0 {
                     continue;
                 }
-                // Gap centre between column i and column i+1:
-                //   rule_x = x + (i+1) * col_w + i * gap + gap/2
-                let rule_x =
-                    x + (i as f32 + 1.0) * group.col_w + i as f32 * group.gap + group.gap / 2.0;
+                // Gap centre between column i and column i+1. `x_offset`
+                // shifts from the container's border-box left into its
+                // content-box left (padding-left + border-left), matching
+                // the frame `y_top` already works in.
+                //   rule_x = x + x_offset + (i+1) * col_w + i * gap + gap/2
+                let rule_x = x
+                    + group.x_offset
+                    + (i as f32 + 1.0) * group.col_w
+                    + i as f32 * group.gap
+                    + group.gap / 2.0;
                 let y_bot = y_top + h_left.min(h_right);
                 stroke_line(canvas, rule_x, y_top, rule_x, y_bot, stroke.clone());
             }
@@ -4607,6 +4613,7 @@ mod multicol_rule_tests {
     fn make_group(y_offset: f32, col_heights: Vec<f32>) -> ColumnGroupGeometry {
         let n = col_heights.len() as u32;
         ColumnGroupGeometry {
+            x_offset: 0.0,
             y_offset,
             col_w: 80.0,
             gap: 20.0,

@@ -789,6 +789,11 @@ fn layout_column_group(
     }
 
     let geometry = ColumnGroupGeometry {
+        // `x_offset` / `y_offset` here are in the container's *content-box*
+        // frame; `compute_multicol_layout` shifts them into the border-box
+        // frame after every segment is placed (see the inset loop that runs
+        // over `group_geometries` in that function).
+        x_offset: 0.0,
         y_offset,
         col_w,
         gap,

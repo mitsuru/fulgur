@@ -277,6 +277,7 @@ fn maybe_wrap_multicol_rule(
         .groups
         .iter()
         .map(|g| crate::multicol_layout::ColumnGroupGeometry {
+            x_offset: px_to_pt(g.x_offset),
             y_offset: px_to_pt(g.y_offset),
             col_w: px_to_pt(g.col_w),
             gap: px_to_pt(g.gap),
