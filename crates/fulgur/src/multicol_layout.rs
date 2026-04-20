@@ -332,8 +332,12 @@ pub fn compute_multicol_layout(
         return tree.doc.compute_child_layout(node_id, inputs);
     };
 
-    // 2. Container content width. Prefer the width Taffy fixed for us;
-    //    fall back to available_space.
+    // 2. Container dimensions. `known_dimensions.width` from
+    //    `compute_root_layout` is the **border-box** width — it already
+    //    includes the multicol's own padding + border on both sides. We
+    //    treat that as the node's outer width, read the prior resolved
+    //    padding/border (written by blitz before the hook ran), and strip
+    //    them off to get the content area the columns actually span.
     let container_w = inputs
         .known_dimensions
         .width
@@ -343,9 +347,19 @@ pub fn compute_multicol_layout(
         })
         .unwrap_or(0.0);
 
+    let (pad, bdr) = tree
+        .doc
+        .get_node(usize::from(node_id))
+        .map(|n| (n.unrounded_layout.padding, n.unrounded_layout.border))
+        .unwrap_or((taffy::Rect::zero(), taffy::Rect::zero()));
+    let inset_left = pad.left + bdr.left;
+    let inset_right = pad.right + bdr.right;
+    let inset_top = pad.top + bdr.top;
+    let inset_bottom = pad.bottom + bdr.bottom;
+    let content_w = (container_w - inset_left - inset_right).max(0.0);
+
     let gap = props.column_gap.max(0.0);
-    let (n, col_w) =
-        resolve_column_layout(container_w, props.column_count, props.column_width, gap);
+    let (n, col_w) = resolve_column_layout(content_w, props.column_count, props.column_width, gap);
 
     // 3. Measure every child at col_w via Taffy. We force
     //    `PerformLayout` here regardless of `inputs.run_mode`: even when
@@ -372,23 +386,23 @@ pub fn compute_multicol_layout(
     };
 
     // `column-span: all` children are laid out at the container's full
-    // content width rather than per-column width. Otherwise identical in
-    // shape to `child_inputs` so the rest of blitz's dispatch treats it
-    // the same way.
+    // content width (border-box minus the multicol's own padding + border)
+    // rather than per-column width. Otherwise identical in shape to
+    // `child_inputs` so the rest of blitz's dispatch treats it the same way.
     let span_child_inputs = taffy::tree::LayoutInput {
         run_mode: RunMode::PerformLayout,
         sizing_mode: SizingMode::InherentSize,
         axis: RequestedAxis::Both,
         known_dimensions: Size {
-            width: Some(container_w),
+            width: Some(content_w),
             height: None,
         },
         parent_size: Size {
-            width: Some(container_w),
+            width: Some(content_w),
             height: inputs.parent_size.height,
         },
         available_space: Size {
-            width: AvailableSpace::Definite(container_w),
+            width: AvailableSpace::Definite(content_w),
             height: AvailableSpace::MaxContent,
         },
         vertical_margins_are_collapsible: Line::FALSE,
@@ -445,25 +459,42 @@ pub fn compute_multicol_layout(
         }
     }
 
+    // Offset every placement by the multicol's own padding + border start.
+    // Up to this point `(x, y)` are relative to the content box origin;
+    // Taffy stores child `location` relative to the parent's border-box
+    // top-left (see `compute_block_layout` in taffy — `resolved_content_box_inset.left`
+    // is added to the child's location), so we shift into that frame here.
+    for (_, location, _) in placements.iter_mut() {
+        location.x += inset_left;
+        location.y += inset_top;
+    }
+
     // 6. Write child positions back into Taffy's storage. The measured
     //    `size.width` is preserved so intrinsically narrower children
     //    (images, shrink-to-fit blocks, inline-level content) keep their
     //    real width rather than being stretched to the track width.
+    //    Preserve each child's existing padding/border/margin/scrollbar
+    //    (written by the nested `compute_child_layout` call above) — only
+    //    location and size move.
     for (child_id, location, size) in &placements {
+        let existing = tree.doc.get_unrounded_layout(*child_id);
         let layout = taffy::Layout {
-            order: 0,
+            order: existing.order,
             location: *location,
             size: *size,
             content_size: *size,
-            scrollbar_size: Size::ZERO,
-            border: taffy::Rect::zero(),
-            padding: taffy::Rect::zero(),
-            margin: taffy::Rect::zero(),
+            scrollbar_size: existing.scrollbar_size,
+            border: existing.border,
+            padding: existing.padding,
+            margin: existing.margin,
         };
         tree.set_unrounded_layout(*child_id, &layout);
     }
 
-    let container_h = cursor_y.max(0.0);
+    // Container height = stacked segment content + padding + border on
+    // both axes. `container_w` already includes horizontal padding/border
+    // (it came in as the border-box width).
+    let container_h = (cursor_y + inset_top + inset_bottom).max(0.0);
 
     // 7. Container size = width × stacked segment height.
     taffy::LayoutOutput {
@@ -1498,6 +1529,144 @@ mod tests {
             "'b' width {} looks like full container width {}",
             b.size.width,
             mc_w
+        );
+    }
+
+    // ── multicol container padding ──────────────────────────────────
+
+    #[test]
+    fn multicol_container_padding_offsets_children_into_content_box() {
+        // Regression for fulgur-4d3g: `.mc { padding: 6px 10px }` was being
+        // ignored — children landed at (0, 0) relative to the container's
+        // border-box, their column tracks spanned the full border-box width,
+        // and the container height was purely content-driven with no padding
+        // contribution. Reference examples: examples/multicol,
+        // examples/multicol-span-all.
+        let html = r#"<!doctype html><html><body>
+            <div id="mc" style="column-count: 2; column-gap: 0; padding: 6px 10px;">
+              <p id="a">alpha alpha alpha alpha</p>
+              <p id="b">beta beta beta beta</p>
+            </div>
+        </body></html>"#;
+        let mut doc = crate::blitz_adapter::parse(html, 400.0, &[]);
+        crate::blitz_adapter::resolve(&mut doc);
+        let mut tree = FulgurLayoutTree::new(&mut doc);
+        tree.layout_multicol_subtrees();
+
+        let a = layout_of_id(&doc, "a");
+        let b = layout_of_id(&doc, "b");
+        let mc = layout_of_id(&doc, "mc");
+
+        // First column starts at padding-left (10px), second at 10px + col_w.
+        assert!(
+            (a.location.x - 10.0).abs() < 0.5,
+            "first-column child.x expected ≈ 10 (padding-left), got {}",
+            a.location.x
+        );
+        // First child also starts at padding-top (6px).
+        assert!(
+            (a.location.y - 6.0).abs() < 0.5,
+            "first child.y expected ≈ 6 (padding-top), got {}",
+            a.location.y
+        );
+        // Second child is in the second column — x must be strictly greater
+        // than the padding edge (padding-left + col_w).
+        assert!(
+            b.location.x > a.location.x + 50.0,
+            "second-column child should sit right of first: a.x={}, b.x={}",
+            a.location.x,
+            b.location.x
+        );
+
+        // Column track width: (border-box − 2 × padding-x) / columns. Derive
+        // the expected value from the realised container width so body margin
+        // defaults don't skew the assertion.
+        let expected_col_w = (mc.size.width - 20.0) / 2.0;
+        assert!(
+            (a.size.width - expected_col_w).abs() < 1.0,
+            "col_w expected ≈ {expected_col_w} ((mc.width {} − 2×10) / 2), got {}",
+            mc.size.width,
+            a.size.width
+        );
+
+        // Container height must include padding-top + padding-bottom.
+        let col_bottom_in_content =
+            (a.location.y + a.size.height).max(b.location.y + b.size.height);
+        // Expected container height ≥ bottom-of-content + padding-bottom (6px).
+        // bottom-of-content already includes padding-top because child.y did.
+        assert!(
+            mc.size.height >= col_bottom_in_content + 6.0 - 0.5,
+            "container height {} should include padding-bottom (content bottom {} + 6)",
+            mc.size.height,
+            col_bottom_in_content
+        );
+    }
+
+    #[test]
+    fn multicol_span_all_respects_container_padding() {
+        // The SpanAll branch must honour the multicol's own padding too —
+        // a column-span: all heading should start at padding-left, not at
+        // the border edge.
+        let html = r#"<!doctype html><html><body>
+            <div id="mc" style="column-count: 2; column-gap: 0; padding: 8px 10px;">
+              <h1 id="title" style="column-span: all;">title</h1>
+              <p id="a">a</p>
+              <p id="b">b</p>
+            </div>
+        </body></html>"#;
+        let mut doc = crate::blitz_adapter::parse(html, 400.0, &[]);
+        crate::blitz_adapter::resolve(&mut doc);
+        let mut tree = FulgurLayoutTree::new(&mut doc);
+        tree.layout_multicol_subtrees();
+
+        let title = layout_of_id(&doc, "title");
+        let mc_w = layout_of_id(&doc, "mc").size.width;
+        assert!(
+            (title.location.x - 10.0).abs() < 0.5,
+            "SpanAll x expected ≈ 10 (padding-left), got {}",
+            title.location.x
+        );
+        assert!(
+            (title.location.y - 8.0).abs() < 0.5,
+            "SpanAll y expected ≈ 8 (padding-top), got {}",
+            title.location.y
+        );
+        // SpanAll width must equal content width (border-box − 2 × padding-x = 380).
+        assert!(
+            (title.size.width - (mc_w - 20.0)).abs() < 1.0,
+            "SpanAll width {} should match content width {}",
+            title.size.width,
+            mc_w - 20.0
+        );
+    }
+
+    #[test]
+    fn multicol_preserves_child_padding_on_writeback() {
+        // Regression: when compute_multicol_layout wrote each child's final
+        // Layout back to Taffy, it overwrote `padding` / `border` with
+        // `Rect::zero()`. Children with their own padding lost it, producing
+        // wrong content-inset when the renderer later read Layout.padding.
+        let html = r#"<!doctype html><html><body>
+            <div id="mc" style="column-count: 2; column-gap: 0;">
+              <p id="a" style="padding: 5px 8px;">alpha</p>
+              <p id="b">beta</p>
+            </div>
+        </body></html>"#;
+        let mut doc = crate::blitz_adapter::parse(html, 400.0, &[]);
+        crate::blitz_adapter::resolve(&mut doc);
+        let mut tree = FulgurLayoutTree::new(&mut doc);
+        tree.layout_multicol_subtrees();
+
+        let a = layout_of_id(&doc, "a");
+        assert!(
+            (a.padding.left - 8.0).abs() < 0.5,
+            "child padding-left expected 8, got {}",
+            a.padding.left
+        );
+        assert!(
+            (a.padding.top - 5.0).abs() < 0.5,
+            "child padding-top expected 5, got {}",
+            a.padding.top
         );
     }
 }
