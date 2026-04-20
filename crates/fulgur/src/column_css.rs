@@ -182,10 +182,18 @@ fn parse_length<'i>(input: &mut Parser<'i, '_>) -> Result<f32, ParseError<'i, ()
 }
 
 /// Parse a `<color>` from `input`. Supports `#rgb` / `#rgba` / `#rrggbb` /
-/// `#rrggbbaa` hashes and CSS named colours. Deliberate returns of `None`
-/// (not `Err`) for unsupported keywords (`currentcolor`, `transparent`,
+/// `#rrggbbaa` hashes, CSS named colours, and the functional notations
+/// `rgb()` / `rgba()` / `hsl()` / `hsla()` (legacy comma syntax; CSS Color
+/// 3 – modern `rgb(r g b / a)` space-separated form is not modelled).
+/// Deliberate returns of `Err` for unsupported keywords (`currentcolor`,
 /// `inherit`, system colours): the declaration drops silently while
 /// siblings in the same block continue to populate.
+///
+/// **Why not `cssparser::Color::parse`?** The Phase A plan referenced that
+/// API, but cssparser 0.35 does not ship one — the full colour parser
+/// lives in a separate `cssparser-color` crate. Adding that dependency is
+/// out of scope for this targeted fix (hard-constrained to this file), so
+/// we implement the two functional forms directly on top of the tokenizer.
 fn parse_color<'i>(input: &mut Parser<'i, '_>) -> Result<[u8; 4], ParseError<'i, ()>> {
     let token = input.next()?.clone();
     let err = || input.new_error::<()>(BasicParseErrorKind::QualifiedRuleInvalid);
@@ -207,8 +215,143 @@ fn parse_color<'i>(input: &mut Parser<'i, '_>) -> Result<[u8; 4], ParseError<'i,
                 Err(err())
             }
         }
+        Token::Function(ref name) => {
+            let fn_name = name.to_ascii_lowercase();
+            // Build the fallback error eagerly so we release the immutable
+            // borrow of `input` before calling `parse_nested_block`, which
+            // takes `&mut self`.
+            let nested = match fn_name.as_str() {
+                "rgb" | "rgba" => input.parse_nested_block(parse_rgb_args),
+                "hsl" | "hsla" => input.parse_nested_block(parse_hsl_args),
+                _ => return Err(err()),
+            };
+            nested.map_err(|_| input.new_error::<()>(BasicParseErrorKind::QualifiedRuleInvalid))
+        }
         _ => Err(err()),
     }
+}
+
+/// Parse a single rgb/rgba channel as either an integer 0..255 number or a
+/// percentage. Clamps to `[0, 255]` on overflow, matching the CSS Color
+/// spec's "clamp on compute" rule.
+fn parse_rgb_channel<'i>(input: &mut Parser<'i, '_>) -> Result<u8, ParseError<'i, ()>> {
+    let token = input.next()?.clone();
+    match token {
+        Token::Number { value, .. } => Ok(value.round().clamp(0.0, 255.0) as u8),
+        Token::Percentage { unit_value, .. } => {
+            Ok((unit_value * 255.0).round().clamp(0.0, 255.0) as u8)
+        }
+        _ => Err(input.new_error(BasicParseErrorKind::QualifiedRuleInvalid)),
+    }
+}
+
+/// Parse an alpha value as either a 0..1 number or a percentage. Scales to
+/// 0..255 and rounds. Clamps to `[0, 255]`.
+fn parse_alpha_value<'i>(input: &mut Parser<'i, '_>) -> Result<u8, ParseError<'i, ()>> {
+    let token = input.next()?.clone();
+    match token {
+        Token::Number { value, .. } => Ok((value * 255.0).round().clamp(0.0, 255.0) as u8),
+        Token::Percentage { unit_value, .. } => {
+            Ok((unit_value * 255.0).round().clamp(0.0, 255.0) as u8)
+        }
+        _ => Err(input.new_error(BasicParseErrorKind::QualifiedRuleInvalid)),
+    }
+}
+
+/// Parse the arguments of `rgb(...)` / `rgba(...)` — legacy comma syntax
+/// only. Accepts `rgb(r, g, b)` or `rgb(r, g, b, a)` (alpha optional; the
+/// name distinction between `rgb` and `rgba` has not mattered since CSS
+/// Color 4).
+fn parse_rgb_args<'i>(input: &mut Parser<'i, '_>) -> Result<[u8; 4], ParseError<'i, ()>> {
+    let r = parse_rgb_channel(input)?;
+    input.expect_comma()?;
+    let g = parse_rgb_channel(input)?;
+    input.expect_comma()?;
+    let b = parse_rgb_channel(input)?;
+    let a = if input.try_parse(|i| i.expect_comma()).is_ok() {
+        parse_alpha_value(input)?
+    } else {
+        255
+    };
+    input.expect_exhausted()?;
+    Ok([r, g, b, a])
+}
+
+/// Parse the arguments of `hsl(...)` / `hsla(...)` — legacy comma syntax
+/// only. Hue is a number in degrees; saturation and lightness are required
+/// percentages. Converts to sRGB using the CSS Color 3 formula.
+fn parse_hsl_args<'i>(input: &mut Parser<'i, '_>) -> Result<[u8; 4], ParseError<'i, ()>> {
+    let hue_deg = match input.next()?.clone() {
+        Token::Number { value, .. } => value,
+        _ => return Err(input.new_error(BasicParseErrorKind::QualifiedRuleInvalid)),
+    };
+    input.expect_comma()?;
+    let s = match input.next()?.clone() {
+        Token::Percentage { unit_value, .. } => unit_value.clamp(0.0, 1.0),
+        _ => return Err(input.new_error(BasicParseErrorKind::QualifiedRuleInvalid)),
+    };
+    input.expect_comma()?;
+    let l = match input.next()?.clone() {
+        Token::Percentage { unit_value, .. } => unit_value.clamp(0.0, 1.0),
+        _ => return Err(input.new_error(BasicParseErrorKind::QualifiedRuleInvalid)),
+    };
+    let a = if input.try_parse(|i| i.expect_comma()).is_ok() {
+        parse_alpha_value(input)?
+    } else {
+        255
+    };
+    input.expect_exhausted()?;
+
+    let (r, g, b) = hsl_to_rgb(hue_deg, s, l);
+    Ok([r, g, b, a])
+}
+
+/// CSS Color 3 HSL → sRGB conversion. Hue is in degrees (any real number;
+/// wrapped via modulo). Saturation and lightness are normalised to
+/// `[0, 1]`. Returns 8-bit sRGB channels with standard rounding.
+fn hsl_to_rgb(hue_deg: f32, s: f32, l: f32) -> (u8, u8, u8) {
+    // Normalise hue to [0, 1) — rem_euclid keeps negatives positive.
+    let h = (hue_deg.rem_euclid(360.0)) / 360.0;
+
+    let hue_to_rgb = |p: f32, q: f32, mut t: f32| -> f32 {
+        if t < 0.0 {
+            t += 1.0;
+        }
+        if t > 1.0 {
+            t -= 1.0;
+        }
+        if t < 1.0 / 6.0 {
+            p + (q - p) * 6.0 * t
+        } else if t < 0.5 {
+            q
+        } else if t < 2.0 / 3.0 {
+            p + (q - p) * (2.0 / 3.0 - t) * 6.0
+        } else {
+            p
+        }
+    };
+
+    let (r_f, g_f, b_f) = if s == 0.0 {
+        (l, l, l)
+    } else {
+        let q = if l < 0.5 {
+            l * (1.0 + s)
+        } else {
+            l + s - l * s
+        };
+        let p = 2.0 * l - q;
+        (
+            hue_to_rgb(p, q, h + 1.0 / 3.0),
+            hue_to_rgb(p, q, h),
+            hue_to_rgb(p, q, h - 1.0 / 3.0),
+        )
+    };
+
+    (
+        (r_f * 255.0).round().clamp(0.0, 255.0) as u8,
+        (g_f * 255.0).round().clamp(0.0, 255.0) as u8,
+        (b_f * 255.0).round().clamp(0.0, 255.0) as u8,
+    )
 }
 
 fn parse_rule_style_ident(ident: &str) -> Option<ColumnRuleStyle> {
@@ -772,6 +915,35 @@ mod tests {
         // cssparser doesn't know `currentcolor` as a named colour; we
         // return `None` which drops this declaration silently.
         assert!(props.rule.is_none());
+    }
+
+    #[test]
+    fn parses_rgb_functional_notation() {
+        let props = parse_declaration_block("column-rule-color: rgb(255, 0, 0);");
+        assert_eq!(props.rule.expect("rule").color, [255, 0, 0, 255]);
+    }
+
+    #[test]
+    fn parses_rgba_with_alpha() {
+        let props = parse_declaration_block("column-rule-color: rgba(0, 0, 0, 0.5);");
+        let c = props.rule.expect("rule").color;
+        assert_eq!(&c[0..3], &[0, 0, 0]);
+        // Allow ±1 rounding slack.
+        assert!((c[3] as i32 - 128).abs() <= 1, "alpha was {}", c[3]);
+    }
+
+    #[test]
+    fn parses_hsl_notation() {
+        let props = parse_declaration_block("column-rule-color: hsl(0, 100%, 50%);");
+        let c = props.rule.expect("rule").color;
+        // pure red; allow ±2 slack on rounding
+        assert!(c[0] >= 253 && c[1] <= 2 && c[2] <= 2, "got {:?}", c);
+    }
+
+    #[test]
+    fn currentcolor_is_rejected() {
+        let props = parse_declaration_block("column-rule-color: currentcolor;");
+        assert!(props.rule.is_none() || props.rule.unwrap().style == ColumnRuleStyle::None);
     }
 
     // -------- selector parsing --------
