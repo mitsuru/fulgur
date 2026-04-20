@@ -92,6 +92,13 @@ pub struct ConvertContext<'a> {
     /// — which matters because the wrapper draws rule segments in table
     /// iteration order and drives PDF output.
     pub column_styles: crate::column_css::ColumnStyleTable,
+    /// Per-multicol-container geometry recorded by the Taffy multicol hook
+    /// (see [`crate::multicol_layout::run_pass`]). Task 4's
+    /// `MulticolRulePageable` reads this to paint `column-rule` lines
+    /// between adjacent non-empty columns without re-running layout.
+    /// Keyed by container `usize` NodeId — same convention as
+    /// `column_styles`.
+    pub multicol_geometry: crate::multicol_layout::MulticolGeometryTable,
 }
 
 impl ConvertContext<'_> {
@@ -3204,6 +3211,7 @@ mod tests {
             counter_ops_by_node: HashMap::new(),
             bookmark_by_node: HashMap::new(),
             column_styles: crate::column_css::ColumnStyleTable::new(),
+            multicol_geometry: crate::multicol_layout::MulticolGeometryTable::new(),
         };
         let tree = super::dom_to_pageable(&doc, &mut ctx);
 
@@ -3248,6 +3256,7 @@ mod tests {
             counter_ops_by_node: HashMap::new(),
             bookmark_by_node: HashMap::new(),
             column_styles: crate::column_css::ColumnStyleTable::new(),
+            multicol_geometry: crate::multicol_layout::MulticolGeometryTable::new(),
         };
         let tree = super::dom_to_pageable(&doc, &mut ctx);
 
@@ -3296,6 +3305,7 @@ mod tests {
             counter_ops_by_node: HashMap::new(),
             bookmark_by_node: HashMap::new(),
             column_styles: crate::column_css::ColumnStyleTable::new(),
+            multicol_geometry: crate::multicol_layout::MulticolGeometryTable::new(),
         };
         let tree = super::dom_to_pageable(&doc, &mut ctx);
         let mut images = Vec::new();
@@ -3352,6 +3362,7 @@ mod tests {
             counter_ops_by_node: HashMap::new(),
             bookmark_by_node: HashMap::new(),
             column_styles: crate::column_css::ColumnStyleTable::new(),
+            multicol_geometry: crate::multicol_layout::MulticolGeometryTable::new(),
         };
         let tree = super::dom_to_pageable(&doc, &mut ctx);
         let mut images = Vec::new();
@@ -3399,6 +3410,7 @@ mod tests {
             counter_ops_by_node: HashMap::new(),
             bookmark_by_node: HashMap::new(),
             column_styles: crate::column_css::ColumnStyleTable::new(),
+            multicol_geometry: crate::multicol_layout::MulticolGeometryTable::new(),
         };
         let tree = super::dom_to_pageable(&doc, &mut ctx);
         let mut images = Vec::new();
@@ -3662,6 +3674,7 @@ mod tests {
             counter_ops_by_node: HashMap::new(),
             bookmark_by_node: HashMap::new(),
             column_styles: crate::column_css::ColumnStyleTable::new(),
+            multicol_geometry: crate::multicol_layout::MulticolGeometryTable::new(),
         };
         let tree = super::dom_to_pageable(&doc, &mut ctx);
 
@@ -3693,6 +3706,7 @@ mod tests {
             counter_ops_by_node: HashMap::new(),
             bookmark_by_node: HashMap::new(),
             column_styles: crate::column_css::ColumnStyleTable::new(),
+            multicol_geometry: crate::multicol_layout::MulticolGeometryTable::new(),
         };
         let tree = super::dom_to_pageable(&doc, &mut ctx);
 
@@ -3727,6 +3741,7 @@ mod tests {
             counter_ops_by_node: HashMap::new(),
             bookmark_by_node: HashMap::new(),
             column_styles: crate::column_css::ColumnStyleTable::new(),
+            multicol_geometry: crate::multicol_layout::MulticolGeometryTable::new(),
         };
         let tree = super::dom_to_pageable(&doc, &mut ctx);
 
@@ -3788,6 +3803,7 @@ mod tests {
             counter_ops_by_node: HashMap::new(),
             bookmark_by_node,
             column_styles: crate::column_css::ColumnStyleTable::new(),
+            multicol_geometry: crate::multicol_layout::MulticolGeometryTable::new(),
         };
         let root = dom_to_pageable(&doc, &mut ctx);
 
@@ -3834,6 +3850,7 @@ mod tests {
             counter_ops_by_node: HashMap::new(),
             bookmark_by_node,
             column_styles: crate::column_css::ColumnStyleTable::new(),
+            multicol_geometry: crate::multicol_layout::MulticolGeometryTable::new(),
         };
         let root = dom_to_pageable(&doc, &mut ctx);
 
@@ -3896,6 +3913,7 @@ mod tests {
             counter_ops_by_node: HashMap::new(),
             bookmark_by_node,
             column_styles: crate::column_css::ColumnStyleTable::new(),
+            multicol_geometry: crate::multicol_layout::MulticolGeometryTable::new(),
         };
         let root = dom_to_pageable(&doc, &mut ctx);
 
@@ -3961,6 +3979,7 @@ mod tests {
                 counter_ops_by_node: HashMap::new(),
                 bookmark_by_node: HashMap::new(),
                 column_styles: crate::column_css::ColumnStyleTable::new(),
+                multicol_geometry: crate::multicol_layout::MulticolGeometryTable::new(),
             }
         }};
     }
@@ -4186,6 +4205,7 @@ mod tests {
             counter_ops_by_node: HashMap::new(),
             bookmark_by_node: HashMap::new(),
             column_styles: crate::column_css::ColumnStyleTable::new(),
+            multicol_geometry: crate::multicol_layout::MulticolGeometryTable::new(),
         };
         let tree = super::dom_to_pageable(&doc, &mut ctx);
         assert!(
@@ -4209,6 +4229,7 @@ mod tests {
             counter_ops_by_node: HashMap::new(),
             bookmark_by_node: HashMap::new(),
             column_styles: crate::column_css::ColumnStyleTable::new(),
+            multicol_geometry: crate::multicol_layout::MulticolGeometryTable::new(),
         };
         let tree = super::dom_to_pageable(&doc, &mut ctx);
         // Empty <li> with no AssetBundle fonts: marker may not render if no
@@ -4232,6 +4253,7 @@ mod tests {
             counter_ops_by_node: HashMap::new(),
             bookmark_by_node: HashMap::new(),
             column_styles: crate::column_css::ColumnStyleTable::new(),
+            multicol_geometry: crate::multicol_layout::MulticolGeometryTable::new(),
         };
         let tree = super::dom_to_pageable(&doc, &mut ctx);
         assert!(

@@ -178,8 +178,13 @@ impl Engine {
 
         // Blitz treats multicol containers as plain blocks; route them
         // through fulgur's Taffy hook so columns balance and siblings
-        // shift in lockstep. See docs/plans/2026-04-20-css-multicol-design.md.
-        crate::multicol_layout::run_pass(doc.deref_mut(), &column_styles);
+        // shift in lockstep. The returned geometry table captures per-
+        // `ColumnGroup` layout for Task 4's `MulticolRulePageable`; we
+        // thread it through `ConvertContext` so the convert pass can
+        // wrap multicol containers with the rule spec + geometry they
+        // need to render. See docs/plans/2026-04-20-css-multicol-design.md
+        // and docs/plans/2026-04-21-fulgur-v7a-column-rule.md.
+        let multicol_geometry = crate::multicol_layout::run_pass(doc.deref_mut(), &column_styles);
 
         // --- Convert DOM to Pageable and render ---
         // Build string-set lookup map
@@ -210,6 +215,7 @@ impl Engine {
             counter_ops_by_node: counter_ops_map,
             bookmark_by_node,
             column_styles,
+            multicol_geometry,
         };
         let root = crate::convert::dom_to_pageable(&doc, &mut convert_ctx);
 
@@ -284,7 +290,7 @@ impl Engine {
 
         crate::blitz_adapter::resolve(&mut doc);
         let column_styles = crate::blitz_adapter::extract_column_style_table(&doc);
-        crate::multicol_layout::run_pass(doc.deref_mut(), &column_styles);
+        let multicol_geometry = crate::multicol_layout::run_pass(doc.deref_mut(), &column_styles);
 
         let running_store = crate::gcpm::running::RunningElementStore::new();
         let mut convert_ctx = ConvertContext {
@@ -295,6 +301,7 @@ impl Engine {
             counter_ops_by_node: HashMap::new(),
             bookmark_by_node: HashMap::new(),
             column_styles,
+            multicol_geometry,
         };
         crate::convert::dom_to_pageable(&doc, &mut convert_ctx)
     }

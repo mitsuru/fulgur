@@ -15,11 +15,71 @@
 //! mechanism one layer up.
 
 use blitz_dom::BaseDocument;
+use std::collections::BTreeMap;
 use taffy::{
     AvailableSpace, CacheTree, CollapsibleMarginSet, CoreStyle, LayoutPartialTree, Line, NodeId,
     Point, RequestedAxis, ResolveOrZero, RoundTree, RunMode, Size, SizingMode, TraversePartialTree,
     TraverseTree,
 };
+
+/// Per-`ColumnGroup` geometry recorded by the Taffy multicol hook.
+///
+/// `layout_column_group` builds one of these every time it balances a run of
+/// columnar children. Consumers (Task 4's `MulticolRulePageable`) use the
+/// geometry to paint `column-rule` lines between adjacent non-empty columns
+/// without re-running layout: the rule at gutter `i ↔ i+1` starts at
+/// `y_offset` and extends `min(col_heights[i], col_heights[i+1])` downward.
+///
+/// Conventions:
+///
+/// - `y_offset` is measured from the multicol container's content box top,
+///   not from the page or the viewport.
+/// - `col_heights` always has length `n`; an entry is `0.0` when the column
+///   contains no placements.
+/// - `col_w` and `gap` are in CSS pixels (Taffy's native unit), matching the
+///   rest of the multicol hook.
+/// - `x_offset` / `y_offset` are relative to the multicol container's
+///   **border-box** top-left (same frame as `BlockPageable::draw`'s `x, y`
+///   args). They already include the container's own padding + border.
+#[derive(Clone, Debug, Default)]
+pub struct ColumnGroupGeometry {
+    /// Horizontal offset from the container's border-box left to column 0's
+    /// left edge. Equals the container's (padding-left + border-left).
+    pub x_offset: f32,
+    /// Vertical offset from the container's border-box top to this group's
+    /// top. Includes the container's (padding-top + border-top); subsequent
+    /// groups accumulate prior segment heights on top of that.
+    pub y_offset: f32,
+    /// Width of a single column, in CSS pixels.
+    pub col_w: f32,
+    /// Horizontal gap between adjacent columns, in CSS pixels.
+    pub gap: f32,
+    /// Number of columns this group balances across.
+    pub n: u32,
+    /// Per-column filled height. `col_heights[i]` is the bottom-most
+    /// placement's `(location.y + size.height)` minus `y_offset` for column
+    /// `i`, clamped to `>= 0.0`. An entry of `0.0` means column `i` received
+    /// no placements. Always has length == `n`.
+    pub col_heights: Vec<f32>,
+}
+
+/// Full per-container multicol geometry record.
+///
+/// One `ColumnGroupGeometry` per `Segment::ColumnGroup` in source order.
+/// `SpanAll` segments do not contribute geometry because they span the full
+/// container width — there are no inter-column gutters to draw a rule in.
+#[derive(Clone, Debug, Default)]
+pub struct MulticolGeometry {
+    pub groups: Vec<ColumnGroupGeometry>,
+}
+
+/// Side-table mapping multicol container `usize` NodeIds to their geometry.
+///
+/// Keyed by raw `usize` (same convention as
+/// [`crate::column_css::ColumnStyleTable`]) so convert-side lookups can use
+/// the DOM node id directly. `BTreeMap`, not `HashMap`, because iteration
+/// order may feed into PDF byte order downstream.
+pub type MulticolGeometryTable = BTreeMap<usize, MulticolGeometry>;
 
 /// One top-level slice of a multicol container's flattened child list.
 ///
@@ -93,24 +153,38 @@ pub(crate) fn partition_children_into_segments(
 /// convert pass.
 pub struct FulgurLayoutTree<'a> {
     pub(crate) doc: &'a mut BaseDocument,
-    // Task 3 will read this field from `compute_multicol_layout` /
+    // Task 5 will read this field from `compute_multicol_layout` /
     // `layout_column_group` to branch on `ColumnFill::Auto`; until that lands,
     // the field is populated but never consulted, so silence the warning
     // locally rather than leaving `#![allow(dead_code)]` at module scope.
     #[allow(dead_code)]
     pub(crate) column_styles: &'a crate::column_css::ColumnStyleTable,
+    /// Per-container geometry populated by `compute_multicol_layout` as it
+    /// balances each `ColumnGroup` segment. Owned (not borrowed) because the
+    /// table is produced during this layout pass and must outlive the tree —
+    /// callers drain it via [`FulgurLayoutTree::take_geometry`] and thread
+    /// it into the convert pipeline. `BTreeMap` keeps iteration order
+    /// deterministic across runs.
+    pub(crate) geometry: MulticolGeometryTable,
 }
 
 /// One-shot entry used by the render pipeline after `blitz_adapter::resolve`.
-/// Runs the multicol Taffy hook on every multicol subtree in the document.
+/// Runs the multicol Taffy hook on every multicol subtree in the document,
+/// then returns the geometry table so downstream passes (convert → draw)
+/// can paint `column-rule` lines without re-walking layout.
 ///
 /// `column_styles` is the Phase A side-table harvested by
 /// [`crate::blitz_adapter::extract_column_style_table`]. Callers that do not
 /// need `column-fill` / `column-rule` resolution can pass an empty table
 /// (e.g. test helpers — see the `FulgurLayoutTree::new` call sites in the
-/// unit-test modules below).
-pub fn run_pass(doc: &mut BaseDocument, column_styles: &crate::column_css::ColumnStyleTable) {
-    FulgurLayoutTree::new(doc, column_styles).layout_multicol_subtrees();
+/// unit-test modules below) and simply drop the returned geometry.
+pub fn run_pass(
+    doc: &mut BaseDocument,
+    column_styles: &crate::column_css::ColumnStyleTable,
+) -> MulticolGeometryTable {
+    let mut tree = FulgurLayoutTree::new(doc, column_styles);
+    tree.layout_multicol_subtrees();
+    tree.take_geometry()
 }
 
 impl<'a> FulgurLayoutTree<'a> {
@@ -118,7 +192,21 @@ impl<'a> FulgurLayoutTree<'a> {
         doc: &'a mut BaseDocument,
         column_styles: &'a crate::column_css::ColumnStyleTable,
     ) -> Self {
-        Self { doc, column_styles }
+        Self {
+            doc,
+            column_styles,
+            geometry: BTreeMap::new(),
+        }
+    }
+
+    /// Drain the accumulated per-container geometry table.
+    ///
+    /// Uses `mem::take` so a second call on the same tree returns an empty
+    /// table rather than double-counting (the tree keeps a `BTreeMap::new()`
+    /// in place). Callers normally invoke this once after
+    /// [`FulgurLayoutTree::layout_multicol_subtrees`] has finished.
+    pub fn take_geometry(&mut self) -> MulticolGeometryTable {
+        std::mem::take(&mut self.geometry)
     }
 
     /// Re-run Taffy layout for each multicol container in the tree.
@@ -476,10 +564,11 @@ pub fn compute_multicol_layout(
 
     let mut cursor_y: f32 = 0.0;
     let mut placements: Vec<(NodeId, Point<f32>, Size<f32>)> = Vec::new();
+    let mut group_geometries: Vec<ColumnGroupGeometry> = Vec::new();
     for segment in segments {
         match segment {
             Segment::ColumnGroup(children) => {
-                let (group_placements, seg_h) = layout_column_group(
+                let (group_placements, geometry) = layout_column_group(
                     tree,
                     col_w,
                     gap,
@@ -489,7 +578,9 @@ pub fn compute_multicol_layout(
                     cursor_y,
                     child_inputs,
                 );
+                let seg_h = geometry.col_heights.iter().copied().fold(0.0_f32, f32::max);
                 placements.extend(group_placements);
+                group_geometries.push(geometry);
                 cursor_y += seg_h;
             }
             Segment::SpanAll(child_id) => {
@@ -513,6 +604,27 @@ pub fn compute_multicol_layout(
         location.x += inset_left;
         location.y += inset_top;
     }
+
+    // Shift each recorded group geometry into the same border-box frame so
+    // `MulticolRulePageable::draw` (which receives `x, y` at the container's
+    // border-box origin) can use `group.x_offset + col_x_math` and
+    // `group.y_offset` directly without reapplying the container's padding.
+    for group in group_geometries.iter_mut() {
+        group.x_offset = inset_left;
+        group.y_offset += inset_top;
+    }
+
+    // Stash the per-container geometry for downstream consumers (Task 4's
+    // `MulticolRulePageable`). We intentionally record the entry even when
+    // the container produced no column groups (all `SpanAll`, or entirely
+    // empty) — the presence of the key lets convert-side code distinguish
+    // "layout hook ran but found nothing balanceable" from "hook never ran".
+    tree.geometry.insert(
+        usize::from(node_id),
+        MulticolGeometry {
+            groups: group_geometries,
+        },
+    );
 
     // 6. Write child positions back into Taffy's storage. Only location
     //    and size change between the nested `compute_child_layout` call
@@ -556,9 +668,15 @@ pub fn compute_multicol_layout(
 /// starting at `y_offset`. `avail_h` is the per-column budget ceiling
 /// (for balance / auto fallback); measurement happens inside via Taffy.
 ///
-/// Returns `(placements, segment_height)` where `segment_height` is the
-/// max column bottom relative to `y_offset` (i.e. the vertical extent
-/// this segment contributes to the container).
+/// Returns `(placements, geometry)`:
+///
+/// - `placements` is the `(child, location, size)` triples written back
+///   into Taffy's storage by `compute_multicol_layout`.
+/// - `geometry` carries the shape this segment contributes to the
+///   container's [`MulticolGeometry`]: column width, gap, column count,
+///   y-offset, and per-column filled height. The segment's vertical
+///   extent (what we used to return as `seg_h`) is recoverable as
+///   `geometry.col_heights.iter().copied().fold(0.0, f32::max)`.
 #[allow(clippy::too_many_arguments, clippy::type_complexity)]
 fn layout_column_group(
     tree: &mut FulgurLayoutTree<'_>,
@@ -569,7 +687,7 @@ fn layout_column_group(
     children: &[NodeId],
     y_offset: f32,
     child_inputs: taffy::tree::LayoutInput,
-) -> (Vec<(NodeId, Point<f32>, Size<f32>)>, f32) {
+) -> (Vec<(NodeId, Point<f32>, Size<f32>)>, ColumnGroupGeometry) {
     // 1. Measure
     let mut measured: Vec<(NodeId, Size<f32>)> = Vec::with_capacity(children.len());
     for &child in children {
@@ -608,14 +726,55 @@ fn layout_column_group(
         col_y += size.height;
     }
 
-    // 4. Segment height = tallest column bottom relative to y_offset
-    let seg_h = placements
-        .iter()
-        .map(|(_, loc, sz)| (loc.y - y_offset) + sz.height)
-        .fold(0.0f32, f32::max)
-        .max(0.0);
+    // 4. Per-column filled heights — bottom-most placement per column,
+    //    relative to y_offset. Empty columns stay at 0.0.
+    //
+    //    We recover each placement's column index by inverting the
+    //    `col_x = col_idx * (col_w + gap)` formula from step 3. The stride
+    //    `col_w + gap` is non-zero for any real multicol container (both
+    //    `col_w` and `gap` are `>= 0.0`, and `col_w == 0 && gap == 0`
+    //    indicates a degenerate container where the column index doesn't
+    //    meaningfully differ across placements anyway). The guard below
+    //    protects against a divide-by-zero; `round()` tolerates float
+    //    accumulation from the multiplication in step 3.
+    let stride = col_w + gap;
+    let mut col_heights: Vec<f32> = vec![0.0_f32; n as usize];
+    for (_, loc, sz) in &placements {
+        let idx = if stride > 0.0 {
+            let raw = (loc.x / stride).round();
+            // Clamp to [0, n-1] — float noise at exact stride boundaries
+            // could push `raw` a hair outside the valid range.
+            if raw.is_finite() && raw >= 0.0 {
+                (raw as u32).min(n.saturating_sub(1)) as usize
+            } else {
+                0
+            }
+        } else {
+            0
+        };
+        let bottom = (loc.y - y_offset) + sz.height;
+        if bottom > col_heights[idx] {
+            col_heights[idx] = bottom;
+        }
+    }
+    // Guard against negative accumulation (should be unreachable given
+    // `y_offset` is the segment's top and placements live at or below it,
+    // but the clamp keeps the invariant `col_heights[i] >= 0.0` explicit).
+    for h in col_heights.iter_mut() {
+        if *h < 0.0 {
+            *h = 0.0;
+        }
+    }
 
-    (placements, seg_h)
+    let geometry = ColumnGroupGeometry {
+        y_offset,
+        col_w,
+        gap,
+        n,
+        col_heights,
+    };
+
+    (placements, geometry)
 }
 
 /// Linear search for the smallest per-column budget (starting from `total / n`
@@ -1603,7 +1762,8 @@ mod tests {
         </body></html>"#;
         let mut doc = crate::blitz_adapter::parse(html, 400.0, &[]);
         crate::blitz_adapter::resolve(&mut doc);
-        let mut tree = FulgurLayoutTree::new(&mut doc);
+        let column_styles = crate::column_css::ColumnStyleTable::new();
+        let mut tree = FulgurLayoutTree::new(&mut doc, &column_styles);
         tree.layout_multicol_subtrees();
 
         let a = layout_of_id(&doc, "a");
@@ -1669,7 +1829,8 @@ mod tests {
         </body></html>"#;
         let mut doc = crate::blitz_adapter::parse(html, 400.0, &[]);
         crate::blitz_adapter::resolve(&mut doc);
-        let mut tree = FulgurLayoutTree::new(&mut doc);
+        let column_styles = crate::column_css::ColumnStyleTable::new();
+        let mut tree = FulgurLayoutTree::new(&mut doc, &column_styles);
         tree.layout_multicol_subtrees();
 
         let title = layout_of_id(&doc, "title");
@@ -1714,7 +1875,8 @@ mod tests {
         </body></html>"#;
         let mut doc = crate::blitz_adapter::parse(html, 400.0, &[]);
         crate::blitz_adapter::resolve(&mut doc);
-        let mut tree = FulgurLayoutTree::new(&mut doc);
+        let column_styles = crate::column_css::ColumnStyleTable::new();
+        let mut tree = FulgurLayoutTree::new(&mut doc, &column_styles);
         tree.layout_multicol_subtrees();
 
         let a = layout_of_id(&doc, "a");
@@ -1744,7 +1906,8 @@ mod tests {
         </body></html>"#;
         let mut doc = crate::blitz_adapter::parse(html, 400.0, &[]);
         crate::blitz_adapter::resolve(&mut doc);
-        let mut tree = FulgurLayoutTree::new(&mut doc);
+        let column_styles = crate::column_css::ColumnStyleTable::new();
+        let mut tree = FulgurLayoutTree::new(&mut doc, &column_styles);
         tree.layout_multicol_subtrees();
 
         let a = layout_of_id(&doc, "a");
@@ -1757,6 +1920,104 @@ mod tests {
             (a.padding.top - 5.0).abs() < 0.5,
             "child padding-top expected 5, got {}",
             a.padding.top
+        );
+    }
+
+    // ── MulticolGeometry recording (Task 3) ─────────────────────────
+
+    #[test]
+    fn column_group_geometry_records_heights_matching_layout() {
+        // Minimal multicol fixture: 4 roughly-equal paragraphs balanced into
+        // 2 columns with no gap. The hook must record one MulticolGeometry
+        // entry for the container, with one ColumnGroupGeometry describing
+        // the balanced columns:
+        //
+        //   - groups.len() == 1 (one ColumnGroup segment, no SpanAll)
+        //   - n == 2 (column-count: 2)
+        //   - col_heights.len() == n
+        //   - Both columns populated (balance did NOT dump all into col 0)
+        //   - Per-column filled height ≈ total_h / n (within one balance step)
+        let html = r#"<!doctype html><html><body>
+            <div id="mc" style="column-count: 2; column-gap: 0;">
+              <p>alpha alpha alpha alpha</p>
+              <p>beta beta beta beta</p>
+              <p>gamma gamma gamma gamma</p>
+              <p>delta delta delta delta</p>
+            </div>
+        </body></html>"#;
+        let mut doc = crate::blitz_adapter::parse(html, 400.0, &[]);
+        crate::blitz_adapter::resolve(&mut doc);
+
+        let mc_id = collect_multicol_node_ids(&doc)[0];
+        let mc_node_id = NodeId::from(mc_id);
+
+        let column_styles = crate::column_css::ColumnStyleTable::new();
+        let geometry_table = run_pass(&mut doc, &column_styles);
+
+        let mc_geom = geometry_table
+            .get(&mc_id)
+            .expect("multicol container should have a geometry entry");
+        assert_eq!(
+            mc_geom.groups.len(),
+            1,
+            "expected one ColumnGroup segment for this fixture, got {}",
+            mc_geom.groups.len()
+        );
+
+        let group = &mc_geom.groups[0];
+        assert_eq!(group.n, 2, "column-count: 2");
+        assert_eq!(
+            group.col_heights.len(),
+            2,
+            "col_heights length must equal n"
+        );
+        assert!(
+            group.col_heights[0] > 0.0 && group.col_heights[1] > 0.0,
+            "balance should populate both columns, got col_heights={:?}",
+            group.col_heights
+        );
+
+        // The tallest column's bottom in container-local coordinates
+        // (group.y_offset + tallest) should match the container's border-box
+        // content bottom (container_h minus inset_bottom). Since this fixture
+        // has no padding/border, y_offset == 0 and tallest == container_h.
+        let tallest = group.col_heights.iter().copied().fold(0.0_f32, f32::max);
+        let container_h = doc.get_unrounded_layout(mc_node_id).size.height;
+        assert!(
+            (group.y_offset + tallest - container_h).abs() < 1.0,
+            "group bottom ({}) should match container height ({})",
+            group.y_offset + tallest,
+            container_h
+        );
+    }
+
+    #[test]
+    fn take_geometry_drains_table_and_is_idempotent() {
+        // `take_geometry` must use `mem::take` semantics: the first call
+        // returns the populated table, the second returns an empty one
+        // (no double-counting). This is the contract Task 4's wrapper
+        // relies on when the engine threads geometry into convert.
+        let html = r#"<!doctype html><html><body>
+            <div style="column-count: 2; column-gap: 0;">
+              <p>a</p><p>b</p><p>c</p><p>d</p>
+            </div>
+        </body></html>"#;
+        let mut doc = crate::blitz_adapter::parse(html, 400.0, &[]);
+        crate::blitz_adapter::resolve(&mut doc);
+
+        let column_styles = crate::column_css::ColumnStyleTable::new();
+        let mut tree = FulgurLayoutTree::new(&mut doc, &column_styles);
+        tree.layout_multicol_subtrees();
+
+        let first = tree.take_geometry();
+        assert!(
+            !first.is_empty(),
+            "first take should return the populated geometry"
+        );
+        let second = tree.take_geometry();
+        assert!(
+            second.is_empty(),
+            "second take must be empty — no double-counting"
         );
     }
 }
