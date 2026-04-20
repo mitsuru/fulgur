@@ -626,7 +626,10 @@ fn propagate_height_delta(doc: &mut BaseDocument, node_id: usize, delta: f32) {
 /// Walk the tree from the document root collecting every node id whose
 /// style makes it a multicol container. Top-down order.
 fn collect_multicol_node_ids(doc: &BaseDocument) -> Vec<usize> {
-    fn walk(doc: &BaseDocument, id: usize, out: &mut Vec<usize>) {
+    fn walk(doc: &BaseDocument, id: usize, depth: usize, out: &mut Vec<usize>) {
+        if depth >= crate::MAX_DOM_DEPTH {
+            return;
+        }
         let Some(node) = doc.get_node(id) else {
             return;
         };
@@ -634,11 +637,11 @@ fn collect_multicol_node_ids(doc: &BaseDocument) -> Vec<usize> {
             out.push(id);
         }
         for &child in &node.children {
-            walk(doc, child, out);
+            walk(doc, child, depth + 1, out);
         }
     }
     let mut out = Vec::new();
-    walk(doc, doc.root_element().id, &mut out);
+    walk(doc, doc.root_element().id, 0, &mut out);
     out
 }
 

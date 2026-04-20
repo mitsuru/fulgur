@@ -185,9 +185,23 @@ pub(crate) fn partition_children_into_segments(
     let mut out: Vec<Segment> = Vec::new();
     let mut group: Vec<NodeId> = Vec::new();
     for child_id in children {
-        let is_span = doc
-            .get_node(child_id)
-            .is_some_and(crate::blitz_adapter::has_column_span_all);
+        let Some(child_node) = doc.get_node(child_id) else {
+            continue;
+        };
+        // Skip text nodes that are entirely whitespace — they're HTML
+        // pretty-printing noise with no layout content. Non-whitespace
+        // text nodes stay in the ColumnGroup so they are not silently
+        // dropped.
+        if let Some(text) = child_node.text_data()
+            && text.content.chars().all(char::is_whitespace)
+        {
+            continue;
+        }
+        // `column-span: all` only applies to element children; non-elements
+        // (text content, comments) flow through as ordinary members of the
+        // current ColumnGroup so their layout is preserved.
+        let is_span = child_node.element_data().is_some()
+            && crate::blitz_adapter::has_column_span_all(child_node);
         if is_span {
             if !group.is_empty() {
                 out.push(Segment::ColumnGroup(std::mem::take(&mut group)));

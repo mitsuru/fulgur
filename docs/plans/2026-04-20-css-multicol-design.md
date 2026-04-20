@@ -190,7 +190,7 @@ the Pageable layer. The spike proved three things:
    distribution converges in ≤20 iterations and visually balances.
 3. **Taffy-level layout is non-negotiable.** The blocker is structural:
    Taffy positions siblings after a multicol using the pre-reshape single-
-   column height, and there is no safe way to re-flow them afterwards. A
+   column height, and there is no safe way to re-flow them afterward. A
    naive "recompute parent `pc.y` from cumulative heights" pass broke
    unrelated paginate tests that intentionally pack children at duplicate y
    positions. Correctly propagating a post-layout height change requires a
@@ -218,4 +218,4 @@ Artifacts to carry forward from the spike:
 | A-5 | multicol: `break-inside: avoid` | feature |
 | A-6 | multicol: VRT fixtures + integration tests + examples | task |
 
-Dependency chain: `A-0 → A-1b → A-2b → {A-3, A-4, A-5}` (parallelisable) `→ A-6`.
+Dependency chain: `A-0 → A-1b → A-2b → {A-3, A-4, A-5}` (parallelizable) `→ A-6`.
