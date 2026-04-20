@@ -152,11 +152,41 @@ PR と nightly で分ける:
 | `<link rel=match>` 複数 (どれか一致で PASS) | SKIP |
 | `<link rel=mismatch>` | SKIP |
 | chained reference (ref が ref を指す) | SKIP |
-| `<meta name=fuzzy content="maxDifference=0-2;totalPixels=0-100">` | ◯ パース + 適用 |
+| `<meta name=fuzzy content="...">` (全バリアント) | ◯ パース + 適用 (下記 §Fuzzy meta 仕様) |
 | `<meta name=flags content="paged">` | 情報のみ (常に paged render) |
 | `data-*` 属性 (testharness)          | N/A (reftest のみ対応) |
 
 複数 match / mismatch / chained は Phase 5+ で別 issue として拡張。
+
+### Fuzzy meta 仕様 (全形式対応)
+
+WPT 仕様 ([web-platform-tests/wpt#12187](https://github.com/web-platform-tests/wpt/pull/12187),
+[reftest 仕様](https://web-platform-tests.org/writing-tests/reftests.html))
+に準拠し、以下すべてを Phase 1 から受理する。どれか1つだけ対応だと
+実テストで false fail/silent skip が発生するため必須:
+
+```text
+fuzziness = [ url ":" ]? range ";" range
+range     = N | N "-" N | "-" N | N "-"        (inclusive)
+```
+
+- **数値形式**: `"10;300"` (max diff 10 per channel, ≤300 pixels)
+- **数値 + レンジ**: `"5-10;200-300"`
+- **Named 形式**: `"maxDifference=10;totalPixels=300"` または
+  `"maxDifference=5-10;totalPixels=200-300"` (引数名は省略可、順序は固定)
+- **URL プレフィックス**: `"ref.html:10-15;200-300"` (特定 ref 専用の
+  tolerance。Phase 1 は単一 ref 前提だが、テスト作者の意図を尊重して
+  prefix の ref URL が rel=match href と一致する場合のみ採用、
+  一致しなければ警告して既定 tolerance を適用)
+- **開区間レンジ**: `"5-"` (最小のみ) / `"-300"` (最大のみ)
+- **複数 `<meta name=fuzzy>`**: ref が複数の時に ref 毎 tolerance を
+  与える仕様。Phase 1 は単一 ref 想定なので、URL prefix 無しの要素が
+  複数あれば最後のものを採用 + 警告 (Phase 5 で複数 ref 対応時に正式化)
+
+`reftest.rs` の fuzzy パーサは上記すべてを canonical 表現
+(`FuzzyTolerance { url: Option<PathBuf>, max_diff: RangeInclusive<u8>,
+total_pixels: RangeInclusive<u32> }`) に正規化し、単体テストで各
+バリアントをカバーする。
 
 ## ディレクトリ構造 (完成形)
 
