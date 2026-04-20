@@ -130,7 +130,7 @@ Expected: PASS
 
 Run: `cargo test -p fulgur --test rect_borders_test`
 
-Expected: all 3 tests pass (`table_header_uses_rect_for_uniform_borders`, `dashed_uniform_border_keeps_per_edge_phase`, `double_uniform_border_uses_two_rects`, `double_uniform_border_below_3px_falls_back_to_solid`)。
+Expected: all 4 tests pass (`table_header_uses_rect_for_uniform_borders`, `dashed_uniform_border_keeps_per_edge_phase`, `double_uniform_border_uses_two_rects`, `double_uniform_border_below_3px_falls_back_to_solid`)。
 
 **Step 5: Commit**
 
