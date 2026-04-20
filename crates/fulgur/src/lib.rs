@@ -5,6 +5,7 @@ pub(crate) const MAX_DOM_DEPTH: usize = 512;
 pub mod asset;
 pub mod background;
 pub mod blitz_adapter;
+pub(crate) mod column_css;
 pub mod config;
 pub mod convert;
 pub mod engine;
