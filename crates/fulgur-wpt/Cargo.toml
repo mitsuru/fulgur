@@ -9,10 +9,10 @@ description = "W3C web-platform-tests runner for fulgur (dev-only, not published
 
 [dependencies]
 fulgur = { path = "../fulgur" }
+fulgur-vrt = { path = "../fulgur-vrt" }
 image = { version = "0.25", default-features = false, features = ["png"] }
 anyhow = "1"
 scraper = "0.26"
 
 [dev-dependencies]
-fulgur-vrt = { path = "../fulgur-vrt" }
 tempfile = "3"
