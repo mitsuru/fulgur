@@ -272,6 +272,86 @@ fn walk_for_inline_styles(
     }
 }
 
+/// Harvest the column-* properties that blitz/stylo (servo feature) does not
+/// expose and return them as a [`crate::column_css::ColumnStyleTable`] keyed by
+/// DOM node id.
+///
+/// This is the Phase A production entry point for the side-table built by
+/// [`crate::column_css::build_column_style_table`]: it walks every top-level
+/// `<style>` element, concatenates their text content, parses the aggregate
+/// as a stylesheet, then hands it back to `build_column_style_table` which
+/// also folds inline `style="..."` attributes per element.
+///
+/// Two traversals are intentional and trivial: the first collects stylesheet
+/// bytes (O(nodes + css_bytes)), the second applies the cascade (also
+/// O(nodes + css_bytes)). Keeping them separate mirrors the CSS cascade —
+/// stylesheets are parsed once, then matched against every node.
+pub fn extract_column_style_table(doc: &HtmlDocument) -> crate::column_css::ColumnStyleTable {
+    // 1. Concatenate every top-level <style> block's text content.
+    let mut css = String::new();
+    let root_id = doc.root_element().id;
+    walk_for_column_styles(doc, root_id, &mut css, 0);
+
+    // 2. Parse the aggregate as a stylesheet. `parse_stylesheet` silently
+    //    drops malformed rules / unsupported selectors — matches the
+    //    project-wide "no panic on bad CSS" invariant.
+    let rules = crate::column_css::parse_stylesheet(&css);
+
+    // 3. Build the side-table (cascade: stylesheets folded in source order,
+    //    inline `style` attributes applied last, per-node).
+    crate::column_css::build_column_style_table(doc, &rules)
+}
+
+// TODO(phase-b): unify with walk_for_inline_styles — both are "find every
+// top-level <style>, concatenate children text, stop recursing past the
+// <style>". A shared `fn visit_style_blocks<F>(doc, F)` closure-based visitor
+// would collapse them. Kept duplicated for now to avoid risky refactoring
+// during v7a Phase A.
+fn walk_for_column_styles(doc: &HtmlDocument, node_id: usize, out: &mut String, depth: usize) {
+    if depth >= MAX_DOM_DEPTH {
+        return;
+    }
+    let Some(node) = doc.get_node(node_id) else {
+        return;
+    };
+    if let Some(el) = node.element_data()
+        && el.name.local.as_ref() == "style"
+    {
+        // Honour `<style media="...">`: skip sheets whose media query
+        // excludes the PDF render target. Phase A uses a simple token scan
+        // that accepts the attribute when absent, empty, or contains `all`
+        // / `print`. `screen` / `speech` / anything else means "don't fold
+        // these rules into the column side-table". Full media-query
+        // evaluation (size ranges, logical operators, etc.) is deferred —
+        // the common author intent of `media="screen"` vs `media="print"`
+        // is what we need to get right here.
+        if let Some(media) = el.attr(blitz_dom::LocalName::from("media")) {
+            let lower = media.to_ascii_lowercase();
+            let applies = lower.split(',').any(|tok| {
+                let t = tok.trim();
+                t.is_empty() || t == "all" || t.contains("print")
+            });
+            if !applies {
+                return;
+            }
+        }
+        for &child_id in &node.children {
+            if let Some(child) = doc.get_node(child_id)
+                && let blitz_dom::node::NodeData::Text(t) = &child.data
+            {
+                out.push_str(&t.content);
+                // Separate adjacent <style> blocks so the last declaration
+                // of one cannot leak into the first selector of the next.
+                out.push('\n');
+            }
+        }
+        return;
+    }
+    for &child_id in &node.children {
+        walk_for_column_styles(doc, child_id, out, depth + 1);
+    }
+}
+
 use crate::MAX_DOM_DEPTH;
 
 /// Walk the DOM tree to find the first element with the given tag name.
@@ -2475,6 +2555,95 @@ mod tests {
         let p = find_element_by_local_name(&doc, "p").expect("p");
         assert!(has_column_span_all(doc.get_node(h1).unwrap()));
         assert!(!has_column_span_all(doc.get_node(p).unwrap()));
+    }
+
+    // ── extract_column_style_table (fulgur-v7a Task 2) ─────────────
+
+    #[test]
+    fn extract_column_style_table_picks_up_inline_and_stylesheet() {
+        let html = r#"<html><head><style>
+            .mc { column-fill: auto; column-rule: 1pt solid blue; }
+        </style></head><body>
+            <div class="mc" id="a"></div>
+            <div class="mc" id="b" style="column-rule: 2pt dashed red"></div>
+        </body></html>"#;
+        let mut doc = parse(html, 400.0, &[]);
+        resolve(&mut doc);
+        use std::ops::Deref;
+        let a = find_element_by_attr_id(doc.deref(), "a");
+        let b = find_element_by_attr_id(doc.deref(), "b");
+
+        let table = extract_column_style_table(&doc);
+
+        // `a` picks up both declarations from the stylesheet.
+        let a_props = table.get(&a).expect("a in table");
+        assert_eq!(a_props.fill, Some(crate::column_css::ColumnFill::Auto));
+        let a_rule = a_props.rule.expect("a rule");
+        assert_eq!(a_rule.color, [0, 0, 255, 255]); // blue
+        assert_eq!(a_rule.style, crate::column_css::ColumnRuleStyle::Solid);
+
+        // `b` inherits `column-fill: auto` from the stylesheet, but its
+        // inline `column-rule` beats the stylesheet's rule declaration.
+        let b_props = table.get(&b).expect("b in table");
+        let b_rule = b_props.rule.expect("b rule");
+        assert!((b_rule.width - 2.0).abs() < 1e-3);
+        assert_eq!(b_rule.style, crate::column_css::ColumnRuleStyle::Dashed);
+        assert_eq!(b_rule.color, [255, 0, 0, 255]); // inline red beats stylesheet blue
+        // Inline `column-rule` overrides only the rule field — `column-fill`
+        // is still populated from the stylesheet.
+        assert_eq!(b_props.fill, Some(crate::column_css::ColumnFill::Auto));
+    }
+
+    #[test]
+    fn extract_column_style_table_respects_media_attribute() {
+        // `<style media="screen">` must not feed the column side-table —
+        // the PDF render path is the `print` medium. `<style media="print">`
+        // and `<style media="all">` (or absent) must apply.
+        let html = r#"<html><head>
+            <style media="screen">
+                .screen-only { column-rule: 1pt solid red; }
+            </style>
+            <style media="print">
+                .print-only { column-rule: 2pt solid blue; }
+            </style>
+            <style media="all">
+                .always { column-fill: auto; }
+            </style>
+            <style>
+                .no-media { column-rule: 3pt solid green; }
+            </style>
+        </head><body>
+            <div class="screen-only" id="s"></div>
+            <div class="print-only" id="p"></div>
+            <div class="always" id="a"></div>
+            <div class="no-media" id="n"></div>
+        </body></html>"#;
+        let mut doc = parse(html, 400.0, &[]);
+        resolve(&mut doc);
+        use std::ops::Deref;
+        let s = find_element_by_attr_id(doc.deref(), "s");
+        let p = find_element_by_attr_id(doc.deref(), "p");
+        let a = find_element_by_attr_id(doc.deref(), "a");
+        let n = find_element_by_attr_id(doc.deref(), "n");
+
+        let table = extract_column_style_table(&doc);
+
+        // `screen` media: rule must NOT appear in the table.
+        assert!(
+            !table.contains_key(&s),
+            "media=screen rule leaked into side-table"
+        );
+        // `print` media: rule applies.
+        let p_rule = table.get(&p).and_then(|props| props.rule).expect("p rule");
+        assert_eq!(p_rule.color, [0, 0, 255, 255]);
+        // `all` media: fill applies.
+        assert_eq!(
+            table.get(&a).and_then(|props| props.fill),
+            Some(crate::column_css::ColumnFill::Auto)
+        );
+        // No media attribute: rule applies (default = all).
+        let n_rule = table.get(&n).and_then(|props| props.rule).expect("n rule");
+        assert_eq!(n_rule.color, [0, 128, 0, 255]);
     }
 }
 

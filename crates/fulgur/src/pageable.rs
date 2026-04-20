@@ -2532,6 +2532,297 @@ impl Pageable for RunningElementWrapperPageable {
     }
 }
 
+// ─── MulticolRulePageable ─────────────────────────────────
+
+/// Wraps a multicol container child with the resolved `column-rule` spec and
+/// the per-`ColumnGroup` geometry recorded by the Taffy multicol hook, so
+/// `draw()` can paint vertical rules between adjacent non-empty columns
+/// without re-running layout.
+///
+/// All `Pageable` methods delegate to `self.child` **except** `draw()` and
+/// `split_boxed()`:
+///
+/// - `draw()` calls `child.draw()` first (columns paint their own
+///   contents), then walks `self.groups` and strokes a vertical line in the
+///   centre of each gutter whose adjacent columns are both non-empty. The
+///   rule's vertical extent is clamped to the **shorter** of the two
+///   adjacent columns' filled heights — this matches the spec intent that
+///   a rule never hangs past the end of a shorter column.
+/// - `split_boxed()` forwards to the child and redistributes `self.groups`
+///   across the two halves based on the first half's consumed height.
+///
+/// # Geometry partitioning on split
+///
+/// After the child splits, the wrapper re-wraps the first fragment to
+/// obtain a `cutoff` height (the amount of the container's content box
+/// consumed on the first page). Groups are then placed as follows:
+///
+/// - Groups with `y_offset + max(col_heights) <= cutoff` stay on the first
+///   half unchanged.
+/// - Groups with `y_offset >= cutoff` move to the second half with
+///   `y_offset -= cutoff`.
+/// - Groups straddling the boundary are split across halves: the first
+///   half keeps `col_heights` clamped to `cutoff - y_offset`, and the
+///   continuation half carries `col_heights - remaining` at `y_offset =
+///   0`. Cross-page pagination of a `ColumnGroup`'s *content* is still
+///   approximate (fulgur-6q5 / fulgur-wfd), but the rule geometry paints
+///   on both pages.
+///
+/// Task 5 wires this wrapper into `convert.rs` so multicol containers carry
+/// their parsed rule spec + per-`ColumnGroup` geometry into the draw pass.
+#[derive(Clone)]
+pub struct MulticolRulePageable {
+    pub child: Box<dyn Pageable>,
+    pub rule: crate::column_css::ColumnRuleSpec,
+    pub groups: Vec<crate::multicol_layout::ColumnGroupGeometry>,
+}
+
+impl MulticolRulePageable {
+    pub fn new(
+        child: Box<dyn Pageable>,
+        rule: crate::column_css::ColumnRuleSpec,
+        groups: Vec<crate::multicol_layout::ColumnGroupGeometry>,
+    ) -> Self {
+        Self {
+            child,
+            rule,
+            groups,
+        }
+    }
+
+    /// Build the krilla stroke for the configured rule spec, including the
+    /// dash pattern prescribed for `Dashed` / `Dotted`. Returns `None` when
+    /// `draw()` must skip rule painting entirely (style `None` or
+    /// non-positive width).
+    fn build_stroke(&self) -> Option<krilla::paint::Stroke> {
+        use crate::column_css::ColumnRuleStyle;
+        if self.rule.width <= 0.0 || self.rule.style == ColumnRuleStyle::None {
+            return None;
+        }
+        let opacity = alpha_to_opacity(self.rule.color[3]);
+        let base = colored_stroke(&self.rule.color, self.rule.width, opacity);
+        let w = self.rule.width;
+        let stroke = match self.rule.style {
+            ColumnRuleStyle::None => return None,
+            ColumnRuleStyle::Solid => base,
+            // `[width * 3.0, width * 2.0]` per fulgur-v7a Task 4 spec
+            // (intentionally distinct from `border-style: dashed`, which
+            // uses `[width*3, width*3]`).
+            ColumnRuleStyle::Dashed => krilla::paint::Stroke {
+                dash: Some(krilla::paint::StrokeDash {
+                    array: vec![w * 3.0, w * 2.0],
+                    offset: 0.0,
+                }),
+                ..base
+            },
+            // `line_cap: Round` + `[0, w*2]` — zero-length dashes
+            // rendered as round caps become actual dots, matching the
+            // dotted-border treatment used elsewhere in fulgur. Without
+            // the round cap this would paint as square dash segments.
+            ColumnRuleStyle::Dotted => krilla::paint::Stroke {
+                line_cap: krilla::paint::LineCap::Round,
+                dash: Some(krilla::paint::StrokeDash {
+                    array: vec![0.0, w * 2.0],
+                    offset: 0.0,
+                }),
+                ..base
+            },
+        };
+        Some(stroke)
+    }
+}
+
+impl Pageable for MulticolRulePageable {
+    fn wrap(&mut self, avail_width: Pt, avail_height: Pt) -> Size {
+        self.child.wrap(avail_width, avail_height)
+    }
+
+    fn split(
+        &self,
+        avail_width: Pt,
+        avail_height: Pt,
+    ) -> Option<(Box<dyn Pageable>, Box<dyn Pageable>)> {
+        let (first, second) = self.child.split(avail_width, avail_height)?;
+        // Re-wrap the first fragment so `height()` returns a meaningful
+        // cutoff — fresh `BlockPageable` fragments have no cached size.
+        let mut first = first;
+        first.wrap(avail_width, avail_height);
+        let cutoff = first.height();
+        let (first_groups, second_groups) = partition_groups_at_cutoff(&self.groups, cutoff);
+        Some((
+            Box::new(MulticolRulePageable {
+                child: first,
+                rule: self.rule,
+                groups: first_groups,
+            }),
+            Box::new(MulticolRulePageable {
+                child: second,
+                rule: self.rule,
+                groups: second_groups,
+            }),
+        ))
+    }
+
+    fn split_boxed(self: Box<Self>, avail_width: Pt, avail_height: Pt) -> SplitResult {
+        let me = *self;
+        let MulticolRulePageable {
+            child,
+            rule,
+            groups,
+        } = me;
+        match child.split_boxed(avail_width, avail_height) {
+            Ok((mut first, second)) => {
+                first.wrap(avail_width, avail_height);
+                let cutoff = first.height();
+                let (first_groups, second_groups) = partition_groups_at_cutoff(&groups, cutoff);
+                Ok((
+                    Box::new(MulticolRulePageable {
+                        child: first,
+                        rule,
+                        groups: first_groups,
+                    }),
+                    Box::new(MulticolRulePageable {
+                        child: second,
+                        rule,
+                        groups: second_groups,
+                    }),
+                ))
+            }
+            Err(unsplit) => Err(Box::new(MulticolRulePageable {
+                child: unsplit,
+                rule,
+                groups,
+            })),
+        }
+    }
+
+    fn draw(&self, canvas: &mut Canvas<'_, '_>, x: Pt, y: Pt, avail_width: Pt, avail_height: Pt) {
+        // Columns paint their own contents first.
+        self.child.draw(canvas, x, y, avail_width, avail_height);
+
+        let Some(stroke) = self.build_stroke() else {
+            return;
+        };
+
+        for group in &self.groups {
+            if group.n < 2 || group.col_heights.len() != group.n as usize {
+                continue;
+            }
+            let y_top = y + group.y_offset;
+            for i in 0..(group.n as usize - 1) {
+                let h_left = group.col_heights[i];
+                let h_right = group.col_heights[i + 1];
+                if h_left <= 0.0 || h_right <= 0.0 {
+                    continue;
+                }
+                // Gap centre between column i and column i+1. `x_offset`
+                // shifts from the container's border-box left into its
+                // content-box left (padding-left + border-left), matching
+                // the frame `y_top` already works in.
+                //   rule_x = x + x_offset + (i+1) * col_w + i * gap + gap/2
+                let rule_x = x
+                    + group.x_offset
+                    + (i as f32 + 1.0) * group.col_w
+                    + i as f32 * group.gap
+                    + group.gap / 2.0;
+                let y_bot = y_top + h_left.min(h_right);
+                stroke_line(canvas, rule_x, y_top, rule_x, y_bot, stroke.clone());
+            }
+        }
+        canvas.surface.set_stroke(None);
+    }
+
+    fn pagination(&self) -> Pagination {
+        self.child.pagination()
+    }
+
+    fn clone_box(&self) -> Box<dyn Pageable> {
+        Box::new(self.clone())
+    }
+
+    fn height(&self) -> Pt {
+        self.child.height()
+    }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+
+    fn collect_ids(
+        &self,
+        x: Pt,
+        y: Pt,
+        avail_width: Pt,
+        avail_height: Pt,
+        registry: &mut DestinationRegistry,
+    ) {
+        self.child
+            .collect_ids(x, y, avail_width, avail_height, registry);
+    }
+}
+
+/// Partition a `Vec<ColumnGroupGeometry>` across a page boundary at
+/// `cutoff` points from the container's content-box top.
+///
+/// See [`MulticolRulePageable`]'s doc for the policy; this helper is
+/// separated so it can be unit-tested without constructing a full
+/// Pageable tree.
+fn partition_groups_at_cutoff(
+    groups: &[crate::multicol_layout::ColumnGroupGeometry],
+    cutoff: f32,
+) -> (
+    Vec<crate::multicol_layout::ColumnGroupGeometry>,
+    Vec<crate::multicol_layout::ColumnGroupGeometry>,
+) {
+    let mut first = Vec::new();
+    let mut second = Vec::new();
+    // Non-positive `cutoff` means the child did not commit any content to
+    // the first fragment; push every group to the second half unchanged.
+    if cutoff <= 0.0 {
+        return (Vec::new(), groups.to_vec());
+    }
+    for g in groups {
+        let max_h = g
+            .col_heights
+            .iter()
+            .copied()
+            .fold(0.0_f32, |acc, h| acc.max(h));
+        let group_bottom = g.y_offset + max_h;
+        if group_bottom <= cutoff {
+            first.push(g.clone());
+        } else if g.y_offset >= cutoff {
+            let mut shifted = g.clone();
+            shifted.y_offset -= cutoff;
+            second.push(shifted);
+        } else {
+            // Straddles the page break. Split the geometry so the rule
+            // paints on BOTH fragments: the first half clamps each column
+            // to what fits above the cutoff, and the second half carries
+            // the remainder at y_offset=0 (page-local). Cross-page column
+            // *content* pagination is still approximate (fulgur-6q5 /
+            // fulgur-wfd); this fix only closes the rule-disappears-on-
+            // page-2 bug flagged in PR #133 review.
+            let remaining = (cutoff - g.y_offset).max(0.0);
+            let mut first_half = g.clone();
+            let mut second_half = g.clone();
+
+            for (first_h, original_h) in first_half.col_heights.iter_mut().zip(&g.col_heights) {
+                *first_h = original_h.min(remaining);
+            }
+            second_half.y_offset = 0.0;
+            for (second_h, original_h) in second_half.col_heights.iter_mut().zip(&g.col_heights) {
+                *second_h = (original_h - remaining).max(0.0);
+            }
+
+            first.push(first_half);
+            if second_half.col_heights.iter().any(|&h| h > 0.0) {
+                second.push(second_half);
+            }
+        }
+    }
+    (first, second)
+}
+
 // ─── ListItemPageable ───────────────────────────────────
 
 /// Clamp an intrinsic image size to a line-height limit while preserving
@@ -3361,6 +3652,8 @@ mod tests {
             string_set_by_node: HashMap::new(),
             counter_ops_by_node: HashMap::new(),
             bookmark_by_node: HashMap::new(),
+            column_styles: crate::column_css::ColumnStyleTable::new(),
+            multicol_geometry: crate::multicol_layout::MulticolGeometryTable::new(),
         };
         let pageable = convert::dom_to_pageable(&doc, &mut ctx);
         let pages = crate::paginate::paginate(pageable, 400.0, 600.0);
@@ -3410,6 +3703,8 @@ mod tests {
             string_set_by_node: HashMap::new(),
             counter_ops_by_node: HashMap::new(),
             bookmark_by_node: HashMap::new(),
+            column_styles: crate::column_css::ColumnStyleTable::new(),
+            multicol_geometry: crate::multicol_layout::MulticolGeometryTable::new(),
         };
         let pageable = convert::dom_to_pageable(&doc, &mut ctx);
         let pages = crate::paginate::paginate(pageable, 400.0, 600.0);
@@ -3453,6 +3748,8 @@ mod tests {
             string_set_by_node: HashMap::new(),
             counter_ops_by_node: HashMap::new(),
             bookmark_by_node: HashMap::new(),
+            column_styles: crate::column_css::ColumnStyleTable::new(),
+            multicol_geometry: crate::multicol_layout::MulticolGeometryTable::new(),
         };
         let pageable = convert::dom_to_pageable(&doc, &mut ctx);
         let pages = crate::paginate::paginate(pageable, 400.0, 600.0);
@@ -4310,5 +4607,206 @@ mod dest_registry_transform_tests {
         let (_, x, y) = reg.get("dup").unwrap();
         assert!((x - 0.0).abs() < 1e-5, "first write should win");
         assert!((y - 10.0).abs() < 1e-5, "first write should win");
+    }
+}
+
+#[cfg(test)]
+mod multicol_rule_tests {
+    use super::*;
+    use crate::column_css::{ColumnRuleSpec, ColumnRuleStyle};
+    use crate::multicol_layout::ColumnGroupGeometry;
+
+    fn make_spacer(h: Pt) -> Box<dyn Pageable> {
+        let mut s = SpacerPageable::new(h);
+        s.wrap(100.0, 1000.0);
+        Box::new(s)
+    }
+
+    fn make_rule_spec(style: ColumnRuleStyle) -> ColumnRuleSpec {
+        ColumnRuleSpec {
+            width: 1.0,
+            style,
+            color: [0, 0, 0, 255],
+        }
+    }
+
+    fn make_group(y_offset: f32, col_heights: Vec<f32>) -> ColumnGroupGeometry {
+        let n = col_heights.len() as u32;
+        ColumnGroupGeometry {
+            x_offset: 0.0,
+            y_offset,
+            col_w: 80.0,
+            gap: 20.0,
+            n,
+            col_heights,
+        }
+    }
+
+    #[test]
+    fn multicol_rule_wrapper_delegates_pagination_methods() {
+        // wrap() and height() must pass through to the child unchanged.
+        let mut block = BlockPageable::new(vec![make_spacer(100.0), make_spacer(100.0)]);
+        let child_size = block.wrap(200.0, 1000.0);
+        let expected_h = child_size.height;
+        let mut wrapped = MulticolRulePageable::new(
+            Box::new(block),
+            make_rule_spec(ColumnRuleStyle::Solid),
+            vec![make_group(0.0, vec![100.0, 80.0])],
+        );
+        let w_size = wrapped.wrap(200.0, 1000.0);
+        assert!((w_size.height - expected_h).abs() < 1e-3);
+        assert!((wrapped.height() - expected_h).abs() < 1e-3);
+        // pagination() defaults through.
+        let pag = wrapped.pagination();
+        assert_eq!(pag.break_inside, BreakInside::Auto);
+    }
+
+    #[test]
+    fn multicol_rule_wrapper_splits_groups_across_pages() {
+        // Three spacers of 100pt → total 300pt.  Splitting at 250pt leaves
+        // spacer[0..=1] on the first fragment (200pt) and spacer[2] on the
+        // second (100pt), so the cutoff is 200pt.  Group A at y=0 fits on
+        // the first half; group B at y=400 moves to the second half with
+        // y_offset = 400 - 200 = 200.
+        let mut block = BlockPageable::new(vec![
+            make_spacer(100.0),
+            make_spacer(100.0),
+            make_spacer(100.0),
+        ]);
+        block.wrap(200.0, 1000.0);
+        let groups = vec![
+            make_group(0.0, vec![50.0, 50.0]),
+            make_group(400.0, vec![30.0, 30.0]),
+        ];
+        let wrapped = MulticolRulePageable::new(
+            Box::new(block),
+            make_rule_spec(ColumnRuleStyle::Solid),
+            groups,
+        );
+        let (first, second) = wrapped.split(200.0, 250.0).expect("split should succeed");
+        let first = first
+            .as_any()
+            .downcast_ref::<MulticolRulePageable>()
+            .expect("first must remain wrapped");
+        let second = second
+            .as_any()
+            .downcast_ref::<MulticolRulePageable>()
+            .expect("second must remain wrapped");
+        assert_eq!(first.groups.len(), 1);
+        assert!((first.groups[0].y_offset - 0.0).abs() < 1e-3);
+        assert_eq!(second.groups.len(), 1);
+        assert!(
+            (second.groups[0].y_offset - 200.0).abs() < 1e-3,
+            "second group y_offset = 400 - 200 (cutoff) = 200, got {}",
+            second.groups[0].y_offset
+        );
+    }
+
+    #[test]
+    fn multicol_rule_wrapper_split_boxed_reconstructs_wrappers() {
+        // Mirrors the `split` test but via split_boxed, so we pin the
+        // Box<Self>-consuming path that paginate.rs actually drives.
+        let mut block = BlockPageable::new(vec![
+            make_spacer(100.0),
+            make_spacer(100.0),
+            make_spacer(100.0),
+        ]);
+        block.wrap(200.0, 1000.0);
+        let groups = vec![
+            make_group(0.0, vec![50.0, 50.0]),
+            make_group(400.0, vec![30.0, 30.0]),
+        ];
+        let wrapped: Box<dyn Pageable> = Box::new(MulticolRulePageable::new(
+            Box::new(block),
+            make_rule_spec(ColumnRuleStyle::Dashed),
+            groups,
+        ));
+        let (first, second) = match wrapped.split_boxed(200.0, 250.0) {
+            Ok(pair) => pair,
+            Err(_) => panic!("split_boxed must succeed"),
+        };
+        let first_w = first
+            .as_any()
+            .downcast_ref::<MulticolRulePageable>()
+            .expect("first boxed → wrapper");
+        let second_w = second
+            .as_any()
+            .downcast_ref::<MulticolRulePageable>()
+            .expect("second boxed → wrapper");
+        // Rule spec is preserved on both halves.
+        assert_eq!(first_w.rule.style, ColumnRuleStyle::Dashed);
+        assert_eq!(second_w.rule.style, ColumnRuleStyle::Dashed);
+        assert_eq!(first_w.groups.len(), 1);
+        assert_eq!(second_w.groups.len(), 1);
+    }
+
+    #[test]
+    fn multicol_rule_wrapper_skips_rule_when_style_none() {
+        // With style=None, build_stroke() must return None so draw() is a
+        // pass-through. We can't easily count stroke calls without a mock
+        // Canvas; the contract is exercised indirectly via build_stroke.
+        let block = BlockPageable::new(vec![make_spacer(100.0)]);
+        let wrapped = MulticolRulePageable::new(
+            Box::new(block),
+            make_rule_spec(ColumnRuleStyle::None),
+            vec![make_group(0.0, vec![50.0, 50.0])],
+        );
+        assert!(wrapped.build_stroke().is_none());
+    }
+
+    #[test]
+    fn multicol_rule_wrapper_skips_rule_when_width_zero() {
+        // `width <= 0.0` is the other early-exit branch.
+        let block = BlockPageable::new(vec![make_spacer(100.0)]);
+        let mut spec = make_rule_spec(ColumnRuleStyle::Solid);
+        spec.width = 0.0;
+        let wrapped = MulticolRulePageable::new(
+            Box::new(block),
+            spec,
+            vec![make_group(0.0, vec![50.0, 50.0])],
+        );
+        assert!(wrapped.build_stroke().is_none());
+    }
+
+    #[test]
+    fn partition_groups_straddling_cutoff_splits_between_halves() {
+        // Group spans y=50..250; cutoff at 200. Remaining above cutoff is
+        // 200 - 50 = 150pt, so:
+        //   first  : col_heights = [min(200,150), min(180,150)] = [150, 150]
+        //   second : col_heights = [max(200-150,0), max(180-150,0)] = [50, 30]
+        //   second : y_offset    = 0 (continuation page starts at top)
+        let groups = vec![make_group(50.0, vec![200.0, 180.0])];
+        let (first, second) = partition_groups_at_cutoff(&groups, 200.0);
+        assert_eq!(first.len(), 1);
+        assert_eq!(second.len(), 1);
+        assert!((first[0].col_heights[0] - 150.0).abs() < 1e-3);
+        assert!((first[0].col_heights[1] - 150.0).abs() < 1e-3);
+        assert!((second[0].y_offset - 0.0).abs() < 1e-3);
+        assert!((second[0].col_heights[0] - 50.0).abs() < 1e-3);
+        assert!((second[0].col_heights[1] - 30.0).abs() < 1e-3);
+    }
+
+    #[test]
+    fn partition_groups_straddling_with_zero_remainder_drops_second_half() {
+        // Group spans y=50..200; cutoff at 200. Remaining above cutoff is
+        // 150, which exceeds every col_height, so nothing spills to page 2.
+        let groups = vec![make_group(50.0, vec![100.0, 80.0])];
+        let (first, second) = partition_groups_at_cutoff(&groups, 200.0);
+        assert_eq!(first.len(), 1);
+        assert!(
+            second.is_empty(),
+            "no overflow expected when every column fits before cutoff"
+        );
+        assert!((first[0].col_heights[0] - 100.0).abs() < 1e-3);
+        assert!((first[0].col_heights[1] - 80.0).abs() < 1e-3);
+    }
+
+    #[test]
+    fn partition_groups_negative_cutoff_pushes_everything_to_second() {
+        let groups = vec![make_group(0.0, vec![100.0, 100.0])];
+        let (first, second) = partition_groups_at_cutoff(&groups, 0.0);
+        assert!(first.is_empty());
+        assert_eq!(second.len(), 1);
+        assert!((second[0].y_offset - 0.0).abs() < 1e-3);
     }
 }
