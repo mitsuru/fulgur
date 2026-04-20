@@ -16,8 +16,9 @@
 
 use blitz_dom::BaseDocument;
 use taffy::{
-    AvailableSpace, CacheTree, CollapsibleMarginSet, LayoutPartialTree, Line, NodeId, Point,
-    RequestedAxis, RoundTree, RunMode, Size, SizingMode, TraversePartialTree, TraverseTree,
+    AvailableSpace, CacheTree, CollapsibleMarginSet, CoreStyle, LayoutPartialTree, Line, NodeId,
+    Point, RequestedAxis, ResolveOrZero, RoundTree, RunMode, Size, SizingMode, TraversePartialTree,
+    TraverseTree,
 };
 
 /// One top-level slice of a multicol container's flattened child list.
@@ -347,11 +348,26 @@ pub fn compute_multicol_layout(
         })
         .unwrap_or(0.0);
 
-    let (pad, bdr) = tree
-        .doc
-        .get_node(usize::from(node_id))
-        .map(|n| (n.unrounded_layout.padding, n.unrounded_layout.border))
-        .unwrap_or((taffy::Rect::zero(), taffy::Rect::zero()));
+    // Resolve padding + border from the node's current style (not from
+    // `unrounded_layout`, which reflects whatever width the *previous*
+    // layout pass chose). This matters when the same multicol runs more
+    // than once — e.g. a nested multicol whose container width differs
+    // between its outer and inner Taffy passes — so that `%` / `calc()`
+    // insets re-resolve against the basis in use right now.
+    //
+    // Basis is `inputs.parent_size.width`, matching Taffy's own
+    // `compute_block_layout` (CSS resolves padding/border percentages
+    // against the containing block's content width, not the element's
+    // own width).
+    let (pad, bdr) = {
+        let style = tree.get_core_container_style(node_id);
+        let raw_pad = style.padding();
+        let raw_bdr = style.border();
+        let basis = inputs.parent_size.width;
+        let pad = raw_pad.resolve_or_zero(basis, |val, b| tree.resolve_calc_value(val, b));
+        let bdr = raw_bdr.resolve_or_zero(basis, |val, b| tree.resolve_calc_value(val, b));
+        (pad, bdr)
+    };
     let inset_left = pad.left + bdr.left;
     let inset_right = pad.right + bdr.right;
     let inset_top = pad.top + bdr.top;
@@ -409,8 +425,14 @@ pub fn compute_multicol_layout(
     };
 
     // 4. column-fill: balance (computed inside layout_column_group).
+    //    Subtract the vertical insets from the definite height so the
+    //    balance budget matches the content area — the multicol's own
+    //    padding + border are added back to `cursor_y` below when we
+    //    return the container's outer (border-box) height. Without this
+    //    subtraction, a definite-height multicol with non-zero padding
+    //    would double-count its vertical insets and grow too tall.
     let avail_h = match inputs.available_space.height {
-        AvailableSpace::Definite(h) => h,
+        AvailableSpace::Definite(h) => (h - inset_top - inset_bottom).max(0.0),
         _ => f32::INFINITY,
     };
 
@@ -469,25 +491,19 @@ pub fn compute_multicol_layout(
         location.y += inset_top;
     }
 
-    // 6. Write child positions back into Taffy's storage. The measured
-    //    `size.width` is preserved so intrinsically narrower children
-    //    (images, shrink-to-fit blocks, inline-level content) keep their
-    //    real width rather than being stretched to the track width.
-    //    Preserve each child's existing padding/border/margin/scrollbar
-    //    (written by the nested `compute_child_layout` call above) — only
-    //    location and size move.
+    // 6. Write child positions back into Taffy's storage. Only location
+    //    and size change between the nested `compute_child_layout` call
+    //    and the multicol-assigned slot — padding, border, margin,
+    //    scrollbar, content_size, and order all stay at the values the
+    //    child's own layout pass already decided. Copy the existing
+    //    Layout wholesale and overwrite just the two fields that move,
+    //    so we don't accidentally collapse the child's content box into
+    //    its border box (which happens if `content_size` is set to the
+    //    outer `size`).
     for (child_id, location, size) in &placements {
-        let existing = tree.doc.get_unrounded_layout(*child_id);
-        let layout = taffy::Layout {
-            order: existing.order,
-            location: *location,
-            size: *size,
-            content_size: *size,
-            scrollbar_size: existing.scrollbar_size,
-            border: existing.border,
-            padding: existing.padding,
-            margin: existing.margin,
-        };
+        let mut layout = tree.doc.get_unrounded_layout(*child_id);
+        layout.location = *location;
+        layout.size = *size;
         tree.set_unrounded_layout(*child_id, &layout);
     }
 
@@ -1637,6 +1653,43 @@ mod tests {
             "SpanAll width {} should match content width {}",
             title.size.width,
             mc_w - 20.0
+        );
+    }
+
+    #[test]
+    fn multicol_percentage_padding_resolves_against_parent_width() {
+        // Regression for coderabbit review on PR #129: the hook used to
+        // read `unrounded_layout.padding` (resolved against whatever width
+        // the previous pass happened to assign). For a multicol using
+        // `%` / `calc()` padding, that value is stale whenever a later
+        // pass changes the container's width — notably nested multicol
+        // where the inner container runs at `col_w` of the outer, not the
+        // outer's full width. Re-resolve from style against the current
+        // `parent_size.width` basis.
+        //
+        // Zero the body margin so the containing block basis is a clean
+        // 400px, then `.mc { padding: 10% }` = 40px on every side.
+        let html = r#"<!doctype html><html><body style="margin:0">
+            <div id="mc" style="column-count: 2; column-gap: 0; padding: 10%;">
+              <p id="a">alpha</p>
+              <p id="b">beta</p>
+            </div>
+        </body></html>"#;
+        let mut doc = crate::blitz_adapter::parse(html, 400.0, &[]);
+        crate::blitz_adapter::resolve(&mut doc);
+        let mut tree = FulgurLayoutTree::new(&mut doc);
+        tree.layout_multicol_subtrees();
+
+        let a = layout_of_id(&doc, "a");
+        assert!(
+            (a.location.x - 40.0).abs() < 1.0,
+            "first-column child.x expected ≈ 40 (10% of 400px containing block), got {}",
+            a.location.x
+        );
+        assert!(
+            (a.location.y - 40.0).abs() < 1.0,
+            "first child.y expected ≈ 40 (10% of 400px), got {}",
+            a.location.y
         );
     }
 
