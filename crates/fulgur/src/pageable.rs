@@ -2562,9 +2562,8 @@ impl Pageable for RunningElementWrapperPageable {
 ///   known gap (fulgur-6q5 / fulgur-wfd) and the rule on the second half
 ///   of a straddling group is currently dropped.
 ///
-/// Task 5 will actually construct this wrapper in `convert.rs`; until then
-/// the `new` constructor and the associated plumbing are only reached from
-/// unit tests, hence the per-item `#[allow(dead_code)]`.
+/// Task 5 wires this wrapper into `convert.rs` so multicol containers carry
+/// their parsed rule spec + per-`ColumnGroup` geometry into the draw pass.
 #[derive(Clone)]
 pub struct MulticolRulePageable {
     pub child: Box<dyn Pageable>,
@@ -2573,7 +2572,6 @@ pub struct MulticolRulePageable {
 }
 
 impl MulticolRulePageable {
-    #[allow(dead_code)] // Task 5 wires this from convert.rs.
     pub fn new(
         child: Box<dyn Pageable>,
         rule: crate::column_css::ColumnRuleSpec,

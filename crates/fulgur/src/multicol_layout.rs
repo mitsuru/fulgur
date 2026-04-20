@@ -153,11 +153,9 @@ pub(crate) fn partition_children_into_segments(
 /// convert pass.
 pub struct FulgurLayoutTree<'a> {
     pub(crate) doc: &'a mut BaseDocument,
-    // Task 5 will read this field from `compute_multicol_layout` /
-    // `layout_column_group` to branch on `ColumnFill::Auto`; until that lands,
-    // the field is populated but never consulted, so silence the warning
-    // locally rather than leaving `#![allow(dead_code)]` at module scope.
-    #[allow(dead_code)]
+    // Read by `compute_multicol_layout` to resolve `column-fill` before
+    // delegating to `layout_column_group`. Populated by the engine via
+    // `extract_column_style_table` before the multicol pass runs.
     pub(crate) column_styles: &'a crate::column_css::ColumnStyleTable,
     /// Per-container geometry populated by `compute_multicol_layout` as it
     /// balances each `ColumnGroup` segment. Owned (not borrowed) because the
@@ -547,6 +545,18 @@ pub fn compute_multicol_layout(
         _ => f32::INFINITY,
     };
 
+    // Resolve the container's `column-fill` once per layout. The Phase A
+    // side-table (see `column_css::ColumnStyleTable`) holds the parsed
+    // value; absent entries default to `Balance` per the CSS initial
+    // value. `ColumnFill::Auto` switches the per-group budget from the
+    // balance search to a greedy sequential fill (see
+    // `layout_column_group`).
+    let fill = tree
+        .column_styles
+        .get(&usize::from(node_id))
+        .and_then(|p| p.fill)
+        .unwrap_or_default();
+
     // 5. Walk the segments produced by `partition_children_into_segments`
     //    and dispatch each to the appropriate layout strategy:
     //
@@ -574,6 +584,7 @@ pub fn compute_multicol_layout(
                     gap,
                     n,
                     avail_h,
+                    fill,
                     &children,
                     cursor_y,
                     child_inputs,
@@ -684,6 +695,7 @@ fn layout_column_group(
     gap: f32,
     n: u32,
     avail_h: f32,
+    fill: crate::column_css::ColumnFill,
     children: &[NodeId],
     y_offset: f32,
     child_inputs: taffy::tree::LayoutInput,
@@ -695,14 +707,24 @@ fn layout_column_group(
         measured.push((child, output.size));
     }
 
-    // 2. Balance budget
+    // 2. Budget selection — `column-fill: balance` (the default) searches
+    //    for the smallest budget that fits all children in `n` columns,
+    //    so the tallest column's height is minimised. `column-fill: auto`
+    //    (CSS Multi-column Level 1 §6.1) instead greedily fills columns
+    //    top-to-bottom up to `avail_h`, leaving trailing columns empty
+    //    when content fits in fewer than `n`.
     let total_h: f32 = measured.iter().map(|(_, s)| s.height).sum();
-    let budget = if total_h <= 0.0 {
-        0.0
-    } else if total_h >= avail_h * n as f32 {
-        avail_h
-    } else {
-        balance_budget(&measured, n, avail_h, total_h)
+    let budget = match fill {
+        crate::column_css::ColumnFill::Auto => avail_h,
+        crate::column_css::ColumnFill::Balance => {
+            if total_h <= 0.0 {
+                0.0
+            } else if total_h >= avail_h * n as f32 {
+                avail_h
+            } else {
+                balance_budget(&measured, n, avail_h, total_h)
+            }
+        }
     };
 
     // 3. Distribute
@@ -2018,6 +2040,162 @@ mod tests {
         assert!(
             second.is_empty(),
             "second take must be empty — no double-counting"
+        );
+    }
+
+    // ── column-fill: auto (Task 5 Part A) ───────────────────────────
+
+    #[test]
+    fn column_fill_auto_leaves_later_columns_empty_when_content_fits() {
+        // A single short paragraph inside a `column-count: 2; column-fill: auto`
+        // container must land entirely in the first column — the second column
+        // stays empty. Balance mode would split it roughly in half; auto must
+        // not.
+        //
+        // We inject the `column-fill: auto` directive via the Phase A side-
+        // table (not via inline CSS) because stylo 0.8.0 doesn't surface
+        // `column-fill` for the servo engine blitz uses; that's exactly the
+        // reason the side-table exists.
+        let html = r#"<!doctype html><html><body>
+            <div id="mc" style="column-count: 2; column-gap: 0;">
+              <p>alpha alpha alpha alpha</p>
+            </div>
+        </body></html>"#;
+        let mut doc = crate::blitz_adapter::parse(html, 400.0, &[]);
+        crate::blitz_adapter::resolve(&mut doc);
+
+        let mc_id = collect_multicol_node_ids(&doc)[0];
+
+        let mut column_styles = crate::column_css::ColumnStyleTable::new();
+        column_styles.insert(
+            mc_id,
+            crate::column_css::ColumnStyleProps {
+                rule: None,
+                fill: Some(crate::column_css::ColumnFill::Auto),
+            },
+        );
+
+        let geometry_table = run_pass(&mut doc, &column_styles);
+        let mc_geom = geometry_table
+            .get(&mc_id)
+            .expect("multicol container should have a geometry entry");
+        assert_eq!(mc_geom.groups.len(), 1);
+
+        let group = &mc_geom.groups[0];
+        assert_eq!(group.n, 2);
+        assert_eq!(group.col_heights.len(), 2);
+        assert!(
+            group.col_heights[0] > 0.0,
+            "first column must contain the paragraph, got {:?}",
+            group.col_heights
+        );
+        assert_eq!(
+            group.col_heights[1], 0.0,
+            "column-fill: auto must leave the second column empty when content fits in the first, got {:?}",
+            group.col_heights
+        );
+    }
+
+    // ── convert.rs integration: MulticolRulePageable wrapping (Task 5 Part C) ──
+
+    /// Recursively search a `Pageable` tree for the first
+    /// `MulticolRulePageable`, returning a cloned copy when found. We clone
+    /// because the tree is owned by the caller and `Pageable` is object-safe
+    /// but not `Any` by default; we go through the concrete type's `Clone`
+    /// via `as_any` + downcast.
+    fn find_multicol_rule(
+        pageable: &dyn crate::pageable::Pageable,
+    ) -> Option<crate::pageable::MulticolRulePageable> {
+        if let Some(w) = pageable
+            .as_any()
+            .downcast_ref::<crate::pageable::MulticolRulePageable>()
+        {
+            return Some(w.clone());
+        }
+        if let Some(block) = pageable
+            .as_any()
+            .downcast_ref::<crate::pageable::BlockPageable>()
+        {
+            for pc in &block.children {
+                if let Some(hit) = find_multicol_rule(pc.child.as_ref()) {
+                    return Some(hit);
+                }
+            }
+        }
+        None
+    }
+
+    #[test]
+    fn convert_wraps_multicol_container_in_rule_pageable_when_rule_defined() {
+        // End-to-end wiring probe: HTML with `column-rule` must produce a
+        // `MulticolRulePageable` somewhere in the converted tree. Drives the
+        // full render pipeline (Engine → parse → column_css harvest →
+        // multicol hook → convert) minus GCPM — which is irrelevant here —
+        // via `build_pageable_for_testing_no_gcpm`.
+        let html = r#"<!doctype html><html><head><style>
+            .mc {
+                column-count: 2;
+                column-gap: 20pt;
+                column-rule: 2pt solid red;
+            }
+        </style></head><body>
+          <div class="mc">
+            <p>alpha alpha alpha alpha</p>
+            <p>beta beta beta beta</p>
+            <p>gamma gamma gamma gamma</p>
+            <p>delta delta delta delta</p>
+          </div>
+        </body></html>"#;
+
+        let engine = crate::Engine::builder()
+            .page_size(crate::config::PageSize {
+                width: 400.0,
+                height: 600.0,
+            })
+            .build();
+        let root = engine.build_pageable_for_testing_no_gcpm(html);
+
+        let wrapper = find_multicol_rule(root.as_ref()).expect(
+            "convert must wrap the multicol container in MulticolRulePageable when column-rule is defined",
+        );
+        assert_eq!(
+            wrapper.rule.style,
+            crate::column_css::ColumnRuleStyle::Solid
+        );
+        assert!(
+            (wrapper.rule.width - 2.0).abs() < 1e-3,
+            "width should be 2pt, got {}",
+            wrapper.rule.width
+        );
+        assert_eq!(wrapper.rule.color, [255, 0, 0, 255]);
+        assert!(
+            !wrapper.groups.is_empty(),
+            "geometry must have at least one ColumnGroup"
+        );
+    }
+
+    #[test]
+    fn convert_does_not_wrap_multicol_without_rule() {
+        // Multicol container with no `column-rule` must pass through
+        // unchanged — no `MulticolRulePageable` wrapper inserted. Guards
+        // against the wrapper leaking into every multicol render.
+        let html = r#"<!doctype html><html><body>
+          <div style="column-count: 2; column-gap: 0;">
+            <p>alpha alpha alpha alpha</p>
+            <p>beta beta beta beta</p>
+          </div>
+        </body></html>"#;
+
+        let engine = crate::Engine::builder()
+            .page_size(crate::config::PageSize {
+                width: 400.0,
+                height: 600.0,
+            })
+            .build();
+        let root = engine.build_pageable_for_testing_no_gcpm(html);
+        assert!(
+            find_multicol_rule(root.as_ref()).is_none(),
+            "multicol without column-rule must not be wrapped"
         );
     }
 }

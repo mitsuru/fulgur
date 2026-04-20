@@ -168,6 +168,17 @@ fn convert_node(
         return Box::new(SpacerPageable::new(0.0));
     }
     let result = convert_node_inner(doc, node_id, ctx, depth);
+    // Wrap multicol containers in `MulticolRulePageable` when the Phase A
+    // side-table carries a renderable `column-rule` spec and the Taffy
+    // layout hook recorded geometry for this container. Applied here
+    // (once per node) rather than at each of the ~11
+    // `BlockPageable::with_positioned_children` construction sites in
+    // `convert_node_inner`, because this is the single choke point all
+    // paths funnel through before downstream wrappers
+    // (string-set / counter-ops / transform / bookmark). The helper is
+    // a no-op for non-multicol nodes and for multicol nodes without a
+    // visible rule.
+    let result = maybe_wrap_multicol_rule(doc, node_id, ctx, result);
     let result = maybe_prepend_string_set(node_id, result, ctx);
     let result = maybe_prepend_counter_ops(node_id, result, ctx);
     let result = maybe_wrap_transform(doc, node_id, result);
@@ -221,6 +232,47 @@ fn maybe_prepend_counter_ops(
         Some(ops) if !ops.is_empty() => Box::new(CounterOpWrapperPageable::new(ops, child)),
         _ => child,
     }
+}
+
+/// If the given node is a multicol container (`column-count` or
+/// `column-width` non-auto) AND the Phase A `column-*` side-table carries a
+/// visible `column-rule` spec for it AND the Taffy multicol hook recorded
+/// geometry for it, wrap the pageable in a [`MulticolRulePageable`] so the
+/// draw pass paints vertical rules between adjacent non-empty columns.
+///
+/// No-op in all other cases — non-multicol nodes, multicol nodes without
+/// a rule, or rules with `style: none` / non-positive width. The helper is
+/// called once per node at the choke point in [`convert_node`], so adding
+/// it there covers every `BlockPageable::with_positioned_children`
+/// construction path without requiring per-site adjustments.
+fn maybe_wrap_multicol_rule(
+    doc: &blitz_dom::BaseDocument,
+    node_id: usize,
+    ctx: &ConvertContext<'_>,
+    child: Box<dyn Pageable>,
+) -> Box<dyn Pageable> {
+    let Some(node) = doc.get_node(node_id) else {
+        return child;
+    };
+    if !crate::blitz_adapter::is_multicol_container(node) {
+        return child;
+    }
+    let Some(rule) = ctx
+        .column_styles
+        .get(&node_id)
+        .and_then(|props| props.rule)
+        .filter(|r| r.style != crate::column_css::ColumnRuleStyle::None && r.width > 0.0)
+    else {
+        return child;
+    };
+    let Some(geometry) = ctx.multicol_geometry.get(&node_id) else {
+        return child;
+    };
+    Box::new(crate::pageable::MulticolRulePageable::new(
+        child,
+        rule,
+        geometry.groups.clone(),
+    ))
 }
 
 /// If the given node has a non-identity `transform`, wrap the pageable in a
