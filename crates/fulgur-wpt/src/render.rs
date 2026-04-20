@@ -14,26 +14,27 @@ pub struct RenderedTest {
 
 /// Render `test_html_path` and return one RgbaImage per page.
 ///
-/// `work_dir` receives the PDF and per-page PNGs (left behind for debugging).
+/// The path is canonicalized, and its parent directory is used as
+/// fulgur's `base_path` for resolving CSS/asset links. `work_dir`
+/// receives the PDF and per-page PNGs (left behind for debugging).
 /// `dpi` controls pdftocairo's rasterization resolution.
 pub fn render_test(test_html_path: &Path, work_dir: &Path, dpi: u32) -> Result<RenderedTest> {
     use fulgur::engine::Engine;
 
     std::fs::create_dir_all(work_dir)
         .with_context(|| format!("create work dir {}", work_dir.display()))?;
-    let html = std::fs::read_to_string(test_html_path)
-        .with_context(|| format!("read {}", test_html_path.display()))?;
-    let base = test_html_path
+    let abs = test_html_path
+        .canonicalize()
+        .with_context(|| format!("canonicalize {}", test_html_path.display()))?;
+    let html = std::fs::read_to_string(&abs).with_context(|| format!("read {}", abs.display()))?;
+    let base = abs
         .parent()
-        .ok_or_else(|| anyhow::anyhow!("test has no parent dir: {}", test_html_path.display()))?;
+        .ok_or_else(|| anyhow::anyhow!("test has no parent dir: {}", abs.display()))?;
 
     let engine = Engine::builder().base_path(base).build();
-    let pdf_bytes = engine.render_html(&html).map_err(|e| {
-        anyhow::anyhow!(
-            "fulgur render_html failed for {}: {e}",
-            test_html_path.display()
-        )
-    })?;
+    let pdf_bytes = engine
+        .render_html(&html)
+        .map_err(|e| anyhow::anyhow!("fulgur render_html failed for {}: {e}", abs.display()))?;
 
     let pdf_path = work_dir.join("fixture.pdf");
     std::fs::write(&pdf_path, &pdf_bytes)
@@ -41,14 +42,19 @@ pub fn render_test(test_html_path: &Path, work_dir: &Path, dpi: u32) -> Result<R
 
     let prefix = work_dir.join("page");
     // NOTE: intentionally NOT passing -f/-l so pdftocairo emits every page.
-    let status = Command::new("pdftocairo")
+    let out = Command::new("pdftocairo")
         .args(["-png", "-r", &dpi.to_string()])
         .arg(&pdf_path)
         .arg(&prefix)
-        .status()
+        .output()
         .context("spawn pdftocairo")?;
-    if !status.success() {
-        bail!("pdftocairo exited with {status} for {}", pdf_path.display());
+    if !out.status.success() {
+        bail!(
+            "pdftocairo exited with {} for {}\nstderr: {}",
+            out.status,
+            pdf_path.display(),
+            String::from_utf8_lossy(&out.stderr).trim()
+        );
     }
 
     // Enumerate generated files: pdftocairo names them `<prefix>-<n>.png`.
