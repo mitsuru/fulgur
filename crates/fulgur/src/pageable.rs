@@ -1325,7 +1325,8 @@ fn draw_border_line(
     }
 
     match style {
-        BorderStyleValue::Double => {
+        // CSS Backgrounds L3: border-width < 3 の double は solid として描画。
+        BorderStyleValue::Double if width >= 3.0 => {
             let gap = width / 3.0;
             let dx = x2 - x1;
             let dy = y2 - y1;
