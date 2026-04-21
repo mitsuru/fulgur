@@ -60,6 +60,9 @@ jobs:
       - name: Install cargo-nextest
         if: matrix.coverage
         uses: taiki-e/install-action@dfd6a81ff1efc1c100332d760e0c9edfe2ae0a51 # nextest
+      - name: Fetch WPT subset (coverage only, so runner.rs sees real input)
+        if: matrix.coverage
+        run: scripts/wpt/fetch.sh
       - name: Build tests
         if: ${{ !matrix.coverage }}
         run: cargo test --workspace --exclude fulgur-vrt --no-run

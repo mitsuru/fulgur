@@ -69,17 +69,36 @@ jobs:
             echo "no regressions — skipping"
             exit 0
           fi
+
+          # Avoid spamming a fresh issue every night when the same regression
+          # persists: look for an open issue whose title starts with the phase
+          # prefix. If found, add a comment linking this run and exit.
+          title_prefix="WPT nightly regression: ${{ matrix.phase }}"
+          existing=$(gh issue list \
+            --state open \
+            --search "\"$title_prefix\" in:title" \
+            --limit 1 \
+            --json number \
+            --jq '.[0].number // empty')
+
           BODY="Nightly WPT ${{ matrix.phase }} detected $count regression(s). Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID
 
           Download the \`wpt-${{ matrix.phase }}-nightly\` artifact for details."
+
+          if [ -n "$existing" ]; then
+            echo "open regression issue #$existing already exists for ${{ matrix.phase }} — commenting"
+            gh issue comment "$existing" --body "$BODY"
+            exit 0
+          fi
+
           if gh label list --search "wpt-nightly-regression" --limit 1 \
                | grep -q "^wpt-nightly-regression"; then
             gh issue create \
-              --title "WPT nightly regression: ${{ matrix.phase }} $(date -u +%Y-%m-%d)" \
+              --title "$title_prefix $(date -u +%Y-%m-%d)" \
               --body "$BODY" \
               --label "wpt-nightly-regression"
           else
             gh issue create \
-              --title "WPT nightly regression: ${{ matrix.phase }} $(date -u +%Y-%m-%d)" \
+              --title "$title_prefix $(date -u +%Y-%m-%d)" \
               --body "$BODY"
           fi

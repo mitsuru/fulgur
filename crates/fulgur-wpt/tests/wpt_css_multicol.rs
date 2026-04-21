@@ -17,7 +17,13 @@ fn workspace_root() -> PathBuf {
 fn wpt_css_multicol() {
     let outcome =
         run_phase(&workspace_root(), "css-multicol", 96).expect("runner should not error");
-    if let Some(o) = outcome {
-        eprintln!("css-multicol report at {}", o.report_dir.display());
+    match outcome {
+        Some(o) => eprintln!("css-multicol report at {}", o.report_dir.display()),
+        None if std::env::var_os("GITHUB_ACTIONS").is_some() => {
+            panic!(
+                "wpt_css_multicol prerequisites missing in CI (run scripts/wpt/fetch.sh + install poppler-utils)"
+            );
+        }
+        None => {}
     }
 }
