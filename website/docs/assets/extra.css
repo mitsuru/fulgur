@@ -1,0 +1,92 @@
+@import url('https://fonts.googleapis.com/css2?family=Contrail+One&family=Geist+Mono:wght@400;500&family=Noto+Sans+JP:wght@400;600;700&display=swap');
+
+.fulgur-hero {
+  text-align: center;
+  padding: 4rem 1.5rem 3rem;
+  margin: 0 -0.8rem 2.4rem;
+  border-radius: 0.5rem;
+  background: linear-gradient(150deg, #311b92 0%, #1a237e 55%, #0d47a1 100%);
+}
+
+.fulgur-hero h1 {
+  font-family: 'Contrail One', 'Noto Sans JP', sans-serif;
+  font-size: 3.6rem;
+  font-weight: 400;
+  transform: scaleX(1.2);
+  display: inline-block;
+  color: #ffb300 !important;
+  margin-bottom: 0.6rem;
+  letter-spacing: 0.02em;
+  line-height: 1.05;
+}
+
+.fulgur-hero p {
+  font-family: 'Geist Mono', 'Noto Sans JP', monospace;
+  color: rgba(255, 255, 255, 0.92) !important;
+  font-size: 1.0rem;
+  margin-bottom: 0.4rem;
+  letter-spacing: -0.02em;
+}
+
+.fulgur-hero p strong {
+  font-family: 'Geist Mono', 'Noto Sans JP', monospace;
+  color: #fff !important;
+  font-size: 1.2rem;
+  font-weight: 500;
+  letter-spacing: -0.03em;
+}
+
+.fulgur-hero .md-button {
+  font-family: 'Instrument Sans', sans-serif;
+  margin: 0.3rem;
+  border-color: rgba(255, 255, 255, 0.6);
+  color: #fff !important;
+}
+
+.fulgur-hero .md-button--primary {
+  background-color: rgba(255, 255, 255, 0.18);
+  border-color: #fff;
+}
+
+.fulgur-hero .md-button--primary:hover {
+  background-color: rgba(255, 255, 255, 0.28);
+}
+
+[data-md-color-scheme="slate"] .fulgur-hero {
+  background: linear-gradient(150deg, #1a0050 0%, #0d0d2b 55%, #001040 100%);
+}
+
+.fulgur-hero h1 .headerlink {
+  display: none;
+}
+
+/* Header: solid dark + amber title */
+.md-header {
+  background-color: #0a051e !important;
+}
+
+.md-header__title {
+  color: #ffb300 !important;
+}
+
+.md-header__button.md-logo {
+  color: #fff !important;
+}
+
+.md-header__button.md-logo svg {
+  fill: #fff !important;
+}
+
+/* Nav tabs: match header */
+.md-tabs {
+  background-color: #0a051e !important;
+}
+
+.md-tabs__link {
+  color: rgba(255, 255, 255, 0.7) !important;
+}
+
+.md-tabs__link--active,
+.md-tabs__link:hover {
+  color: #ffb300 !important;
+}

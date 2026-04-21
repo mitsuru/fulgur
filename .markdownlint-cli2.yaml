@@ -11,6 +11,8 @@ config:
   MD046: false
   # テーブルのコンパクトスタイルを許可
   MD060: false
+  # MkDocs { #anchor } 構文をmarkdownlintが解釈できないため無効化
+  MD051: false
 
 ignores:
   - "node_modules/**"
