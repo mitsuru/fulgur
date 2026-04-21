@@ -581,6 +581,12 @@ pub trait Pageable: Send + Sync {
     ///
     /// Default: no-op. Containers should override to forward the value to
     /// every descendant that participates in pagination.
+    ///
+    /// **Contract:** call after every `wrap()`. Fragments emitted by
+    /// `split()` / `split_boxed()` start with `page_height = 0.0` (honour
+    /// avoid, no fallback); re-propagate before the next pagination round
+    /// if you intend to run `find_split_point` on a freshly-split fragment
+    /// directly (outside the `paginate` loop, which already re-propagates).
     fn propagate_page_height(&mut self, _page_height: Pt) {}
 }
 
@@ -913,7 +919,7 @@ impl BlockPageable {
         if self.pagination.break_inside == BreakInside::Avoid {
             // Prefer layout_size (Taffy-computed, non-zero for empty blocks
             // with explicit CSS height) and fall back to cached_size — same
-            // ordering the draw path uses (see lines ~1714, ~1782).
+            // ordering the draw path uses in `impl Pageable for BlockPageable::draw`.
             let total_height = self
                 .layout_size
                 .or(self.cached_size)
