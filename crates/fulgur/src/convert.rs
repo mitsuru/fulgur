@@ -2064,8 +2064,8 @@ fn convert_inline_box_node(
     node_id: usize,
     ctx: &mut ConvertContext<'_>,
     depth: usize,
-) -> Option<crate::paragraph::InlineBoxContent> {
-    Some(convert_node(doc, node_id, ctx, depth + 1))
+) -> crate::paragraph::InlineBoxContent {
+    convert_node(doc, node_id, ctx, depth + 1)
 }
 
 /// Extract a ParagraphPageable from an inline root node.
@@ -2147,9 +2147,7 @@ fn extract_paragraph(
                 }
                 parley::PositionedLayoutItem::InlineBox(positioned) => {
                     let node_id = positioned.id as usize;
-                    let Some(content) = convert_inline_box_node(doc, node_id, ctx, depth) else {
-                        continue;
-                    };
+                    let content = convert_inline_box_node(doc, node_id, ctx, depth);
                     let link = ctx.link_cache.lookup(doc, node_id);
                     // Parley's `PositionedInlineBox` has no baseline field
                     // (Parley 0.6), so it defaults `y` so that the box's
