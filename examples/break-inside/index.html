@@ -1,0 +1,99 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>break-inside</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <h1>break-inside</h1>
+  <p class="lead">
+    A block with <code>break-inside: avoid</code> is never split across
+    a page boundary. If it would straddle the bottom of a page, fulgur
+    promotes the whole block to the next page instead.
+  </p>
+
+  <p>
+    This example places several paragraphs near the bottom of page one,
+    then introduces a callout box that would not fit in the remaining
+    space. Without <code>break-inside: avoid</code> the box would be
+    sliced mid-content; with it, the box is kept whole and appears at
+    the top of page two.
+  </p>
+
+  <p>
+    Filler text to occupy vertical space. Lorem ipsum dolor sit amet,
+    consectetur adipiscing elit. Sed do eiusmod tempor incididunt ut
+    labore et dolore magna aliqua. Ut enim ad minim veniam, quis nostrud
+    exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat.
+  </p>
+
+  <p>
+    Duis aute irure dolor in reprehenderit in voluptate velit esse cillum
+    dolore eu fugiat nulla pariatur. Excepteur sint occaecat cupidatat non
+    proident, sunt in culpa qui officia deserunt mollit anim id est laborum.
+  </p>
+
+  <p>
+    Another paragraph of filler text. Sed ut perspiciatis unde omnis iste
+    natus error sit voluptatem accusantium doloremque laudantium, totam rem
+    aperiam, eaque ipsa quae ab illo inventore veritatis et quasi architecto
+    beatae vitae dicta sunt explicabo.
+  </p>
+
+  <p>
+    Nemo enim ipsam voluptatem quia voluptas sit aspernatur aut odit aut
+    fugit, sed quia consequuntur magni dolores eos qui ratione voluptatem
+    sequi nesciunt. Neque porro quisquam est, qui dolorem ipsum quia dolor
+    sit amet, consectetur, adipisci velit.
+  </p>
+
+  <p>
+    Ut labore et dolore magnam aliquam quaerat voluptatem. Ut enim ad
+    minima veniam, quis nostrum exercitationem ullam corporis suscipit
+    laboriosam, nisi ut aliquid ex ea commodi consequatur?
+  </p>
+
+  <p>
+    Quis autem vel eum iure reprehenderit qui in ea voluptate velit esse
+    quam nihil molestiae consequatur, vel illum qui dolorem eum fugiat quo
+    voluptas nulla pariatur? At vero eos et accusamus et iusto odio
+    dignissimos ducimus qui blanditiis praesentium voluptatum deleniti.
+  </p>
+
+  <p>
+    Nam libero tempore, cum soluta nobis est eligendi optio cumque nihil
+    impedit quo minus id quod maxime placeat facere possimus, omnis
+    voluptas assumenda est, omnis dolor repellendus. Temporibus autem
+    quibusdam et aut officiis debitis aut rerum necessitatibus saepe.
+  </p>
+
+  <p>
+    Itaque earum rerum hic tenetur a sapiente delectus, ut aut reiciendis
+    voluptatibus maiores alias consequatur aut perferendis doloribus
+    asperiores repellat. Et harum quidem rerum facilis est et expedita
+    distinctio.
+  </p>
+
+  <!-- This callout is tall enough to straddle the page break.
+       break-inside: avoid promotes it to page 2 as a whole. -->
+  <div class="callout">
+    <p><strong class="callout-title">Key Insight —</strong>
+      Page-breaking algorithms in PDF generators commonly split figures,
+      tables, and callout boxes mid-content. <code>break-inside: avoid</code>
+      instructs fulgur's pagination engine to promote the entire block to
+      the following page rather than allowing a split.
+      This is especially useful for figures with captions, multi-row
+      tables, and styled boxes where a mid-break would destroy the
+      visual grouping.
+    </p>
+  </div>
+
+  <h2>After the callout</h2>
+  <p>
+    This heading and paragraph appear after the callout box on page two.
+    Because the callout was kept whole, the reading flow continues
+    naturally without orphaned content stranded at the bottom of page one.
+  </p>
+</body>
+</html>

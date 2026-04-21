@@ -1,0 +1,51 @@
+body {
+  font-family: serif;
+  font-size: 11pt;
+  line-height: 1.5;
+  margin: 0;
+  color: #222;
+}
+
+h1 {
+  font-size: 20pt;
+  margin: 0 0 12pt 0;
+  border-bottom: 1pt solid #444;
+  padding-bottom: 4pt;
+}
+
+h2 {
+  font-size: 13pt;
+  margin: 14pt 0 6pt 0;
+  color: #335;
+}
+
+p.lead {
+  color: #555;
+  margin: 0 0 12pt 0;
+}
+
+p {
+  margin: 0 0 8pt 0;
+}
+
+.callout {
+  break-inside: avoid;
+  background: #f0f6ff;
+  border-left: 4pt solid #4a7cc7;
+  border-radius: 2pt;
+  padding: 10pt 14pt;
+  margin: 14pt 0;
+}
+
+.callout-title {
+  font-size: 12pt;
+  color: #2a4a80;
+}
+
+.callout p {
+  margin: 0 0 6pt 0;
+}
+
+.callout p:last-child {
+  margin-bottom: 0;
+}
