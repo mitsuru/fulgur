@@ -42,3 +42,38 @@ fn avoid_block_straddling_boundary_promotes_to_next_page() {
         page_count(&pdf)
     );
 }
+
+/// 1ページより大きい avoid block は無限ループせず通常 split へ fallback。
+///
+/// Note: `.huge` has splittable children (rows). An empty `<div style="height:
+/// 500pt">` would not exercise the fallback because `BlockPageable::split`
+/// cannot synthesise children out of pure CSS-sized boxes; that is a separate
+/// concern beyond Task 5's scope.
+#[test]
+fn avoid_block_taller_than_page_falls_back_to_split() {
+    let html = r#"<!doctype html><html><head><style>
+        @page { size: 200pt 200pt; margin: 0; }
+        body { margin: 0; }
+        .huge { break-inside: avoid; }
+        .row { height: 80pt; background: #036; }
+    </style></head><body>
+      <div class="huge">
+        <div class="row"></div>
+        <div class="row"></div>
+        <div class="row"></div>
+        <div class="row"></div>
+        <div class="row"></div>
+        <div class="row"></div>
+        <div class="row"></div>
+      </div>
+    </body></html>"#;
+    let engine = Engine::builder()
+        .page_size(PageSize::custom(70.5556, 70.5556))
+        .build();
+    let pdf = engine.render_html(html).expect("render");
+    assert!(
+        page_count(&pdf) >= 2,
+        "expected oversized avoid block to still paginate, got {} pages",
+        page_count(&pdf)
+    );
+}

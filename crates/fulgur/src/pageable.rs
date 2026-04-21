@@ -569,6 +569,19 @@ pub trait Pageable: Send + Sync {
     fn is_visible(&self) -> bool {
         true
     }
+
+    /// Propagate the true page-height budget down the tree. Called by
+    /// `paginate` after `wrap` so `BlockPageable::find_split_point` can detect
+    /// "content taller than any possible page" and fall back from
+    /// `break-inside: avoid` to a normal split.
+    ///
+    /// Cannot piggy-back on `wrap()` because `BlockPageable::wrap` calls
+    /// `child.wrap(avail_width, 10000.0)` as a sizing probe; using
+    /// `avail_height` there would record 10000.0 for every non-root node.
+    ///
+    /// Default: no-op. Containers should override to forward the value to
+    /// every descendant that participates in pagination.
+    fn propagate_page_height(&mut self, _page_height: Pt) {}
 }
 
 impl Clone for Box<dyn Pageable> {
@@ -818,6 +831,11 @@ pub struct BlockPageable {
     /// for internal `href="#..."` links. `Arc<String>` so split fragments
     /// can share without cloning the string.
     pub id: Option<Arc<String>>,
+    /// Last `avail_height` received by `wrap()`. `find_split_point` uses this
+    /// to detect "content taller than any possible page" and fall back to a
+    /// normal split rather than honour `break-inside: avoid` to the point of
+    /// silently dropping content.
+    page_height: Pt,
 }
 
 impl BlockPageable {
@@ -845,6 +863,7 @@ impl BlockPageable {
             opacity: 1.0,
             visible: true,
             id: None,
+            page_height: 0.0,
         }
     }
 
@@ -858,6 +877,7 @@ impl BlockPageable {
             opacity: 1.0,
             visible: true,
             id: None,
+            page_height: 0.0,
         }
     }
 
@@ -891,7 +911,20 @@ impl BlockPageable {
     /// avoid duplicating the scanning logic.
     fn find_split_point(&self, avail_height: Pt) -> SplitDecision {
         if self.pagination.break_inside == BreakInside::Avoid {
-            return SplitDecision::NoSplit;
+            // Prefer layout_size (Taffy-computed, non-zero for empty blocks
+            // with explicit CSS height) and fall back to cached_size — same
+            // ordering the draw path uses (see lines ~1714, ~1782).
+            let total_height = self
+                .layout_size
+                .or(self.cached_size)
+                .map(|s| s.height)
+                .unwrap_or(0.0);
+            // page_height == 0.0 means `propagate_page_height` was never called
+            // (defensive) — treat as "honour avoid, no fallback available".
+            if self.page_height <= 0.0 || total_height <= self.page_height {
+                return SplitDecision::NoSplit;
+            }
+            // Fall through to normal splitting logic.
         }
 
         let has_forced_break = self.children.iter().enumerate().any(|(i, pc)| {
@@ -1557,6 +1590,13 @@ impl Pageable for BlockPageable {
         size
     }
 
+    fn propagate_page_height(&mut self, page_height: Pt) {
+        self.page_height = page_height;
+        for pc in &mut self.children {
+            pc.child.propagate_page_height(page_height);
+        }
+    }
+
     fn split(
         &self,
         _avail_width: Pt,
@@ -1997,6 +2037,10 @@ impl Pageable for BookmarkMarkerWrapperPageable {
         self.child.wrap(avail_width, avail_height)
     }
 
+    fn propagate_page_height(&mut self, page_height: Pt) {
+        self.child.propagate_page_height(page_height);
+    }
+
     fn split(
         &self,
         avail_width: Pt,
@@ -2239,6 +2283,10 @@ impl Pageable for CounterOpWrapperPageable {
         self.child.wrap(avail_width, avail_height)
     }
 
+    fn propagate_page_height(&mut self, page_height: Pt) {
+        self.child.propagate_page_height(page_height);
+    }
+
     fn split(
         &self,
         avail_width: Pt,
@@ -2340,6 +2388,10 @@ impl Pageable for TransformWrapperPageable {
         self.inner.wrap(avail_width, avail_height)
     }
 
+    fn propagate_page_height(&mut self, page_height: Pt) {
+        self.inner.propagate_page_height(page_height);
+    }
+
     fn split(
         &self,
         _avail_width: Pt,
@@ -2435,6 +2487,10 @@ impl Pageable for StringSetWrapperPageable {
         self.child.wrap(avail_width, avail_height)
     }
 
+    fn propagate_page_height(&mut self, page_height: Pt) {
+        self.child.propagate_page_height(page_height);
+    }
+
     fn split(
         &self,
         avail_width: Pt,
@@ -2516,6 +2572,10 @@ impl RunningElementWrapperPageable {
 impl Pageable for RunningElementWrapperPageable {
     fn wrap(&mut self, avail_width: Pt, avail_height: Pt) -> Size {
         self.child.wrap(avail_width, avail_height)
+    }
+
+    fn propagate_page_height(&mut self, page_height: Pt) {
+        self.child.propagate_page_height(page_height);
     }
 
     fn split(
@@ -2671,6 +2731,10 @@ impl MulticolRulePageable {
 impl Pageable for MulticolRulePageable {
     fn wrap(&mut self, avail_width: Pt, avail_height: Pt) -> Size {
         self.child.wrap(avail_width, avail_height)
+    }
+
+    fn propagate_page_height(&mut self, page_height: Pt) {
+        self.child.propagate_page_height(page_height);
     }
 
     fn split(
@@ -2937,6 +3001,10 @@ pub struct ListItemPageable {
 }
 
 impl Pageable for ListItemPageable {
+    fn propagate_page_height(&mut self, page_height: Pt) {
+        self.body.propagate_page_height(page_height);
+    }
+
     fn wrap(&mut self, avail_width: Pt, avail_height: Pt) -> Size {
         let body_size = self.body.wrap(avail_width, avail_height);
         self.height = body_size.height;
@@ -3099,6 +3167,15 @@ pub struct TablePageable {
 }
 
 impl Pageable for TablePageable {
+    fn propagate_page_height(&mut self, page_height: Pt) {
+        for pc in &mut self.header_cells {
+            pc.child.propagate_page_height(page_height);
+        }
+        for pc in &mut self.body_cells {
+            pc.child.propagate_page_height(page_height);
+        }
+    }
+
     fn wrap(&mut self, _avail_width: Pt, _avail_height: Pt) -> Size {
         if let Some(ls) = self.layout_size {
             self.cached_height = ls.height;
