@@ -38,6 +38,13 @@ pub fn run_one(
     let reftest = classify(test_html_path)?;
     let (ref_rel, fuzzy) = match reftest.classification {
         ReftestKind::Match { ref_path, fuzzy } => (ref_path, fuzzy),
+        ReftestKind::Mismatch { .. } => {
+            return Ok(RunOutcome {
+                observed: Expectation::Skip,
+                reason: Some("Mismatch handling not yet implemented (fulgur-rx3f)".into()),
+                diff_dir: None,
+            });
+        }
         ReftestKind::Skip { reason } => {
             return Ok(RunOutcome {
                 observed: Expectation::Skip,
