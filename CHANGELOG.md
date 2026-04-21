@@ -2,6 +2,171 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.5.6] - 2026-04-21
+
+### Bug Fixes
+
+- byte-wise scan in content_stream helper (fulgur-0ls)
+- honor @page inside inline <style> blocks (fulgur-mq5)
+- extract_vertical_align returns pt, not CSS px (fulgur-o8t)
+- convert parley px → pt in extract_paragraph
+- address CodeRabbit review on multicol PR
+- address CodeRabbit review on column-span: all (fulgur-0vd)
+- address CodeRabbit review on PR #127 (fulgur-qkg Phase A)
+- honour container padding/border and preserve child insets
+- address coderabbit review on PR #129
+- double < 3px falls back to solid in rect fast path
+- double < 3px falls back to solid in per-edge path
+- accept rgb/rgba/hsl functional-notation colors
+- thread container padding into column rule geometry
+- address CodeRabbit review on PR #133
+- address 2nd-round CodeRabbit review on PR #133
+- update remote URL on rerun, harden SHA read, document placeholder (2foo.2)
+- canonicalize test path, capture pdftocairo stderr (2foo.3)
+- tighten judge signature, expose comment accessor (2foo.6)
+- FuzzyTolerance::strict for absent meta, doc clarifications (2foo.5)
+- error on rel=match without href, document plan drift (2foo)
+- address coderabbit review feedback
+- add push_error, tighten TestResult visibility (2foo.7)
+- address coderabbit review on PR #135
+- address code review on Phase 3 seed + nightly
+- address coderabbit review on PR #136
+- gate CI panic on FULGUR_WPT_REQUIRED not GITHUB_ACTIONS
+- render inline-box (inline-block/flex/grid/table)
+- address coderabbit review on PR #137
+
+### CI
+
+- install poppler-utils on Linux for fulgur-wpt pdftocairo tests
+- add wpt-css-page job + integration test vs expectations (2foo.9)
+- add nightly workflow with artifact + regression issue (2foo.9)
+- use steps.run.outcome for nightly regression detection
+- matrix over [css-page, css-multicol], reporting-only (2foo.11)
+- matrix + regression detection via regressions.json (2foo.11)
+- revert WPT fetch in coverage job to keep PR fast
+
+### Documentation
+
+- CSS multi-column layout design plan (fulgur-qkg)
+- revise multicol design to Taffy custom-layout-hook direction
+- add examples/multicol sample for Taffy-hook renderer
+- note column-span: all segmentation in multicol_layout (fulgur-0vd)
+- add multicol-span-all example + implementation plan (fulgur-0vd)
+- add CSS paged media reftest runner design
+- detail fuzzy meta spec variants (CodeRabbit feedback)
+- add border double hairline fallback plan (fulgur-xca)
+- note Double fallback contract in apply_border_style
+- fix test count in Task 2 Step 4 (3 → 4)
+- implementation plan for column-rule + column-fill
+- add WPT runner phase 1 core plan (2foo)
+- escape nested code fence in WPT runner plan
+- document expectations seed and promotion workflow (2foo.8)
+- add WPT runner phase 1 finish plan + escape nested fences
+- document reporting-only CI model (2foo.11)
+- add WPT Phase 3 + matrix CI plan
+- MkDocs Material setup implementation plan (fulgur-35m)
+- design + impl plan for rel=mismatch support
+- note rel=mismatch support in README
+- note probe test limitations + Task 5 as real acceptance
+- fix stale line refs + document split-fragment propagate contract
+- address coderabbit review on PR #138
+- soften break-inside avoid wording — fallback on oversized block
+
+### Features
+
+- extract_gcpm_from_inline_styles helper (fulgur-mq5)
+- expose multicol props via blitz_adapter (fulgur-hcg)
+- Taffy custom layout hook scaffold for multicol (fulgur-jvx)
+- compute_multicol_layout body + ancestor propagation (fulgur-ltu)
+- wire multicol layout hook into render pipeline (fulgur-ltu)
+- add Segment type + partition for multicol (fulgur-0vd)
+- column-span: all segment layout in multicol hook (fulgur-0vd)
+- custom CSS sniffer for column-rule / column-fill
+- harvest column styles from DOM into side-table
+- record per-ColumnGroup geometry from the Taffy hook
+- MulticolRulePageable draws rules + survives split
+- render column rules and honour column-fill: auto
+- add crate scaffolding (2foo.1)
+- add WPT shallow-clone fetch script with SHA pin (2foo.2)
+- add fuzzy meta parser with full WPT variant coverage (2foo.4)
+- classify reftests from HTML (rel=match, fuzzy meta) (2foo.4)
+- add multi-page render with pdftocairo (2foo.3)
+- add expectations file parser and judge() (2foo.6)
+- end-to-end reftest harness with multi-page diff (2foo.5)
+- add run_one example for manual reftest invocation
+- add wptreport.json emitter (2foo.7)
+- seed css-page expectations with initial harness run (2foo.8)
+- extract shared phase runner (2foo.11 infra)
+- seed css-multicol expectations (Phase 3, 2foo.11)
+- scaffold MkDocs Material site for fulgur.dev (fulgur-35m)
+- classify rel=mismatch as Mismatch variant
+- flip verdict for rel=mismatch reftests
+- parse break-inside in column_css
+- wire break-inside through convert.rs
+- fall back to split when avoid block exceeds page
+
+### Miscellaneous
+
+- regenerate example PDFs
+- regenerate example PDFs after px→pt text layout fixes
+- regenerate example PDFs
+- regenerate example PDFs
+- bump scraper 0.20 -> 0.26
+- pin to real WPT SHA 97ea26e2 (2foo.8 prep)
+- wire website into mise tasks + lint ignores (fulgur-35m)
+- clippy + fmt polish + page-size comments
+- regenerate example PDFs
+- regenerate example PDFs
+
+### Performance
+
+- stroke uniform borders as a single rect (fulgur-0ls)
+- consolidate dashed/dotted uniform borders into rect stroke (fulgur-0ls)
+- consolidate double borders into 2 concentric rect strokes (fulgur-0ls)
+
+### Refactor
+
+- add build_rect_path and stroke_rect helpers (fulgur-0ls)
+- DRY inset/opacity helpers and trim stale comments (fulgur-0ls)
+- simplify multicol_layout (code review feedback)
+- extract layout_column_group helper (fulgur-0vd)
+- wpt_css_page uses shared runner, reporting-only (2foo.11)
+- drop dead Option from convert_inline_box_node
+
+### Testing
+
+- add content-stream operator count helper for fulgur-0ls
+- add failing regression test for rect-based borders (fulgur-0ls)
+- tighten rect-border regression thresholds with measured numbers (fulgur-0ls)
+- use tempdir + plain paths in count_ops for Windows portability (fulgur-0ls)
+- panic on qpdf exec failure, not just on NotFound (fulgur-0ls)
+- failing regression for @page in inline <style> (fulgur-mq5)
+- expand multicol_layout coverage (fulgur-ltu follow-up)
+- integration test for page-spanning SpanAll (fulgur-0vd)
+- update goldens for multicol Taffy hook + text px→pt fixes
+- failing test for double < 3px fast path fallback
+- failing test for double < 3px per-edge fallback
+- pixel-sampling probe for column-rule + column-fill
+- verify fulgur-vrt diff reachable as dev-dep (2foo.5)
+- add Phase 3 css-multicol integration test (2foo.11)
+- promote rel=mismatch tests from SKIP in css-page expectations
+- lock in break-inside: avoid in multicol
+- break-inside roundtrip via extract_column_style_table
+
+### Examples
+
+- add break-inside example (avoid promoting callout to next page)
+
+### Revert
+
+- keep dashed/dotted on per-edge path for CSS conformance (fulgur-0ls)
+
+## [0.5.5] - 2026-04-19
+
+### Release
+
+- v0.5.5
+
 ## [0.5.4] - 2026-04-18
 
 ### Bug Fixes
