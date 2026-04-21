@@ -45,6 +45,8 @@ use cssparser::{
     color::{parse_hash_color, parse_named_color},
 };
 
+use crate::pageable::BreakInside;
+
 // ---------------------------------------------------------------------------
 // Public types
 // ---------------------------------------------------------------------------
@@ -105,7 +107,7 @@ pub struct ColumnStyleProps {
     /// initial value (`BreakInside::Auto`). Stored as `Option` for the same
     /// reason as the other fields: a later rule overwrites only the
     /// properties it declares (see [`merge`](Self::merge)).
-    pub break_inside: Option<crate::pageable::BreakInside>,
+    pub break_inside: Option<BreakInside>,
 }
 
 impl ColumnStyleProps {
@@ -414,11 +416,11 @@ fn parse_column_fill_value<'i>(
 /// `left`, `right`, typos …) drop the declaration so siblings still apply.
 fn parse_break_inside_value<'i>(
     input: &mut Parser<'i, '_>,
-) -> Result<crate::pageable::BreakInside, ParseError<'i, ()>> {
+) -> Result<BreakInside, ParseError<'i, ()>> {
     let ident = input.expect_ident()?.clone();
     match ident.as_ref().to_ascii_lowercase().as_str() {
-        "avoid" | "avoid-page" | "avoid-column" => Ok(crate::pageable::BreakInside::Avoid),
-        "auto" => Ok(crate::pageable::BreakInside::Auto),
+        "avoid" | "avoid-page" | "avoid-column" => Ok(BreakInside::Avoid),
+        "auto" => Ok(BreakInside::Auto),
         _ => Err(input.new_error(BasicParseErrorKind::QualifiedRuleInvalid)),
     }
 }
@@ -929,24 +931,21 @@ mod tests {
     #[test]
     fn parse_break_inside_avoid_inline() {
         let props = parse_declaration_block("break-inside: avoid;");
-        assert_eq!(
-            props.break_inside,
-            Some(crate::pageable::BreakInside::Avoid)
-        );
+        assert_eq!(props.break_inside, Some(BreakInside::Avoid));
     }
 
     #[test]
     fn parse_break_inside_avoid_page_and_column_collapse_to_avoid() {
         let p1 = parse_declaration_block("break-inside: avoid-page;");
         let p2 = parse_declaration_block("break-inside: avoid-column;");
-        assert_eq!(p1.break_inside, Some(crate::pageable::BreakInside::Avoid));
-        assert_eq!(p2.break_inside, Some(crate::pageable::BreakInside::Avoid));
+        assert_eq!(p1.break_inside, Some(BreakInside::Avoid));
+        assert_eq!(p2.break_inside, Some(BreakInside::Avoid));
     }
 
     #[test]
     fn parse_break_inside_auto_is_auto_variant() {
         let props = parse_declaration_block("break-inside: auto;");
-        assert_eq!(props.break_inside, Some(crate::pageable::BreakInside::Auto));
+        assert_eq!(props.break_inside, Some(BreakInside::Auto));
     }
 
     #[test]
@@ -959,10 +958,7 @@ mod tests {
     fn parse_break_inside_via_selector() {
         let rules = parse_stylesheet(".keep { break-inside: avoid; }");
         assert_eq!(rules.len(), 1);
-        assert_eq!(
-            rules[0].props.break_inside,
-            Some(crate::pageable::BreakInside::Avoid)
-        );
+        assert_eq!(rules[0].props.break_inside, Some(BreakInside::Avoid));
     }
 
     #[test]

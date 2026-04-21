@@ -33,6 +33,7 @@ fn avoid_block_straddling_boundary_promotes_to_next_page() {
       <div class="keep"></div>
     </body></html>"#;
     let engine = Engine::builder()
+        // 200pt × 200pt expressed in mm (PageSize::custom_pt not yet available)
         .page_size(PageSize::custom(70.5556, 70.5556))
         .build();
     let pdf = engine.render_html(html).expect("render");
@@ -68,6 +69,7 @@ fn avoid_block_taller_than_page_falls_back_to_split() {
       </div>
     </body></html>"#;
     let engine = Engine::builder()
+        // 200pt × 200pt expressed in mm (PageSize::custom_pt not yet available)
         .page_size(PageSize::custom(70.5556, 70.5556))
         .build();
     let pdf = engine.render_html(html).expect("render");
@@ -96,6 +98,7 @@ fn avoid_child_inside_multicol_fits_whole_column() {
       </div>
     </body></html>"#;
     let engine = Engine::builder()
+        // 300pt × 400pt expressed in mm (PageSize::custom_pt not yet available)
         .page_size(PageSize::custom(105.8333, 141.1111))
         .build();
     let pdf = engine.render_html(html).expect("render");
