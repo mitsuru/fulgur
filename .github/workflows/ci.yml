@@ -60,9 +60,13 @@ jobs:
       - name: Install cargo-nextest
         if: matrix.coverage
         uses: taiki-e/install-action@dfd6a81ff1efc1c100332d760e0c9edfe2ae0a51 # nextest
-      - name: Fetch WPT subset (coverage only, so runner.rs sees real input)
-        if: matrix.coverage
-        run: scripts/wpt/fetch.sh
+      # NOTE: fulgur-wpt integration tests (wpt_css_page, wpt_css_multicol)
+      # silently skip here because target/wpt is not fetched in the coverage
+      # cell — fetching + running all phases would add ~4-5 min to PR CI.
+      # That leaves `crates/fulgur-wpt/src/runner.rs` under-reported in
+      # Codecov. The WPT coverage surface is exercised by the `wpt` matrix
+      # job (in this same workflow) and by nightly; Codecov numbers here
+      # only reflect unit-test coverage.
       - name: Build tests
         if: ${{ !matrix.coverage }}
         run: cargo test --workspace --exclude fulgur-vrt --no-run
