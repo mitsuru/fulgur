@@ -49,7 +49,12 @@ jobs:
           path: target/wpt-report/${{ matrix.phase }}
           if-no-files-found: warn
       - name: File regression issue
-        if: always()
+        # Only when the run itself succeeded — test exits 0 even with
+        # regressions (reporting-only model), so this fires on legitimate
+        # regression data. Infra failures (fetch/build/runner crash) leave
+        # no regressions.json anyway and are surfaced by the nightly job
+        # failing, not by issue spam.
+        if: success()
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
