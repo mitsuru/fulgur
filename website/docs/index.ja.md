@@ -30,7 +30,7 @@ AIエージェントが生成した出力を、美しく永続的な文書とし
     npx @fulgur-rs/cli render input.html -o output.pdf
     ```
 
-    ローカルインストールする場合:
+    グローバルインストールする場合:
 
     ```bash
     npm install -g @fulgur-rs/cli
