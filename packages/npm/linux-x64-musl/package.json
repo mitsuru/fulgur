@@ -1,0 +1,14 @@
+{
+  "name": "@fulgur-rs/cli-linux-x64-musl",
+  "version": "0.0.0",
+  "description": "fulgur CLI binary for Linux x64 (musl)",
+  "license": "MIT OR Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/fulgur-rs/fulgur.git",
+    "directory": "packages/npm/linux-x64-musl"
+  },
+  "os": ["linux"],
+  "cpu": ["x64"],
+  "files": ["bin/"]
+}
