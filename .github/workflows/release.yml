@@ -245,6 +245,7 @@ jobs:
       - name: Publish platform packages
         env:
           VERSION: ${{ needs.publish.outputs.version }}
+          NODE_AUTH_TOKEN: ""
         run: |
           set -e
           declare -A TARGET_TO_DIR=(
@@ -282,6 +283,7 @@ jobs:
       - name: Publish meta package
         env:
           VERSION: ${{ needs.publish.outputs.version }}
+          NODE_AUTH_TOKEN: ""
         run: |
           cd packages/npm/meta
           node -e "
