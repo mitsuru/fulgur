@@ -113,7 +113,7 @@ impl Default for Config {
             description: None,
             keywords: vec![],
             creator: None,
-            producer: Some(format!("fulgur v{}", env!("CARGO_PKG_VERSION"))),
+            producer: Some("fulgur".to_string()),
             creation_date: None,
             lang: None,
             bookmarks: false,
