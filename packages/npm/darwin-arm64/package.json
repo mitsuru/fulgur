@@ -1,0 +1,14 @@
+{
+  "name": "@fulgur-rs/cli-darwin-arm64",
+  "version": "0.0.0",
+  "description": "fulgur CLI binary for macOS arm64",
+  "license": "MIT OR Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/fulgur-rs/fulgur.git",
+    "directory": "packages/npm/darwin-arm64"
+  },
+  "os": ["darwin"],
+  "cpu": ["arm64"],
+  "files": ["bin/"]
+}

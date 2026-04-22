@@ -1,0 +1,14 @@
+{
+  "name": "@fulgur-rs/cli-linux-arm64",
+  "version": "0.0.0",
+  "description": "fulgur CLI binary for Linux arm64",
+  "license": "MIT OR Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/fulgur-rs/fulgur.git",
+    "directory": "packages/npm/linux-arm64"
+  },
+  "os": ["linux"],
+  "cpu": ["arm64"],
+  "files": ["bin/"]
+}
