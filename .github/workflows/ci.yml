@@ -9,6 +9,10 @@ on:
 env:
   CARGO_TERM_COLOR: always
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   markdownlint:
     runs-on: ubuntu-latest
@@ -37,28 +41,36 @@ jobs:
           - os: ubuntu-latest
             arch: amd64
             coverage: true
+            mold: true
           - os: ubuntu-24.04-arm
             arch: arm64
             coverage: false
+            mold: true
           - os: macos-latest
             arch: arm64
             coverage: false
+            mold: false
           - os: windows-latest
             arch: amd64
             coverage: false
+            mold: false
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: ${{ matrix.os }}-fulgur
       - name: Install poppler-utils (for fulgur-wpt pdftocairo tests)
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y poppler-utils
+        run: sudo apt-get update && sudo apt-get install -y poppler-utils mold
+      - name: Configure mold linker
+        if: matrix.mold
+        run: echo "RUSTFLAGS=-C link-arg=-fuse-ld=mold" >> $GITHUB_ENV
       - name: Install cargo-llvm-cov
         if: matrix.coverage
         uses: taiki-e/install-action@88ada01c46e65c47040a0ae865537cc76fcd0e1c # cargo-llvm-cov
       - name: Install cargo-nextest
-        if: matrix.coverage
         uses: taiki-e/install-action@dfd6a81ff1efc1c100332d760e0c9edfe2ae0a51 # nextest
       # NOTE: fulgur-wpt integration tests (wpt_css_page, wpt_css_multicol)
       # silently skip here because target/wpt is not fetched in the coverage
@@ -69,10 +81,10 @@ jobs:
       # only reflect unit-test coverage.
       - name: Build tests
         if: ${{ !matrix.coverage }}
-        run: cargo test --workspace --exclude fulgur-vrt --no-run
+        run: cargo nextest run --workspace --exclude fulgur-vrt --no-run
       - name: Run tests
         if: ${{ !matrix.coverage }}
-        run: cargo test --workspace --exclude fulgur-vrt
+        run: cargo nextest run --workspace --exclude fulgur-vrt
       - name: Run tests with coverage
         if: matrix.coverage
         run: cargo llvm-cov nextest --workspace --exclude fulgur-vrt --profile ci --lcov --output-path lcov.info
@@ -104,9 +116,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Install poppler-utils
-        run: sudo apt-get update && sudo apt-get install -y poppler-utils
+        run: sudo apt-get update && sudo apt-get install -y poppler-utils mold
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: ubuntu-latest-fulgur
+      - name: Configure mold linker
+        run: echo "RUSTFLAGS=-C link-arg=-fuse-ld=mold" >> $GITHUB_ENV
       - name: Run VRT
         run: cargo test -p fulgur-vrt
       - name: Upload diff artifacts on failure
@@ -149,8 +165,12 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: ubuntu-latest-fulgur
       - name: Install poppler-utils
-        run: sudo apt-get update && sudo apt-get install -y poppler-utils
+        run: sudo apt-get update && sudo apt-get install -y poppler-utils mold
+      - name: Configure mold linker
+        run: echo "RUSTFLAGS=-C link-arg=-fuse-ld=mold" >> $GITHUB_ENV
       - name: Fetch WPT subset
         run: scripts/wpt/fetch.sh
       - name: Run ${{ matrix.phase }} reftests
