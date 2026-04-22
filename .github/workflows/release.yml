@@ -224,6 +224,7 @@ jobs:
     environment: release
     permissions:
       contents: read
+      id-token: write
     steps:
       - uses: actions/checkout@v4
         with:
@@ -243,7 +244,6 @@ jobs:
 
       - name: Publish platform packages
         env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
           VERSION: ${{ needs.publish.outputs.version }}
         run: |
           set -e
@@ -274,14 +274,13 @@ jobs:
             if npm view "${PKG_NAME}@${VERSION}" version 2>/dev/null | grep -qF "${VERSION}"; then
               echo "Already published ${PKG_NAME}@${VERSION}, skipping."
             else
-              npm publish --access public
+              npm publish --access public --provenance
             fi
             cd - > /dev/null
           done
 
       - name: Publish meta package
         env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
           VERSION: ${{ needs.publish.outputs.version }}
         run: |
           cd packages/npm/meta
@@ -298,5 +297,5 @@ jobs:
           if npm view "${PKG_NAME}@${VERSION}" version 2>/dev/null | grep -qF "${VERSION}"; then
             echo "Already published ${PKG_NAME}@${VERSION}, skipping."
           else
-            npm publish --access public
+            npm publish --access public --provenance
           fi
