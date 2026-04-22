@@ -9,6 +9,33 @@ pipeline に接続するための短い設計メモ。後続タスク
 `fulgur-izp.2` / `fulgur-izp.3` の前提として、API 名、呼び出し順、
 fulgur 側の変更箇所、最小実装と PDF/UA 完全対応の境界を整理する。
 
+## Product Direction: PDF/UA-First
+
+fulgur は AI エージェント向けの PDF engine を目指すため、accessibility
+support は optional polish ではなく core capability として扱う。Tagged PDF
+は最終目的ではなく、PDF/UA に準拠した、支援技術と AI agent の双方が意味構造
+を信頼して読める PDF を生成するための基盤である。
+
+そのため、長期的な product direction は **PDF/UA-first** とする。
+
+- `--pdf-ua` は本命の user-facing mode として扱う。
+- `--tagged` は development/debugging 用、または PDF/UA validator までは要求しない
+  lightweight tagged output として残す。
+- `--pdf-ua` は `enable_tagging`、PDF/UA validator、document language、
+  structure tree、outline/bookmarks、PDF/UA metadata を一括で有効化する。
+- 安定後は、CLI / Engine の default output を PDF/UA 寄りにする余地を残す。
+- すべての実コンテンツを semantic tag または artifact に分類することを
+  goal とし、「一部だけタグ付けされた PDF」を完成状態とはみなさない。
+
+AI agent 向けには、PDF/UA の semantics は次の意味を持つ。
+
+- DOM を失った PDF からでも、heading / paragraph / list / table / link /
+  figure の関係を再構築できる。
+- Reading order と visual order の差分を PDF 内に明示できる。
+- Decorative content と meaningful content を区別できる。
+- Link annotation、alt text、table header scope など、agent が判断に使う
+  document intent を標準 PDF structure として保持できる。
+
 ## Krilla Tagging API
 
 ### Entry Points
@@ -295,9 +322,10 @@ For later tasks:
 - `table`/`tr`/`th`/`td` -> table structure
 - `a href` -> `Link` with tagged annotation
 
-## Minimal Implementation Boundary
+## Minimal Tagged-PDF Boundary
 
-The smallest useful `--tagged` implementation should:
+The smallest useful `--tagged` implementation is an intermediate milestone,
+not the product finish line. It should:
 
 - Add `Config.enable_tagging`, `EngineBuilder::tagged(bool)`, and CLI
   `--tagged`.
@@ -319,7 +347,8 @@ Validation target for this phase:
 ## PDF/UA Complete Boundary
 
 PDF/UA mode is a stricter mode and should be treated as a separate layer over
-basic tagging. It should require or implement:
+basic tagging, but it is the long-term target for fulgur's accessibility
+support. It should require or implement:
 
 - `--pdf-ua` flag and `EngineBuilder::pdf_ua(bool)`.
 - `SerializeSettings.configuration =
@@ -339,13 +368,16 @@ basic tagging. It should require or implement:
 
 ## Recommended Follow-Up Order
 
-1. `fulgur-izp.2`: Add config, engine, and CLI flags. Use `Document::new_with`
-   but keep output behavior unchanged unless tagging is enabled.
+1. `fulgur-izp.2`: Add config, engine, and CLI flags with PDF/UA-first API
+   shape. `--pdf-ua` should imply tagging and the required PDF/UA settings;
+   `--tagged` remains a lower-level escape hatch.
 2. `fulgur-izp.3`: Preserve HTML semantic metadata through conversion into
-   pageables.
+   pageables. This should model intended document semantics, not just paint
+   order.
 3. `fulgur-izp.4`: Wire basic block/inline drawing to `start_tagged` and
-   collect identifiers.
+   collect identifiers while maintaining the no-nested-`start_tagged`
+   invariant.
 4. `fulgur-izp.5`: Build `TagTree` and call `document.set_tag_tree`.
 5. `fulgur-izp.6` onward: Add alt text, lists, tables, links, PDF/UA metadata,
-   validation, and public docs.
-
+   validation, and public docs until `--pdf-ua` is a credible conformance
+   mode rather than a syntactic tagged-PDF mode.
