@@ -14,6 +14,10 @@ All notable changes to this project will be documented in this file.
 
 - regenerate example PDFs
 
+### Release
+
+- v0.5.9
+
 ## [0.5.8] - 2026-04-22
 
 ### Bug Fixes
