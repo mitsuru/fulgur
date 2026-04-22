@@ -72,4 +72,18 @@ fs.mkdirSync(destDir, { recursive: true });
 fs.copyFileSync(src, dest);
 if (process.platform !== 'win32') {
   fs.chmodSync(dest, 0o755);
+} else {
+  // Windows: npm の bin フィールドは拡張子なし "bin/fulgur" を参照するため、
+  // .exe を起動する JS シムを書き込む
+  const shimPath = path.join(destDir, 'fulgur');
+  const shimContent = [
+    '#!/usr/bin/env node',
+    "'use strict';",
+    "const { spawnSync } = require('child_process');",
+    "const path = require('path');",
+    "const r = spawnSync(path.join(__dirname, 'fulgur.exe'), process.argv.slice(2), { stdio: 'inherit' });",
+    'process.exit(r.status ?? 1);',
+    '',
+  ].join('\n');
+  fs.writeFileSync(shimPath, shimContent, { encoding: 'utf8' });
 }
