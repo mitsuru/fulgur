@@ -11,6 +11,7 @@ pub mod convert;
 pub mod engine;
 pub mod error;
 pub mod gcpm;
+pub mod inspect;
 pub mod image;
 pub(crate) mod link;
 pub(crate) mod multicol_layout;
