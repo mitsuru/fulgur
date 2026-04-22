@@ -2,6 +2,18 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.5.9] - 2026-04-22
+
+### Bug Fixes
+
+- read fulgur.args in update-examples CI workflow
+- disable glob expansion when splitting fulgur.args lines
+- add registry-url to setup-node for npm trusted publishing
+
+### Miscellaneous
+
+- regenerate example PDFs
+
 ## [0.5.8] - 2026-04-22
 
 ### Bug Fixes
@@ -17,6 +29,10 @@ All notable changes to this project will be documented in this file.
 ### Testing
 
 - assert default producer contains no version number
+
+### Release
+
+- v0.5.8
 
 ## [0.5.7] - 2026-04-22
 
