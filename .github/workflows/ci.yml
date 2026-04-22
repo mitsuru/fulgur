@@ -71,6 +71,10 @@ jobs:
       - name: Configure mold linker
         if: matrix.mold
         run: echo "RUSTFLAGS=-C link-arg=-fuse-ld=mold" >> $GITHUB_ENV
+      - name: Configure lld-link linker (Windows)
+        if: runner.os == 'Windows'
+        shell: bash
+        run: echo "RUSTFLAGS=-C linker=lld-link" >> $GITHUB_ENV
       - name: Install cargo-llvm-cov
         if: matrix.coverage
         uses: taiki-e/install-action@88ada01c46e65c47040a0ae865537cc76fcd0e1c # cargo-llvm-cov
