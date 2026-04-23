@@ -391,3 +391,48 @@ fn write_summary(
     }
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::tempdir;
+
+    #[test]
+    fn run_list_returns_none_when_wpt_root_missing() {
+        let ws = tempdir().unwrap();
+        let expectations = ws.path().join("nonexistent.txt");
+        let out = run_list(ws.path(), "missing-wpt", &expectations, 96).unwrap();
+        assert!(out.is_none(), "expected Ok(None) when target/wpt is absent");
+    }
+
+    #[test]
+    fn execute_and_report_with_empty_tests_emits_empty_reports() {
+        let ws = tempdir().unwrap();
+        let outcome = execute_and_report(
+            ws.path(),
+            "empty-label",
+            Vec::new(),
+            ExpectationFile::default(),
+            96,
+        )
+        .unwrap();
+
+        assert_eq!(outcome.total, 0);
+        assert_eq!(outcome.pass, 0);
+        assert_eq!(outcome.fail, 0);
+        assert_eq!(outcome.skip, 0);
+        assert!(outcome.regressions.is_empty());
+        assert!(outcome.promotions.is_empty());
+        assert!(outcome.unknown.is_empty());
+        assert_eq!(outcome.subdir, "empty-label");
+
+        let report_dir = ws.path().join("target/wpt-report/empty-label");
+        assert!(report_dir.join("report.json").is_file());
+        assert!(report_dir.join("regressions.json").is_file());
+        assert!(report_dir.join("summary.md").is_file());
+
+        let summary = std::fs::read_to_string(report_dir.join("summary.md")).unwrap();
+        assert!(summary.contains("### WPT empty-label"));
+        assert!(summary.contains("- total: **0**"));
+    }
+}
