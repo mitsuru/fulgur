@@ -51,6 +51,22 @@ use crate::pageable::BreakInside;
 // Public types
 // ---------------------------------------------------------------------------
 
+/// The two states fulgur cares about for `break-after` / `page-break-after`.
+/// CSS Fragmentation `always` / `page` / `left` / `right` / `recto` / `verso`
+/// all collapse to `Page`; `auto` stays `Auto`; unknown values drop.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BreakAfterValue {
+    Auto,
+    Page,
+}
+
+/// The two states fulgur cares about for `break-before` / `page-break-before`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BreakBeforeValue {
+    Auto,
+    Page,
+}
+
 /// `column-rule-style` value. Only the three Phase A styles are modelled —
 /// `double`, `groove`, `ridge`, `inset`, and `outset` are Phase C and fall
 /// through to [`ColumnRuleStyle::None`] (rule is not drawn).
@@ -108,6 +124,10 @@ pub struct ColumnStyleProps {
     /// reason as the other fields: a later rule overwrites only the
     /// properties it declares (see [`merge`](Self::merge)).
     pub break_inside: Option<BreakInside>,
+    /// `break-after` / `page-break-after` resolved by the sniffer.
+    pub break_after: Option<BreakAfterValue>,
+    /// `break-before` / `page-break-before` resolved by the sniffer.
+    pub break_before: Option<BreakBeforeValue>,
 }
 
 impl ColumnStyleProps {
@@ -123,10 +143,20 @@ impl ColumnStyleProps {
         if other.break_inside.is_some() {
             self.break_inside = other.break_inside;
         }
+        if other.break_after.is_some() {
+            self.break_after = other.break_after;
+        }
+        if other.break_before.is_some() {
+            self.break_before = other.break_before;
+        }
     }
 
     fn is_empty(&self) -> bool {
-        self.rule.is_none() && self.fill.is_none() && self.break_inside.is_none()
+        self.rule.is_none()
+            && self.fill.is_none()
+            && self.break_inside.is_none()
+            && self.break_after.is_none()
+            && self.break_before.is_none()
     }
 }
 
@@ -425,6 +455,28 @@ fn parse_break_inside_value<'i>(
     }
 }
 
+fn parse_break_after_value<'i>(
+    input: &mut Parser<'i, '_>,
+) -> Result<BreakAfterValue, ParseError<'i, ()>> {
+    let ident = input.expect_ident()?.clone();
+    match ident.as_ref().to_ascii_lowercase().as_str() {
+        "always" | "page" | "left" | "right" | "recto" | "verso" => Ok(BreakAfterValue::Page),
+        "auto" => Ok(BreakAfterValue::Auto),
+        _ => Err(input.new_error(BasicParseErrorKind::QualifiedRuleInvalid)),
+    }
+}
+
+fn parse_break_before_value<'i>(
+    input: &mut Parser<'i, '_>,
+) -> Result<BreakBeforeValue, ParseError<'i, ()>> {
+    let ident = input.expect_ident()?.clone();
+    match ident.as_ref().to_ascii_lowercase().as_str() {
+        "always" | "page" | "left" | "right" | "recto" | "verso" => Ok(BreakBeforeValue::Page),
+        "auto" => Ok(BreakBeforeValue::Auto),
+        _ => Err(input.new_error(BasicParseErrorKind::QualifiedRuleInvalid)),
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Declaration block parser
 // ---------------------------------------------------------------------------
@@ -507,6 +559,18 @@ impl<'i, 'a> DeclarationParser<'i> for ColumnDeclParser<'a> {
             // so siblings keep applying.
             if let Ok(bi) = input.parse_entirely(parse_break_inside_value) {
                 self.props.break_inside = Some(bi);
+            }
+        } else if name.eq_ignore_ascii_case("break-after")
+            || name.eq_ignore_ascii_case("page-break-after")
+        {
+            if let Ok(v) = input.parse_entirely(parse_break_after_value) {
+                self.props.break_after = Some(v);
+            }
+        } else if name.eq_ignore_ascii_case("break-before")
+            || name.eq_ignore_ascii_case("page-break-before")
+        {
+            if let Ok(v) = input.parse_entirely(parse_break_before_value) {
+                self.props.break_before = Some(v);
             }
         } else {
             // Unknown property — discard its value tokens silently.
@@ -1347,6 +1411,62 @@ mod tests {
         let table = build_column_style_table(&doc, &rules);
         // Nothing matches `.mc`, so the table should be empty.
         assert!(table.is_empty());
+    }
+
+    // -------- inline-style helpers used by break-after / break-before tests ----
+
+    fn parse_inline_style(css: &str) -> ColumnStyleProps {
+        parse_declaration_block(css)
+    }
+
+    // -------- break-after (fulgur-lje5) --------
+
+    #[test]
+    fn parse_break_after_always_inline() {
+        let props = parse_inline_style("break-after: always");
+        assert_eq!(props.break_after, Some(BreakAfterValue::Page));
+    }
+
+    #[test]
+    fn parse_page_break_after_always_inline() {
+        let props = parse_inline_style("page-break-after: always");
+        assert_eq!(props.break_after, Some(BreakAfterValue::Page));
+    }
+
+    #[test]
+    fn parse_break_before_always_inline() {
+        let props = parse_inline_style("break-before: always");
+        assert_eq!(props.break_before, Some(BreakBeforeValue::Page));
+    }
+
+    #[test]
+    fn parse_page_break_before_always_inline() {
+        let props = parse_inline_style("page-break-before: always");
+        assert_eq!(props.break_before, Some(BreakBeforeValue::Page));
+    }
+
+    #[test]
+    fn parse_break_after_auto_is_auto() {
+        let props = parse_inline_style("break-after: auto");
+        assert_eq!(props.break_after, Some(BreakAfterValue::Auto));
+    }
+
+    #[test]
+    fn parse_break_after_invalid_is_silently_dropped() {
+        let props = parse_inline_style("break-after: banana");
+        assert_eq!(props.break_after, None);
+    }
+
+    #[test]
+    fn parse_break_after_via_selector() {
+        let rules = parse_stylesheet(".forced { break-after: page; }");
+        assert_eq!(rules[0].props.break_after, Some(BreakAfterValue::Page));
+    }
+
+    #[test]
+    fn parse_break_before_via_selector() {
+        let rules = parse_stylesheet(".forced { break-before: page; }");
+        assert_eq!(rules[0].props.break_before, Some(BreakBeforeValue::Page));
     }
 
     #[test]
