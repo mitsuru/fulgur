@@ -564,7 +564,8 @@ fn build_list_item_body(
         } else {
             // Inline root with no text and no inline pseudo images —
             // fall through to the non-inline-root path below.
-            let children: &[usize] = &node.children;
+            let layout_children_guard_1 = node.layout_children.borrow();
+            let children: &[usize] = layout_children_guard_1.as_deref().unwrap_or(&node.children);
             let positioned_children = collect_positioned_children(doc, children, ctx, depth);
             let (before_pseudo, after_pseudo) =
                 build_block_pseudo_images(doc, node, content_box, ctx.assets);
@@ -583,7 +584,8 @@ fn build_list_item_body(
             Box::new(block)
         }
     } else {
-        let children: &[usize] = &node.children;
+        let layout_children_guard_2 = node.layout_children.borrow();
+        let children: &[usize] = layout_children_guard_2.as_deref().unwrap_or(&node.children);
         let positioned_children = collect_positioned_children(doc, children, ctx, depth);
         let (before_pseudo, after_pseudo) =
             build_block_pseudo_images(doc, node, content_box, ctx.assets);
