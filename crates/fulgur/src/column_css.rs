@@ -45,27 +45,11 @@ use cssparser::{
     color::{parse_hash_color, parse_named_color},
 };
 
-use crate::pageable::BreakInside;
+use crate::pageable::{BreakAfter, BreakBefore, BreakInside};
 
 // ---------------------------------------------------------------------------
 // Public types
 // ---------------------------------------------------------------------------
-
-/// The two states fulgur cares about for `break-after` / `page-break-after`.
-/// CSS Fragmentation `always` / `page` / `left` / `right` / `recto` / `verso`
-/// all collapse to `Page`; `auto` stays `Auto`; unknown values drop.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum BreakAfterValue {
-    Auto,
-    Page,
-}
-
-/// The two states fulgur cares about for `break-before` / `page-break-before`.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum BreakBeforeValue {
-    Auto,
-    Page,
-}
 
 /// `column-rule-style` value. Only the three Phase A styles are modelled —
 /// `double`, `groove`, `ridge`, `inset`, and `outset` are Phase C and fall
@@ -125,9 +109,9 @@ pub struct ColumnStyleProps {
     /// properties it declares (see [`merge`](Self::merge)).
     pub break_inside: Option<BreakInside>,
     /// `break-after` / `page-break-after` resolved by the sniffer.
-    pub break_after: Option<BreakAfterValue>,
+    pub break_after: Option<BreakAfter>,
     /// `break-before` / `page-break-before` resolved by the sniffer.
-    pub break_before: Option<BreakBeforeValue>,
+    pub break_before: Option<BreakBefore>,
 }
 
 impl ColumnStyleProps {
@@ -457,22 +441,22 @@ fn parse_break_inside_value<'i>(
 
 fn parse_break_after_value<'i>(
     input: &mut Parser<'i, '_>,
-) -> Result<BreakAfterValue, ParseError<'i, ()>> {
+) -> Result<BreakAfter, ParseError<'i, ()>> {
     let ident = input.expect_ident()?.clone();
     match ident.as_ref().to_ascii_lowercase().as_str() {
-        "always" | "page" | "left" | "right" | "recto" | "verso" => Ok(BreakAfterValue::Page),
-        "auto" => Ok(BreakAfterValue::Auto),
+        "always" | "page" | "left" | "right" | "recto" | "verso" => Ok(BreakAfter::Page),
+        "auto" => Ok(BreakAfter::Auto),
         _ => Err(input.new_error(BasicParseErrorKind::QualifiedRuleInvalid)),
     }
 }
 
 fn parse_break_before_value<'i>(
     input: &mut Parser<'i, '_>,
-) -> Result<BreakBeforeValue, ParseError<'i, ()>> {
+) -> Result<BreakBefore, ParseError<'i, ()>> {
     let ident = input.expect_ident()?.clone();
     match ident.as_ref().to_ascii_lowercase().as_str() {
-        "always" | "page" | "left" | "right" | "recto" | "verso" => Ok(BreakBeforeValue::Page),
-        "auto" => Ok(BreakBeforeValue::Auto),
+        "always" | "page" | "left" | "right" | "recto" | "verso" => Ok(BreakBefore::Page),
+        "auto" => Ok(BreakBefore::Auto),
         _ => Err(input.new_error(BasicParseErrorKind::QualifiedRuleInvalid)),
     }
 }
@@ -1419,36 +1403,36 @@ mod tests {
         parse_declaration_block(css)
     }
 
-    // -------- break-after (fulgur-lje5) --------
+    // -------- break-after / page-break-after --------
 
     #[test]
     fn parse_break_after_always_inline() {
         let props = parse_inline_style("break-after: always");
-        assert_eq!(props.break_after, Some(BreakAfterValue::Page));
+        assert_eq!(props.break_after, Some(BreakAfter::Page));
     }
 
     #[test]
     fn parse_page_break_after_always_inline() {
         let props = parse_inline_style("page-break-after: always");
-        assert_eq!(props.break_after, Some(BreakAfterValue::Page));
+        assert_eq!(props.break_after, Some(BreakAfter::Page));
     }
 
     #[test]
     fn parse_break_before_always_inline() {
         let props = parse_inline_style("break-before: always");
-        assert_eq!(props.break_before, Some(BreakBeforeValue::Page));
+        assert_eq!(props.break_before, Some(BreakBefore::Page));
     }
 
     #[test]
     fn parse_page_break_before_always_inline() {
         let props = parse_inline_style("page-break-before: always");
-        assert_eq!(props.break_before, Some(BreakBeforeValue::Page));
+        assert_eq!(props.break_before, Some(BreakBefore::Page));
     }
 
     #[test]
     fn parse_break_after_auto_is_auto() {
         let props = parse_inline_style("break-after: auto");
-        assert_eq!(props.break_after, Some(BreakAfterValue::Auto));
+        assert_eq!(props.break_after, Some(BreakAfter::Auto));
     }
 
     #[test]
@@ -1460,13 +1444,23 @@ mod tests {
     #[test]
     fn parse_break_after_via_selector() {
         let rules = parse_stylesheet(".forced { break-after: page; }");
-        assert_eq!(rules[0].props.break_after, Some(BreakAfterValue::Page));
+        assert_eq!(rules[0].props.break_after, Some(BreakAfter::Page));
     }
+
+    // -------- break-before / page-break-before --------
 
     #[test]
     fn parse_break_before_via_selector() {
         let rules = parse_stylesheet(".forced { break-before: page; }");
-        assert_eq!(rules[0].props.break_before, Some(BreakBeforeValue::Page));
+        assert_eq!(rules[0].props.break_before, Some(BreakBefore::Page));
+    }
+
+    #[test]
+    fn parse_break_after_left_and_right_collapse_to_page() {
+        let p1 = parse_inline_style("break-after: left");
+        let p2 = parse_inline_style("break-after: right");
+        assert_eq!(p1.break_after, Some(BreakAfter::Page));
+        assert_eq!(p2.break_after, Some(BreakAfter::Page));
     }
 
     #[test]
