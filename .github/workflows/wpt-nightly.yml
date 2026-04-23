@@ -23,7 +23,7 @@ jobs:
           - phase: css-multicol
             test: wpt_css_multicol
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - name: Install poppler-utils
