@@ -83,9 +83,26 @@ pub fn run_phase(workspace_root: &Path, subdir: &str, dpi: u32) -> Result<Option
 
     let tests = collect_reftest_files(&dir)
         .with_context(|| format!("collect reftest files in {}", dir.display()))?;
+
+    let outcome = execute_and_report(workspace_root, subdir, tests, declared, dpi)?;
+    Ok(Some(outcome))
+}
+
+/// Iterate `tests`, judge each observed result against `declared`, and
+/// write `report.json` / `regressions.json` / `summary.md` under
+/// `target/wpt-report/<label>/`. Shared by `run_phase` (label = subdir)
+/// and `run_list` (label = list name).
+fn execute_and_report(
+    workspace_root: &Path,
+    label: &str,
+    tests: Vec<PathBuf>,
+    declared: ExpectationFile,
+    dpi: u32,
+) -> Result<PhaseOutcome> {
+    let wpt_root = workspace_root.join("target/wpt");
     let total = tests.len();
 
-    let report_dir = workspace_root.join("target/wpt-report").join(subdir);
+    let report_dir = workspace_root.join("target/wpt-report").join(label);
     std::fs::create_dir_all(&report_dir)?;
 
     let mut report = WptReport::new(RunInfo {
@@ -178,7 +195,7 @@ pub fn run_phase(workspace_root: &Path, subdir: &str, dpi: u32) -> Result<Option
     )?;
     write_summary(
         &report_dir,
-        subdir,
+        label,
         total,
         pass,
         fail,
@@ -190,15 +207,15 @@ pub fn run_phase(workspace_root: &Path, subdir: &str, dpi: u32) -> Result<Option
     )?;
 
     eprintln!(
-        "wpt-{subdir}: total={total} pass={pass} fail={fail} skip={skip} regressions={} promotions={} unknown={} ({:.1}s)",
+        "wpt-{label}: total={total} pass={pass} fail={fail} skip={skip} regressions={} promotions={} unknown={} ({:.1}s)",
         regressions.len(),
         promotions.len(),
         unknown.len(),
         elapsed.as_secs_f64(),
     );
 
-    Ok(Some(PhaseOutcome {
-        subdir: subdir.to_string(),
+    Ok(PhaseOutcome {
+        subdir: label.to_string(),
         total,
         pass,
         fail,
@@ -207,7 +224,7 @@ pub fn run_phase(workspace_root: &Path, subdir: &str, dpi: u32) -> Result<Option
         promotions,
         unknown,
         report_dir,
-    }))
+    })
 }
 
 fn poppler_available() -> bool {
@@ -245,7 +262,7 @@ fn panic_message(p: &Box<dyn std::any::Any + Send>) -> String {
 #[allow(clippy::too_many_arguments)]
 fn write_summary(
     dir: &Path,
-    subdir: &str,
+    label: &str,
     total: usize,
     pass: u32,
     fail: u32,
@@ -256,7 +273,7 @@ fn write_summary(
     elapsed: Duration,
 ) -> Result<()> {
     let mut f = std::fs::File::create(dir.join("summary.md"))?;
-    writeln!(f, "### WPT {subdir}")?;
+    writeln!(f, "### WPT {label}")?;
     writeln!(f)?;
     writeln!(
         f,
