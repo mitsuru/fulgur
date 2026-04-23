@@ -105,6 +105,17 @@ pub fn run_list(
     expectations_path: &Path,
     dpi: u32,
 ) -> Result<Option<PhaseOutcome>> {
+    // list_name ends up as a directory component under target/wpt-report/,
+    // so reject anything that could escape (path separators, parent refs)
+    // or otherwise produce surprising paths. A contract violation is a
+    // programming error — fail loud rather than silently skip.
+    if !is_safe_list_name(list_name) {
+        anyhow::bail!(
+            "invalid list_name `{list_name}`: must be [A-Za-z0-9_-]+ \
+             (used as a directory component under target/wpt-report/)"
+        );
+    }
+
     let wpt_root = workspace_root.join("target/wpt");
     if !wpt_root.is_dir() {
         eprintln!(
@@ -113,7 +124,9 @@ pub fn run_list(
         );
         return Ok(None);
     }
-    if !expectations_path.exists() {
+    // Require a regular file so passing a directory doesn't sneak past
+    // the skip precheck only to error later at load time.
+    if !expectations_path.is_file() {
         eprintln!(
             "skip: {} missing (list has no expectations file)",
             expectations_path.display()
@@ -133,7 +146,20 @@ pub fn run_list(
     let mut tests: Vec<PathBuf> = Vec::with_capacity(declared.len());
     let mut missing: Vec<String> = Vec::new();
     for rel in declared.paths() {
-        let abs = wpt_root.join(rel);
+        let rel_path = Path::new(rel);
+        // Reject entries that could escape wpt_root: absolute paths and
+        // any component that walks upward (`..`). These are declared as
+        // missing so subset.txt maintainers see a diagnostic instead of
+        // a silent traversal.
+        if rel_path.is_absolute()
+            || rel_path
+                .components()
+                .any(|c| matches!(c, std::path::Component::ParentDir))
+        {
+            missing.push(rel.to_string());
+            continue;
+        }
+        let abs = wpt_root.join(rel_path);
         if abs.is_file() {
             tests.push(abs);
         } else {
@@ -300,6 +326,16 @@ fn execute_and_report(
     })
 }
 
+/// list_name becomes a directory component under `target/wpt-report/` and
+/// part of the stderr verdict tag. Restrict it to a safe whitelist so no
+/// caller can produce path traversal or shell-surprising output.
+fn is_safe_list_name(name: &str) -> bool {
+    !name.is_empty()
+        && name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+}
+
 fn poppler_available() -> bool {
     std::process::Command::new("pdftocairo")
         .arg("-v")
@@ -434,5 +470,47 @@ mod tests {
         let summary = std::fs::read_to_string(report_dir.join("summary.md")).unwrap();
         assert!(summary.contains("### WPT empty-label"));
         assert!(summary.contains("- total: **0**"));
+    }
+
+    #[test]
+    fn run_list_rejects_unsafe_list_name() {
+        let ws = tempdir().unwrap();
+        let expectations = ws.path().join("nonexistent.txt");
+        let err = run_list(ws.path(), "../escape", &expectations, 96).unwrap_err();
+        assert!(
+            err.to_string().contains("invalid list_name"),
+            "expected bail on traversal-unsafe list_name, got: {err}"
+        );
+    }
+
+    #[test]
+    fn run_list_returns_none_when_expectations_is_a_directory() {
+        let ws = tempdir().unwrap();
+        // Satisfy the wpt_root guard so control reaches the expectations check.
+        std::fs::create_dir_all(ws.path().join("target/wpt")).unwrap();
+        let fake_expectations = ws.path().join("actually-a-dir");
+        std::fs::create_dir_all(&fake_expectations).unwrap();
+        let out = run_list(ws.path(), "dirtest", &fake_expectations, 96).unwrap();
+        assert!(
+            out.is_none(),
+            "expected Ok(None) when expectations_path is a directory (is_file() == false)"
+        );
+    }
+
+    #[test]
+    fn is_safe_list_name_accepts_valid_names() {
+        assert!(is_safe_list_name("bugs"));
+        assert!(is_safe_list_name("multicol-1"));
+        assert!(is_safe_list_name("multicol_1"));
+        assert!(is_safe_list_name("abc123"));
+    }
+
+    #[test]
+    fn is_safe_list_name_rejects_unsafe_names() {
+        assert!(!is_safe_list_name(""));
+        assert!(!is_safe_list_name("../escape"));
+        assert!(!is_safe_list_name("foo/bar"));
+        assert!(!is_safe_list_name("foo.bar"));
+        assert!(!is_safe_list_name("hello world"));
     }
 }
