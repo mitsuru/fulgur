@@ -35,10 +35,7 @@ updates:
       - dependencies
       - github-actions
     cooldown:
-      default-days: 3
-      semver-major-days: 14
-      semver-minor-days: 7
-      semver-patch-days: 3
+      default-days: 7
     groups:
       actions-minor-patch:
         update-types:
