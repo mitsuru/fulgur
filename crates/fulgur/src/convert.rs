@@ -770,7 +770,10 @@ fn convert_node_inner(
 
         let color = get_text_color(doc, node_id);
 
-        let children: &[usize] = &node.children;
+        let layout_children_guard_inside = node.layout_children.borrow();
+        let children: &[usize] = layout_children_guard_inside
+            .as_deref()
+            .unwrap_or(&node.children);
         if children.is_empty() {
             // Empty <li>: create a standalone paragraph with just the marker.
             // Try image marker first (list-style-image), then text fallback.
