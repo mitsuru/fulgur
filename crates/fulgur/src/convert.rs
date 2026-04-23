@@ -1068,7 +1068,11 @@ fn convert_node_inner(
         let (before_pseudo, after_pseudo) =
             build_block_pseudo_images(doc, node, content_box, ctx.assets);
         let has_pseudo = before_pseudo.is_some() || after_pseudo.is_some();
-        if style.needs_block_wrapper() || has_pseudo {
+        // Also upgrade to BlockPageable when the node carries pagination hints
+        // (break-after / break-before / break-inside). SpacerPageable does not
+        // implement `pagination()` so the hints would be silently lost.
+        let has_pagination_hints = ctx.column_styles.contains_key(&node.id);
+        if style.needs_block_wrapper() || has_pseudo || has_pagination_hints {
             let (opacity, visible) = extract_opacity_visible(node);
             let positioned_children =
                 wrap_with_block_pseudo_images(before_pseudo, after_pseudo, content_box, Vec::new());
