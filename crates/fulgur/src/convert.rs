@@ -1608,6 +1608,19 @@ fn build_absolute_pseudo_children(
                 //
                 // `x_in_pp` / `y_in_pp` are in the CB's padding-box frame
                 // (where CSS insets live).
+                //
+                // **Simplification**: when BOTH inset properties on an axis
+                // are `auto`, CSS 2.1 says the element takes its
+                // "static position" (where it would sit in normal flow).
+                // Computing that correctly requires tracking the pseudo's
+                // in-flow position before absolute hoisting, which fulgur
+                // does not yet do for pseudo-elements. We fall back to 0 —
+                // callers today always specify at least one inset (both
+                // WPT before-after-positioned-{002,003} tests specify
+                // `right`/`bottom`, and typical UI patterns like
+                // `::before { position:absolute; left:-9px; }` specify
+                // `left` or `right`). Deviation from spec is tracked
+                // alongside the rest of fulgur's position:absolute work.
                 let x_in_pp = if let Some(l) = left {
                     l
                 } else if let Some(r) = right {
