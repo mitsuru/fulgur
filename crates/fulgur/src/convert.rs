@@ -1325,6 +1325,22 @@ where
         block.wrap(width, height);
         block.layout_size = Some(Size { width, height });
         Box::new(block)
+    } else if ctx.column_styles.contains_key(&node.id) {
+        // No visual style, but has pagination hints (break-after/before/inside).
+        // Wrap in a transparent BlockPageable so the hints reach the paginator.
+        let inner = build_inner(width, height, opacity, visible);
+        let child = PositionedChild {
+            child: inner,
+            x: 0.0,
+            y: 0.0,
+        };
+        let mut block = BlockPageable::with_positioned_children(vec![child])
+            .with_pagination(extract_pagination_from_column_css(ctx, node))
+            .with_opacity(opacity)
+            .with_visible(visible);
+        block.wrap(width, height);
+        block.layout_size = Some(Size { width, height });
+        Box::new(block)
     } else {
         build_inner(width, height, opacity, visible)
     }
