@@ -2136,6 +2136,10 @@ impl Pageable for BookmarkMarkerWrapperPageable {
     fn is_visible(&self) -> bool {
         self.child.is_visible()
     }
+
+    fn has_forced_break_below(&self) -> bool {
+        self.child.has_forced_break_below()
+    }
 }
 
 // ─── StringSetPageable ──────────────────────────────────
@@ -2379,6 +2383,10 @@ impl Pageable for CounterOpWrapperPageable {
     fn is_visible(&self) -> bool {
         self.child.is_visible()
     }
+
+    fn has_forced_break_below(&self) -> bool {
+        self.child.has_forced_break_below()
+    }
 }
 
 // ─── TransformWrapperPageable ──────────────────────────────
@@ -2498,6 +2506,10 @@ impl Pageable for TransformWrapperPageable {
     fn is_visible(&self) -> bool {
         self.inner.is_visible()
     }
+
+    fn has_forced_break_below(&self) -> bool {
+        self.inner.has_forced_break_below()
+    }
 }
 
 // ─── StringSetWrapperPageable ──────────────────────────────
@@ -2582,6 +2594,10 @@ impl Pageable for StringSetWrapperPageable {
 
     fn is_visible(&self) -> bool {
         self.child.is_visible()
+    }
+
+    fn has_forced_break_below(&self) -> bool {
+        self.child.has_forced_break_below()
     }
 }
 
@@ -2669,6 +2685,10 @@ impl Pageable for RunningElementWrapperPageable {
 
     fn is_visible(&self) -> bool {
         self.child.is_visible()
+    }
+
+    fn has_forced_break_below(&self) -> bool {
+        self.child.has_forced_break_below()
     }
 }
 
@@ -2902,6 +2922,10 @@ impl Pageable for MulticolRulePageable {
     ) {
         self.child
             .collect_ids(x, y, avail_width, avail_height, registry);
+    }
+
+    fn has_forced_break_below(&self) -> bool {
+        self.child.has_forced_break_below()
     }
 }
 
@@ -3180,6 +3204,10 @@ impl Pageable for ListItemPageable {
         // block ids, so walk it at the same (x, y).
         self.body
             .collect_ids(x, y, avail_width, avail_height, registry);
+    }
+
+    fn has_forced_break_below(&self) -> bool {
+        self.body.has_forced_break_below()
     }
 }
 
@@ -3467,6 +3495,18 @@ impl Pageable for TablePageable {
             pc.child
                 .collect_ids(x + pc.x, y + pc.y, total_width, pc.child.height(), registry);
         }
+    }
+
+    fn has_forced_break_below(&self) -> bool {
+        self.header_cells.iter().any(|pc| {
+            pc.child.pagination().break_before == BreakBefore::Page
+                || pc.child.pagination().break_after == BreakAfter::Page
+                || pc.child.has_forced_break_below()
+        }) || self.body_cells.iter().any(|pc| {
+            pc.child.pagination().break_before == BreakBefore::Page
+                || pc.child.pagination().break_after == BreakAfter::Page
+                || pc.child.has_forced_break_below()
+        })
     }
 }
 
@@ -5000,6 +5040,136 @@ mod forced_break_below_tests {
             height: total_height,
         });
         body
+    }
+
+    /// Build a BlockPageable whose only child has `break-before: page`.
+    /// Used by wrapper propagation tests below.
+    fn make_inner_with_forced_break() -> Box<dyn Pageable> {
+        Box::new(make_body(
+            vec![make_block_pc(10.0, BreakBefore::Page, 0.0)],
+            10.0,
+        ))
+    }
+
+    /// Build a BlockPageable whose children have no forced break.
+    fn make_inner_without_forced_break() -> Box<dyn Pageable> {
+        Box::new(make_body(
+            vec![make_block_pc(10.0, BreakBefore::Auto, 0.0)],
+            10.0,
+        ))
+    }
+
+    #[test]
+    fn bookmark_marker_wrapper_propagates_forced_break() {
+        let marker = BookmarkMarkerPageable::new(1, "H1".into());
+        let wrapped =
+            BookmarkMarkerWrapperPageable::new(marker.clone(), make_inner_with_forced_break());
+        assert!(wrapped.has_forced_break_below());
+
+        let clean = BookmarkMarkerWrapperPageable::new(marker, make_inner_without_forced_break());
+        assert!(!clean.has_forced_break_below());
+    }
+
+    #[test]
+    fn counter_op_wrapper_propagates_forced_break() {
+        let ops = vec![crate::gcpm::CounterOp::Increment {
+            name: "page".into(),
+            value: 1,
+        }];
+        let wrapped = CounterOpWrapperPageable::new(ops.clone(), make_inner_with_forced_break());
+        assert!(wrapped.has_forced_break_below());
+
+        let clean = CounterOpWrapperPageable::new(ops, make_inner_without_forced_break());
+        assert!(!clean.has_forced_break_below());
+    }
+
+    #[test]
+    fn string_set_wrapper_propagates_forced_break() {
+        let markers = vec![StringSetPageable::new("title".into(), "X".into())];
+        let wrapped =
+            StringSetWrapperPageable::new(markers.clone(), make_inner_with_forced_break());
+        assert!(wrapped.has_forced_break_below());
+
+        let clean = StringSetWrapperPageable::new(markers, make_inner_without_forced_break());
+        assert!(!clean.has_forced_break_below());
+    }
+
+    #[test]
+    fn running_element_wrapper_propagates_forced_break() {
+        let markers = vec![RunningElementMarkerPageable::new("hdr".into(), 0)];
+        let wrapped =
+            RunningElementWrapperPageable::new(markers.clone(), make_inner_with_forced_break());
+        assert!(wrapped.has_forced_break_below());
+
+        let clean = RunningElementWrapperPageable::new(markers, make_inner_without_forced_break());
+        assert!(!clean.has_forced_break_below());
+    }
+
+    #[test]
+    fn list_item_propagates_forced_break_from_body() {
+        let wrapped = ListItemPageable {
+            marker: ListItemMarker::None,
+            marker_line_height: 0.0,
+            body: make_inner_with_forced_break(),
+            style: BlockStyle::default(),
+            width: 100.0,
+            height: 10.0,
+            opacity: 1.0,
+            visible: true,
+        };
+        assert!(wrapped.has_forced_break_below());
+
+        let clean = ListItemPageable {
+            marker: ListItemMarker::None,
+            marker_line_height: 0.0,
+            body: make_inner_without_forced_break(),
+            style: BlockStyle::default(),
+            width: 100.0,
+            height: 10.0,
+            opacity: 1.0,
+            visible: true,
+        };
+        assert!(!clean.has_forced_break_below());
+    }
+
+    #[test]
+    fn table_propagates_forced_break_from_cells() {
+        let body_cells = vec![PositionedChild {
+            child: make_inner_with_forced_break(),
+            x: 0.0,
+            y: 0.0,
+        }];
+        let wrapped = TablePageable {
+            header_cells: vec![],
+            body_cells,
+            header_height: 0.0,
+            style: BlockStyle::default(),
+            layout_size: None,
+            width: 100.0,
+            cached_height: 10.0,
+            opacity: 1.0,
+            visible: true,
+            id: None,
+        };
+        assert!(wrapped.has_forced_break_below());
+
+        let clean = TablePageable {
+            header_cells: vec![],
+            body_cells: vec![PositionedChild {
+                child: make_inner_without_forced_break(),
+                x: 0.0,
+                y: 0.0,
+            }],
+            header_height: 0.0,
+            style: BlockStyle::default(),
+            layout_size: None,
+            width: 100.0,
+            cached_height: 10.0,
+            opacity: 1.0,
+            visible: true,
+            id: None,
+        };
+        assert!(!clean.has_forced_break_below());
     }
 
     // Mirrors content-004: body contains [text_anon(y=0,h=15), div1(y=15,break_before=Page), div2(y=25,break_before=Page)]

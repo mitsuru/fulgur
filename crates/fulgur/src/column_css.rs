@@ -693,7 +693,7 @@ pub fn parse_selector_list(input: &str) -> Vec<ComplexSelector> {
                 just_saw_whitespace = false;
             }
             Token::Delim('+') => {
-                if current.parts.is_empty() {
+                if current.parts.is_empty() || prev_sibling.is_some() {
                     return Vec::new();
                 }
                 prev_sibling = Some(std::mem::take(&mut current));
@@ -1517,6 +1517,13 @@ mod tests {
     #[test]
     fn descendant_after_plus_drops_rule() {
         assert!(parse_selector_list("div + div .foo").is_empty());
+    }
+
+    /// `a + b + c` can't be represented by the one-leg ComplexSelector model,
+    /// so it must be dropped rather than silently degrading to `b + c`.
+    #[test]
+    fn chained_adjacent_sibling_drops_rule() {
+        assert!(parse_selector_list("div + p + span").is_empty());
     }
 
     // -------- matches_complex DOM behaviour --------
