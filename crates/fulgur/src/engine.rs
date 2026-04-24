@@ -86,6 +86,7 @@ impl Engine {
         let (mut doc, link_gcpm) = crate::blitz_adapter::parse_html_with_local_resources(
             &html,
             crate::convert::pt_to_px(self.config.content_width()),
+            crate::convert::pt_to_px(self.config.content_height()) as u32,
             fonts,
             self.base_path.as_deref(),
         );
@@ -281,6 +282,7 @@ impl Engine {
         let (mut doc, _link_gcpm) = crate::blitz_adapter::parse_html_with_local_resources(
             html,
             crate::convert::pt_to_px(self.config.content_width()),
+            crate::convert::pt_to_px(self.config.content_height()) as u32,
             fonts,
             self.base_path.as_deref(),
         );
