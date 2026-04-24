@@ -182,6 +182,9 @@ fn page_break_after_forces_split_when_both_fit_on_one_page() {
       <div class="first"></div>
       <div class="second"></div>
     </body></html>"#;
+    // PageSize::custom takes mm; 70.5556 mm × (72 / 25.4) ≈ 200 pt — matches @page rule.
+    // Both 80pt divs (160pt total) fit comfortably on this 200pt page, so the split
+    // is driven purely by the forced break, not by overflow.
     let engine = Engine::builder()
         .page_size(PageSize::custom(70.5556, 70.5556))
         .margin(Margin::uniform(0.0))
