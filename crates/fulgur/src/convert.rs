@@ -1978,7 +1978,9 @@ fn collect_table_cells(
         emit_orphan_bookmark_marker(node_id, x, y, ctx, out);
     }
 
-    for &child_id in &node.children {
+    let layout_children_guard = node.layout_children.borrow();
+    let effective_children = layout_children_guard.as_deref().unwrap_or(&node.children);
+    for &child_id in effective_children {
         let Some(child_node) = doc.get_node(child_id) else {
             continue;
         };
