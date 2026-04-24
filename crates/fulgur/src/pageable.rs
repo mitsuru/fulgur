@@ -928,7 +928,21 @@ impl BlockPageable {
             // page_height == 0.0 means `propagate_page_height` was never called
             // (defensive) — treat as "honour avoid, no fallback available".
             if self.page_height <= 0.0 || total_height <= self.page_height {
-                return SplitDecision::NoSplit;
+                // CSS Fragmentation Level 3 §5.4: forced breaks override break-inside: avoid.
+                // Check direct children and recurse into descendants before returning NoSplit.
+                let has_forced_break = self.children.iter().enumerate().any(|(i, pc)| {
+                    (pc.child.pagination().break_before == BreakBefore::Page && i > 0)
+                        || (pc.child.pagination().break_after == BreakAfter::Page
+                            && i < self.children.len() - 1)
+                        || {
+                            let child_avail = self.page_height - pc.y;
+                            child_avail > 0.0 && pc.child.split(0.0, child_avail).is_some()
+                        }
+                });
+                if !has_forced_break {
+                    return SplitDecision::NoSplit;
+                }
+                // Fall through — forced break overrides avoid.
             }
             // Fall through to normal splitting logic.
         }
