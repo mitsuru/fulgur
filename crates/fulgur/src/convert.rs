@@ -973,7 +973,8 @@ fn convert_node_inner(
             let (before_pseudo, after_pseudo) =
                 build_block_pseudo_images(doc, node, content_box, ctx.assets);
             let has_pseudo = before_pseudo.is_some() || after_pseudo.is_some();
-            if style.needs_block_wrapper() || has_pseudo {
+            let has_pagination_hints = ctx.column_styles.contains_key(&node.id);
+            if style.needs_block_wrapper() || has_pseudo || has_pagination_hints {
                 let (child_x, child_y) = style.content_inset();
                 // Propagate visibility to the inner paragraph — it's not a real CSS child
                 // but the node's own text content, so it must respect the node's visibility.
@@ -1167,6 +1168,7 @@ fn collect_positioned_children(
             && child_node.children.is_empty()
             && !node_has_block_pseudo_image(doc, child_node)
             && !node_has_inline_pseudo_image(doc, child_node)
+            && !ctx.column_styles.contains_key(&child_id)
         {
             emit_orphan_string_set_markers(child_id, cx, cy, ctx, &mut result);
             emit_counter_op_markers(child_id, cx, cy, ctx, &mut result);

@@ -940,8 +940,26 @@ impl BlockPageable {
         });
 
         let total_height = self.cached_size.map(|s| s.height).unwrap_or(0.0);
-        if total_height <= avail_height && !has_forced_break {
-            return SplitDecision::NoSplit;
+        // NOTE: We do not early-return NoSplit here even when total_height <= avail_height
+        // and !has_forced_break, because a descendant (not a direct child) may carry a
+        // forced break. The for loop below calls split() on each child so those inner
+        // forced breaks are detected. split() returns None quickly when there is nothing
+        // to split, keeping the overhead O(N) across the tree.
+        if total_height > avail_height || has_forced_break {
+            // Fall through to the loop below.
+        } else {
+            // No overflow and no direct-child forced breaks — check descendants.
+            let mut has_descendant_forced_break = false;
+            for pc in &self.children {
+                let child_avail = avail_height - pc.y;
+                if child_avail > 0.0 && pc.child.split(0.0, child_avail).is_some() {
+                    has_descendant_forced_break = true;
+                    break;
+                }
+            }
+            if !has_descendant_forced_break {
+                return SplitDecision::NoSplit;
+            }
         }
 
         for (i, pc) in self.children.iter().enumerate() {
@@ -961,6 +979,14 @@ impl BlockPageable {
                     return SplitDecision::NoSplit;
                 } else {
                     return SplitDecision::AtIndex(i.max(1));
+                }
+            } else {
+                // Child fits on this page, but may contain a descendant forced break.
+                let child_avail = avail_height - pc.y;
+                if child_avail > 0.0 {
+                    if let Some(parts) = pc.child.split(0.0, child_avail) {
+                        return SplitDecision::WithinChild(i, parts);
+                    }
                 }
             }
 
