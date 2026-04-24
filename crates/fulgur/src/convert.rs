@@ -1030,7 +1030,8 @@ fn convert_node_inner(
             let (before_pseudo, after_pseudo) =
                 build_block_pseudo_images(doc, node, content_box, ctx.assets);
             let has_pseudo = before_pseudo.is_some() || after_pseudo.is_some();
-            if style.needs_block_wrapper() || has_pseudo {
+            let has_pagination_hints = ctx.column_styles.contains_key(&node.id);
+            if style.needs_block_wrapper() || has_pseudo || has_pagination_hints {
                 let (child_x, child_y) = style.content_inset();
                 let paragraph_children = vec![PositionedChild {
                     child: Box::new(paragraph),
