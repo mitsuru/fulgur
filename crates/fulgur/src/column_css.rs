@@ -751,7 +751,10 @@ pub fn parse_selector_list(input: &str) -> Vec<ComplexSelector> {
             subject: std::mem::take(&mut current),
             prev_sibling: prev_sibling.take(),
         });
-    } else if selectors.is_empty() {
+    } else if selectors.is_empty() || prev_sibling.is_some() {
+        // Either the input was empty (no selectors accepted) or a trailing
+        // combinator like `.a, .b +` left `prev_sibling` without a subject.
+        // Either way, the whole list is invalid — drop it.
         return Vec::new();
     }
     selectors
@@ -1524,6 +1527,13 @@ mod tests {
     #[test]
     fn chained_adjacent_sibling_drops_rule() {
         assert!(parse_selector_list("div + p + span").is_empty());
+    }
+
+    /// Trailing `+` in a comma-separated list (`.a, .b +`) must invalidate
+    /// the whole list rather than silently returning only `.a`.
+    #[test]
+    fn trailing_plus_in_comma_list_drops_rule() {
+        assert!(parse_selector_list(".a, .b +").is_empty());
     }
 
     // -------- matches_complex DOM behaviour --------
