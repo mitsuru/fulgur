@@ -1429,15 +1429,61 @@ fn is_position_static(node: &Node) -> bool {
         .is_none_or(|s| matches!(s.get_box().clone_position(), Pos::Static))
 }
 
+/// Whether `node` is a `::before` / `::after` pseudo-element, detected by
+/// checking that its parent's `before` / `after` slot points back to it.
+///
+/// Blitz doesn't expose a direct "is pseudo" flag on `Node`; pseudo element
+/// nodes look like synthetic `<div>` / `<span>` elements. This helper is
+/// used to scope behavior that is only correct for pseudos — notably the
+/// `convert_inline_box_node` guard that suppresses absolutely-positioned
+/// pseudos so `build_absolute_pseudo_children` can re-emit them at the
+/// right place. Regular absolutely-positioned elements do not have a
+/// corresponding re-emit path yet and must fall through to
+/// `convert_node` instead of being silently dropped.
+fn is_pseudo_node(doc: &blitz_dom::BaseDocument, node: &Node) -> bool {
+    node.parent
+        .and_then(|pid| doc.get_node(pid))
+        .is_some_and(|p| p.before == Some(node.id) || p.after == Some(node.id))
+}
+
 /// Resolved containing block for an absolutely-positioned descendant.
+///
+/// Per CSS 2.1 §10.3.7 / §10.6.4, the CB for `position: absolute` is the
+/// **padding box** of the nearest positioned ancestor (or the initial CB
+/// at the root). Inset longhands (`top` / `right` / `bottom` / `left`)
+/// are resolved against the padding-box dimensions, and the resulting
+/// coordinates are in the padding-box frame. We carry the CB's
+/// `(border_left, border_top)` separately so callers can convert between
+/// the padding-box frame and the CB's border-box frame — which is the
+/// frame Taffy's `final_layout.location` values are expressed in.
 #[derive(Clone, Copy)]
 struct AbsCb {
-    /// CB dimensions in CSS px.
-    size: (f32, f32),
-    /// The descendant's (pseudo's) parent expressed in the CB's CSS-px frame.
-    /// We accumulate Taffy `final_layout.location` while climbing from the
-    /// parent up to the CB.
-    parent_offset_in_cb: (f32, f32),
+    /// Padding-box dimensions in CSS px.
+    padding_box_size: (f32, f32),
+    /// CB's `(border_left, border_top)` in CSS px. Padding-box origin
+    /// is offset by this amount from the CB's border-box origin.
+    border_top_left: (f32, f32),
+    /// Pseudo's parent expressed in the CB's border-box frame
+    /// (accumulated Taffy `final_layout.location` while climbing).
+    parent_offset_in_cb_bp: (f32, f32),
+}
+
+/// Compute `(padding_box_size, border_top_left)` for a CB node, both in
+/// CSS px. `extract_block_style` returns values in PDF pt (fulgur's
+/// internal convention), so we convert back to px because the rest of
+/// the absolute-positioning math — Taffy `final_layout`, stylo inset
+/// resolution — operates in px.
+fn cb_padding_box(node: &Node) -> ((f32, f32), (f32, f32)) {
+    let style = extract_block_style(node, None);
+    // border_widths = [top, right, bottom, left] in pt.
+    let bl_pt = style.border_widths[3];
+    let br_pt = style.border_widths[1];
+    let bt_pt = style.border_widths[0];
+    let bb_pt = style.border_widths[2];
+    let sz = node.final_layout.size;
+    let pb_w = (sz.width - pt_to_px(bl_pt + br_pt)).max(0.0);
+    let pb_h = (sz.height - pt_to_px(bt_pt + bb_pt)).max(0.0);
+    ((pb_w, pb_h), (pt_to_px(bl_pt), pt_to_px(bt_pt)))
 }
 
 /// Walk ancestors starting at `parent` (the absolutely-positioned descendant's
@@ -1459,20 +1505,22 @@ fn resolve_cb_for_absolute(doc: &blitz_dom::BaseDocument, parent: &Node) -> Opti
             break;
         };
         // `(offset_x, offset_y)` = `parent`'s position expressed in `cur`'s
-        // Taffy frame.
+        // Taffy frame (border-box-origin-relative).
         if !is_position_static(cur) {
-            let sz = cur.final_layout.size;
+            let (padding_box_size, border_top_left) = cb_padding_box(cur);
             return Some(AbsCb {
-                size: (sz.width, sz.height),
-                parent_offset_in_cb: (offset_x, offset_y),
+                padding_box_size,
+                border_top_left,
+                parent_offset_in_cb_bp: (offset_x, offset_y),
             });
         }
         if let Some(elem) = cur.element_data() {
             if elem.name.local.as_ref() == "body" {
-                let sz = cur.final_layout.size;
+                let (padding_box_size, border_top_left) = cb_padding_box(cur);
                 body_fallback = Some(AbsCb {
-                    size: (sz.width, sz.height),
-                    parent_offset_in_cb: (offset_x, offset_y),
+                    padding_box_size,
+                    border_top_left,
+                    parent_offset_in_cb_bp: (offset_x, offset_y),
                 });
             }
         }
@@ -1541,10 +1589,10 @@ fn build_absolute_pseudo_children(
         let (x_pt, y_pt) = if let Some(cb) = cb {
             // Resolve pseudo position against the real CB (body or nearest
             // positioned ancestor), then express relative to the pseudo's
-            // parent by subtracting `parent_offset_in_cb`.
+            // parent.
             if let Some(styles) = pseudo.primary_styles() {
                 let pos = styles.get_position();
-                let (cb_w, cb_h) = cb.size;
+                let (cb_w, cb_h) = cb.padding_box_size;
                 let pw = pseudo.final_layout.size.width;
                 let ph = pseudo.final_layout.size.height;
                 let left = resolve_inset_px(&pos.left, cb_w);
@@ -1557,22 +1605,31 @@ fn build_absolute_pseudo_children(
                 // `right` (LTR only — we don't support RTL yet) and `top`
                 // wins over `bottom`. Only when the start-side inset is
                 // `auto` does the end-side inset determine position.
-                let x_cb = if let Some(l) = left {
+                //
+                // `x_in_pp` / `y_in_pp` are in the CB's padding-box frame
+                // (where CSS insets live).
+                let x_in_pp = if let Some(l) = left {
                     l
                 } else if let Some(r) = right {
                     cb_w - pw - r
                 } else {
                     0.0
                 };
-                let y_cb = if let Some(t) = top {
+                let y_in_pp = if let Some(t) = top {
                     t
                 } else if let Some(b) = bottom {
                     cb_h - ph - b
                 } else {
                     0.0
                 };
-                let (ox, oy) = cb.parent_offset_in_cb;
-                (px_to_pt(x_cb - ox), px_to_pt(y_cb - oy))
+                // Convert padding-box frame → CB's border-box frame by
+                // adding CB's `(border_left, border_top)`, then subtract
+                // the parent's border-box offset in CB's frame to get the
+                // pseudo's position relative to its parent's border-box
+                // (which is what `PositionedChild` expects).
+                let (bl, bt) = cb.border_top_left;
+                let (ox, oy) = cb.parent_offset_in_cb_bp;
+                (px_to_pt(x_in_pp + bl - ox), px_to_pt(y_in_pp + bt - oy))
             } else {
                 let (x, y, _, _) = layout_in_pt(&pseudo.final_layout);
                 (x, y)
@@ -2316,13 +2373,23 @@ fn convert_inline_box_node(
     ctx: &mut ConvertContext<'_>,
     depth: usize,
 ) -> crate::paragraph::InlineBoxContent {
-    // Suppress inline drawing for `position: absolute` / `fixed` nodes —
-    // Parley places them at (0, 0) of the surrounding flow, which is wrong
-    // for out-of-flow elements. The containing block's converter picks them
-    // up separately via `build_absolute_pseudo_children` using Taffy's
-    // computed `final_layout.location`.
+    // This function processes an inline box emitted by Parley during
+    // paragraph layout. Per CSS, `position: absolute | fixed` elements are
+    // out of normal flow and should never appear in Parley's inline
+    // sequence, but Blitz currently routes absolutely-positioned pseudo
+    // elements (`::before` / `::after`) through Parley's inline layout
+    // anyway, which would paint them at `(0, 0)` of the surrounding flow.
+    //
+    // Suppress that rendering path ONLY for pseudos (detected by
+    // `is_pseudo_node`), because `build_absolute_pseudo_children` re-emits
+    // pseudos at the CSS-correct position by walking to the containing
+    // block. It does NOT handle regular (non-pseudo) absolute children —
+    // those have no re-emit path, so letting them fall through to
+    // `convert_node` at least preserves their content (even if they end up
+    // at Parley's inline position). Suppressing non-pseudos here would
+    // silently drop them, which is worse.
     if let Some(node) = doc.get_node(node_id) {
-        if is_absolutely_positioned(node) {
+        if is_absolutely_positioned(node) && is_pseudo_node(doc, node) {
             return Box::new(SpacerPageable::new(0.0));
         }
     }
