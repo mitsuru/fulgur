@@ -54,12 +54,20 @@ pub fn render_test(
         .map(|s| s.to_string_lossy().into_owned())
         .unwrap_or_default();
     let stale_needle = format!("{stem}-");
-    if let Ok(entries) = std::fs::read_dir(work_dir) {
-        for entry in entries.flatten() {
-            let p = entry.path();
-            let name = p.file_name().and_then(|s| s.to_str()).unwrap_or("");
-            if name.starts_with(&stale_needle) && name.ends_with(".png") {
-                let _ = std::fs::remove_file(&p);
+    // Propagate cleanup failures — a leftover PNG from a prior run would mix
+    // into the current page count and skew diff results, so we must fail loud
+    // rather than silently continue with stale data.
+    for entry in
+        std::fs::read_dir(work_dir).with_context(|| format!("read dir {}", work_dir.display()))?
+    {
+        let entry = entry.with_context(|| format!("read entry in {}", work_dir.display()))?;
+        let p = entry.path();
+        let name = p.file_name().and_then(|s| s.to_str()).unwrap_or("");
+        if name.starts_with(&stale_needle) && name.ends_with(".png") {
+            if let Err(e) = std::fs::remove_file(&p) {
+                if e.kind() != std::io::ErrorKind::NotFound {
+                    return Err(e).with_context(|| format!("remove stale PNG {}", p.display()));
+                }
             }
         }
     }

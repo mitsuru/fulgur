@@ -1285,10 +1285,10 @@ fn extract_block_id(node: &Node) -> Option<Arc<String>> {
 
 /// Build a [`Pagination`] for `node` from the fulgur-ftp column_css sniffer.
 ///
-/// Only `break-inside` flows through today — `break-before` / `break-after` /
-/// `orphans` / `widows` stay at their defaults (see
-/// [`Pagination::default`]). Absence of the node from `ctx.column_styles`
-/// collapses cleanly to [`BreakInside::Auto`], so every
+/// `break-inside` and `break-before` flow through today — `break-after` /
+/// `orphans` / `widows` stay at their defaults (see [`Pagination::default`]).
+/// Absence of the node from `ctx.column_styles` collapses cleanly to
+/// [`BreakInside::Auto`] / [`BreakBefore::Auto`], so every
 /// `BlockPageable::with_positioned_children` site can call this
 /// unconditionally without regressing the baseline behaviour that the
 /// existing test suite depends on.
