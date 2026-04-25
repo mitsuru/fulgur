@@ -1181,6 +1181,7 @@ fn collect_positioned_children(
             && child_effective_is_empty
             && !node_has_block_pseudo_image(doc, child_node)
             && !node_has_inline_pseudo_image(doc, child_node)
+            && !ctx.column_styles.contains_key(&child_id)
             && !node_has_absolute_pseudo(doc, child_node)
         {
             emit_orphan_string_set_markers(child_id, cx, cy, ctx, &mut result);
@@ -1285,10 +1286,9 @@ fn extract_block_id(node: &Node) -> Option<Arc<String>> {
 
 /// Build a [`Pagination`] for `node` from the fulgur-ftp column_css sniffer.
 ///
-/// `break-inside` and `break-before` flow through today — `break-after` /
-/// `orphans` / `widows` stay at their defaults (see [`Pagination::default`]).
-/// Absence of the node from `ctx.column_styles` collapses cleanly to
-/// [`BreakInside::Auto`] / [`BreakBefore::Auto`], so every
+/// Maps `break-inside`, `break-after`, and `break-before` from the column CSS
+/// props into [`Pagination`]. Absence of the node from `ctx.column_styles`
+/// collapses cleanly to the `Auto` variants, so every
 /// `BlockPageable::with_positioned_children` site can call this
 /// unconditionally without regressing the baseline behaviour that the
 /// existing test suite depends on.
@@ -1296,10 +1296,11 @@ fn extract_pagination_from_column_css(
     ctx: &ConvertContext<'_>,
     node: &Node,
 ) -> crate::pageable::Pagination {
-    use crate::pageable::{BreakBefore, BreakInside, Pagination};
+    use crate::pageable::{BreakAfter, BreakBefore, BreakInside, Pagination};
     let props = ctx.column_styles.get(&node.id).copied().unwrap_or_default();
     Pagination {
         break_inside: props.break_inside.unwrap_or(BreakInside::Auto),
+        break_after: props.break_after.unwrap_or(BreakAfter::Auto),
         break_before: props.break_before.unwrap_or(BreakBefore::Auto),
         ..Pagination::default()
     }
@@ -1357,7 +1358,8 @@ where
         // Replaced element with no visual style but a non-default Pagination
         // (e.g. `<img style="break-before: page">`): wrap in a thin
         // BlockPageable so paginate() honours the break.
-        let inner = build_inner(width, height, opacity, visible);
+        // Match the styled branch: the wrapper owns opacity, the inner keeps visibility.
+        let inner = build_inner(width, height, 1.0, visible);
         let child = PositionedChild {
             child: inner,
             x: 0.0,
@@ -1365,6 +1367,7 @@ where
         };
         let mut block = BlockPageable::with_positioned_children(vec![child])
             .with_pagination(pagination)
+            .with_opacity(opacity)
             .with_visible(visible)
             .with_id(extract_block_id(node));
         block.wrap(width, height);
