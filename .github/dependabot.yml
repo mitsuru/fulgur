@@ -37,6 +37,14 @@ updates:
     cooldown:
       default-days: 7
     groups:
+      actions-artifact:
+        patterns:
+          - "actions/upload-artifact"
+          - "actions/download-artifact"
+        update-types:
+          - major
+          - minor
+          - patch
       actions-minor-patch:
         update-types:
           - minor
