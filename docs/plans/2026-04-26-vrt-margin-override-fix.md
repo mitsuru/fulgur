@@ -219,7 +219,7 @@ Expected: ビルド成功 (warning なし)
 **Step 3: lib テストが全部 pass することを確認**
 
 Run: `cargo test -p fulgur-vrt --lib 2>&1 | tail -10`
-Expected: 18 tests passing (元の 17 + 新規 1)
+Expected: 19 tests passing (元の 17 + Task 1 で +1、Task 2 で +1)
 
 **Step 4: Commit**
 
