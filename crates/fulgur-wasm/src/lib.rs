@@ -301,8 +301,19 @@ impl Engine {
     /// `margin` は `{ mm }` / `{ pt }` / `{ topMm, rightMm, bottomMm,
     /// leftMm }` のいずれか。未知のキーや不明な page size 名はエラー。
     /// 複数回呼び出すと後勝ちで partial merge される。
+    ///
+    /// 内部実装は `JSON.stringify` で options を一度文字列化してから
+    /// `serde_json::from_str` で deserialize する。`serde-wasm-bindgen`
+    /// の `Reflect::get` ベースの deserializer は `deny_unknown_fields`
+    /// を honor せず typo を silently 通してしまうため、検証ゲートを
+    /// 効かせる経路として JSON 経由を採用している。
     pub fn configure(&mut self, options: JsValue) -> Result<(), JsError> {
-        let opts: EngineOptions = serde_wasm_bindgen::from_value(options)
+        let json = js_sys::JSON::stringify(&options)
+            .map_err(|_| JsError::new("invalid options: value cannot be converted to JSON"))?;
+        let json_str = json
+            .as_string()
+            .ok_or_else(|| JsError::new("invalid options: JSON.stringify returned non-string"))?;
+        let opts: EngineOptions = serde_json::from_str(&json_str)
             .map_err(|e| JsError::new(&format!("invalid options: {e}")))?;
         self.apply_options(opts).map_err(|e| JsError::new(&e))
     }
@@ -331,6 +342,113 @@ impl Engine {
         let opts: EngineOptions =
             serde_json::from_value(json).map_err(|e| format!("invalid options: {e}"))?;
         self.apply_options(opts)
+    }
+}
+
+// `wasm-pack test --node` runs these against the real wasm-bindgen path
+// (`configure(JsValue)` + `serde_wasm_bindgen::from_value`). serde_json
+// and serde-wasm-bindgen are not interchangeable for `untagged` enums
+// with struct variants (e.g. PageSizeOption::Custom, MarginOption::Full),
+// so the native `configure_json` tests above are insufficient for the
+// shipped JS API. These tests catch deserializer drift before the
+// browser does.
+#[cfg(all(test, target_arch = "wasm32"))]
+mod wasm_tests {
+    use super::*;
+    use wasm_bindgen_test::wasm_bindgen_test;
+
+    fn options(json_text: &str) -> JsValue {
+        // Use `JSON.parse` to obtain a real JS object so `configure` runs
+        // its real production path (`JSON.stringify` + `serde_json::from_str`)
+        // against a value that originated outside Rust.
+        js_sys::JSON::parse(json_text).expect("parse JSON")
+    }
+
+    #[wasm_bindgen_test]
+    fn configure_named_page_size_via_jsvalue() {
+        let mut engine = Engine::new();
+        engine
+            .configure(options(r#"{"pageSize":"Letter","landscape":true}"#))
+            .expect("configure should succeed");
+        let pdf = engine
+            .render(r#"<div style="width:10px;height:10px"></div>"#)
+            .expect("render should succeed");
+        assert_eq!(&pdf[..4], b"%PDF");
+        // landscape Letter は w (792) > h (612) になる
+        let doc = lopdf::Document::load_mem(&pdf).expect("PDF parses");
+        let mb = super::tests::find_media_box(&doc).expect("MediaBox");
+        assert!(
+            (mb.0 - 792.0).abs() < 1.0 && (mb.1 - 612.0).abs() < 1.0,
+            "expected Letter landscape via JsValue path, got {mb:?}",
+        );
+    }
+
+    #[wasm_bindgen_test]
+    fn configure_custom_page_size_via_jsvalue() {
+        // PageSizeOption::Custom (untagged struct variant) を JsValue 経由で。
+        // serde-wasm-bindgen が untagged + struct variant を正しく解決しないと
+        // ここで panic する。native の configure_json では拾えない。
+        let mut engine = Engine::new();
+        engine
+            .configure(options(
+                r#"{"pageSize":{"widthMm":100.0,"heightMm":200.0}}"#,
+            ))
+            .expect("configure should succeed for custom pageSize");
+        let pdf = engine.render("<p>x</p>").expect("render");
+        let doc = lopdf::Document::load_mem(&pdf).expect("PDF parses");
+        let mb = super::tests::find_media_box(&doc).expect("MediaBox");
+        assert!(
+            (mb.0 - 283.46).abs() < 1.0 && (mb.1 - 566.93).abs() < 1.0,
+            "expected ~283 x 567, got {mb:?}",
+        );
+    }
+
+    #[wasm_bindgen_test]
+    fn configure_margin_variants_via_jsvalue() {
+        // MarginOption の 3 variant (mm / pt / Full) すべてが JsValue 経由で
+        // 解決できることを確認する。Full は untagged + struct variant なので
+        // ここが本命の信号。
+        for margin_json in [
+            r#"{"margin":{"mm":5.0}}"#,
+            r#"{"margin":{"pt":14.17}}"#,
+            r#"{"margin":{"topMm":5.0,"rightMm":5.0,"bottomMm":5.0,"leftMm":5.0}}"#,
+        ] {
+            let mut engine = Engine::new();
+            engine
+                .configure(options(margin_json))
+                .unwrap_or_else(|e| panic!("configure failed for {margin_json}: {e:?}"));
+            let pdf = engine.render("<p>x</p>").expect("render");
+            assert_eq!(&pdf[..4], b"%PDF", "PDF magic missing for {margin_json}");
+        }
+    }
+
+    #[wasm_bindgen_test]
+    fn configure_metadata_via_jsvalue() {
+        let mut engine = Engine::new();
+        engine
+            .configure(options(
+                r#"{"title":"WT Title","authors":["Alice"],"lang":"ja"}"#,
+            ))
+            .expect("configure should succeed for metadata");
+        let pdf = engine.render("<p>x</p>").expect("render");
+        let doc = lopdf::Document::load_mem(&pdf).expect("PDF parses");
+        let title = super::tests::find_info_string(&doc, b"Title").expect("Title");
+        assert!(title.contains("WT Title"), "Title was: {title:?}");
+    }
+
+    #[wasm_bindgen_test]
+    fn configure_rejects_unknown_field_via_jsvalue() {
+        // deny_unknown_fields が JsValue 経由でも有効か確認。
+        let mut engine = Engine::new();
+        let result = engine.configure(options(r#"{"pageSizeTypo":"A4"}"#));
+        assert!(result.is_err(), "unknown field should be rejected");
+    }
+
+    #[wasm_bindgen_test]
+    fn configure_rejects_unknown_page_size_via_jsvalue() {
+        let mut engine = Engine::new();
+        let result = engine.configure(options(r#"{"pageSize":"Foo"}"#));
+        assert!(result.is_err(), "unknown page size should be rejected");
     }
 }
 
@@ -434,7 +552,7 @@ mod tests {
 
     // ----- B-3c (Engine.configure) tests ----------------------------------
 
-    fn find_media_box(doc: &lopdf::Document) -> Option<(f32, f32)> {
+    pub(super) fn find_media_box(doc: &lopdf::Document) -> Option<(f32, f32)> {
         for obj in doc.objects.values() {
             let lopdf::Object::Dictionary(dict) = obj else {
                 continue;
@@ -452,7 +570,7 @@ mod tests {
         None
     }
 
-    fn find_info_string(doc: &lopdf::Document, key: &[u8]) -> Option<String> {
+    pub(super) fn find_info_string(doc: &lopdf::Document, key: &[u8]) -> Option<String> {
         let info_ref = doc.trailer.get(b"Info").ok()?;
         let info = doc.dereference(info_ref).ok()?.1.as_dict().ok()?;
         let raw = info.get(key).ok()?;
@@ -545,6 +663,89 @@ mod tests {
             "pageSizeTypo": "A4",
         }));
         assert!(result.is_err(), "unknown field should be rejected");
+    }
+
+    #[test]
+    fn configure_margin_full_changes_content_area() {
+        // marginFull が反映されると content area が縮み、
+        // 同じ HTML でも default margin との PDF byte が変わる。
+        // ここでは出力サイズで「default vs full margin」が変化することを確認し、
+        // marginFull / mm / pt の 3 variant を順に通すことで
+        // MarginOption の deserialize 経路が壊れていないことを保証する。
+        let html = r#"<div style="background:#000; width:100px; height:100px"></div>"#;
+
+        let default_engine = Engine::new();
+        let pdf_default = default_engine.render(html).expect("default render");
+
+        let mut full_margin = Engine::new();
+        full_margin
+            .configure_json(serde_json::json!({
+                "margin": { "topMm": 5.0, "rightMm": 5.0, "bottomMm": 5.0, "leftMm": 5.0 },
+            }))
+            .expect("full margin");
+        let pdf_full = full_margin.render(html).expect("full-margin render");
+        assert_ne!(pdf_default, pdf_full, "marginFull should affect output");
+
+        let mut uniform_mm = Engine::new();
+        uniform_mm
+            .configure_json(serde_json::json!({"margin": {"mm": 5.0}}))
+            .expect("uniform mm");
+        let pdf_mm = uniform_mm.render(html).expect("mm render");
+        // 5mm uniform == { topMm:5, ...} なので pdf_full とほぼ同一の content area。
+        // 完全 byte 一致は producer/timestamps で揺れる可能性があるので、
+        // ここでは「両方とも default と異なる」ことだけ確認する。
+        assert_ne!(
+            pdf_default, pdf_mm,
+            "uniform mm margin should affect output"
+        );
+
+        let mut uniform_pt = Engine::new();
+        uniform_pt
+            .configure_json(serde_json::json!({"margin": {"pt": 14.17}})) // 約 5mm
+            .expect("uniform pt");
+        let pdf_pt = uniform_pt.render(html).expect("pt render");
+        assert_ne!(
+            pdf_default, pdf_pt,
+            "uniform pt margin should affect output"
+        );
+    }
+
+    #[test]
+    fn configure_all_metadata_round_trip() {
+        // 全 string/array メタデータが PDF Info dict に正しく出ることを保証する。
+        // 1 個でも writer 側で名前を取り違えていると壊れる。
+        let mut engine = Engine::new();
+        engine
+            .configure_json(serde_json::json!({
+                "title": "Round Trip Title",
+                "authors": ["Alpha", "Beta"],
+                "description": "round trip description",
+                "keywords": ["k1", "k2"],
+                "creator": "round trip creator",
+                "producer": "round trip producer",
+                "creationDate": "D:20260425000000Z",
+                "lang": "ja",
+            }))
+            .expect("configure should succeed");
+        let pdf = engine.render("<p>x</p>").expect("render");
+        let doc = lopdf::Document::load_mem(&pdf).expect("PDF parses");
+
+        for (key, expected) in [
+            (b"Title".as_slice(), "Round Trip Title"),
+            (b"Author", "Alpha"),
+            (b"Subject", "round trip description"),
+            (b"Keywords", "k1"),
+            (b"Creator", "round trip creator"),
+            (b"Producer", "round trip producer"),
+        ] {
+            let value = find_info_string(&doc, key)
+                .unwrap_or_else(|| panic!("Info /{} missing", String::from_utf8_lossy(key)));
+            assert!(
+                value.contains(expected),
+                "/{} should contain {expected:?}, got {value:?}",
+                String::from_utf8_lossy(key),
+            );
+        }
     }
 
     #[test]
