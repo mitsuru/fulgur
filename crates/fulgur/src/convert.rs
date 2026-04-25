@@ -1690,16 +1690,22 @@ fn build_absolute_pseudo_children(
         //     the parent is itself positioned.
         //   - `position: absolute` + static parent → walk to nearest
         //     positioned ancestor, else body.
-        //   - `position: absolute` + positioned parent → Taffy's
-        //     `pseudo.final_layout.location` is already correct
-        //     (Blitz/Taffy used the correct parent as CB); skip our
-        //     own resolution and honor Taffy.
+        //   - `position: absolute` + positioned parent → parent IS the CB;
+        //     construct an `AbsCb` from the parent directly so inset
+        //     resolution can correct for textless `content:url(...)`
+        //     pseudos whose `final_layout.size` is `(0, 0)` (Taffy gives
+        //     a wrong location for `right` / `bottom` in that case).
         let cb = if is_position_fixed(pseudo) {
             *cb_fixed.get_or_insert_with(|| resolve_cb_for_absolute(doc, node, true))
         } else if parent_is_static {
             *cb_absolute.get_or_insert_with(|| resolve_cb_for_absolute(doc, node, false))
         } else {
-            None
+            let (padding_box_size, border_top_left) = cb_padding_box(node);
+            Some(AbsCb {
+                padding_box_size,
+                border_top_left,
+                parent_offset_in_cb_bp: (0.0, 0.0),
+            })
         };
         let (x_pt, y_pt) = if let Some(cb) = cb {
             // Resolve pseudo position against the real CB (body or nearest
@@ -1708,8 +1714,15 @@ fn build_absolute_pseudo_children(
             if let Some(styles) = pseudo.primary_styles() {
                 let pos = styles.get_position();
                 let (cb_w, cb_h) = cb.padding_box_size;
-                let pw = pseudo.final_layout.size.width;
-                let ph = pseudo.final_layout.size.height;
+                // `right` / `bottom` resolve against the pseudo's effective
+                // size (`cb_w - pw - r` etc). For textless `content:url(...)`
+                // pseudos Taffy leaves `final_layout.size` at `(0, 0)` and
+                // the real size only materializes inside `build_pseudo_image`,
+                // so reading `final_layout` here would shift the pseudo by
+                // its own width/height. `effective_pseudo_size_px` consults
+                // the same fallback `build_absolute_pseudo_child` uses so
+                // both stay in sync.
+                let (pw, ph) = effective_pseudo_size_px(pseudo, node, Some(cb), ctx.assets);
                 let left = resolve_inset_px(&pos.left, cb_w);
                 let right = resolve_inset_px(&pos.right, cb_w);
                 let top = resolve_inset_px(&pos.top, cb_h);
@@ -1801,32 +1814,82 @@ fn build_absolute_pseudo_child(
     ctx: &mut ConvertContext<'_>,
     depth: usize,
 ) -> Box<dyn Pageable> {
-    if crate::blitz_adapter::extract_content_image_url(pseudo).is_some() {
-        let pseudo_style = extract_block_style(pseudo, ctx.assets);
-        if !pseudo_style.has_visual_style() {
-            // CSS spec: percentage `width` / `height` on an absolutely-
-            // positioned element resolve against the CB's padding-box.
-            // - cb=Some: we already resolved the CB → use its padding-box.
-            // - cb=None: parent is the CB; approximate with the parent's
-            //   border-box dims (in CSS px). This is an approximation —
-            //   percentage width/height on an absolute pseudo whose parent
-            //   has padding would resolve slightly off — but absolute pseudos
-            //   with `content:url(...)` typically use pixel sizing, so the
-            //   common case is handled correctly.
-            let (basis_w_px, basis_h_px) = if let Some(cb) = cb {
-                cb.padding_box_size
-            } else {
-                (
-                    parent.final_layout.size.width,
-                    parent.final_layout.size.height,
-                )
-            };
-            if let Some(img) = build_pseudo_image(pseudo, basis_w_px, basis_h_px, ctx.assets) {
-                return Box::new(img);
-            }
-        }
+    if let Some(img) = try_build_absolute_pseudo_image(pseudo, parent, cb, ctx.assets) {
+        return Box::new(img);
     }
     convert_node(doc, pseudo_id, ctx, depth + 1)
+}
+
+/// Shortcut for the textless `content: url(...)` abs pseudo case shared by
+/// both child construction (`build_absolute_pseudo_child`) and inset
+/// resolution (`effective_pseudo_size_px`). Returns `None` when the pseudo
+/// is not a content:url shape, has visual style that requires the wrapping
+/// path, or `build_pseudo_image` itself returns `None`.
+///
+/// `cb` must be the same value the caller will use for inset resolution so
+/// the size and position stay in sync.
+fn try_build_absolute_pseudo_image(
+    pseudo: &Node,
+    parent: &Node,
+    cb: Option<AbsCb>,
+    assets: Option<&AssetBundle>,
+) -> Option<ImagePageable> {
+    crate::blitz_adapter::extract_content_image_url(pseudo)?;
+    let pseudo_style = extract_block_style(pseudo, assets);
+    if pseudo_style.has_visual_style() {
+        return None;
+    }
+    // CSS spec: percentage `width` / `height` on an absolutely-positioned
+    // element resolve against the CB's padding-box.
+    // - cb=Some: we already resolved the CB → use its padding-box.
+    // - cb=None: parent is the CB; approximate with the parent's border-box
+    //   dims. Percentage width/height on an absolute pseudo whose parent has
+    //   padding resolves slightly off, but content:url() pseudos typically
+    //   use pixel sizing so the common case is handled correctly.
+    //
+    // `build_pseudo_image` expects `parent_*` arguments in PDF pt (it runs
+    // them back through `pt_to_px` to set the percentage basis).
+    // `AbsCb::padding_box_size` and Taffy's `final_layout.size` are both in
+    // CSS px, so convert before calling.
+    let (basis_w_pt, basis_h_pt) = if let Some(cb) = cb {
+        let (w_px, h_px) = cb.padding_box_size;
+        (px_to_pt(w_px), px_to_pt(h_px))
+    } else {
+        (
+            px_to_pt(parent.final_layout.size.width),
+            px_to_pt(parent.final_layout.size.height),
+        )
+    };
+    build_pseudo_image(pseudo, basis_w_pt, basis_h_pt, assets)
+}
+
+/// Effective `(width, height)` of `pseudo` in CSS px, for inset resolution.
+///
+/// Taffy's `final_layout.size` is `(0, 0)` for textless `content:url(...)`
+/// pseudos (Blitz limitation documented in `build_pseudo_image`). Naively
+/// using it for `right` / `bottom` resolution makes the pseudo land at
+/// `cb_w - 0 - r = cb_w - r` instead of `cb_w - img_w - r`, shifting the
+/// pseudo by its own width.
+///
+/// We mirror the same shortcut `build_absolute_pseudo_child` takes for the
+/// child Pageable so the inset basis matches the rendered size. For pseudos
+/// where the shortcut does not apply (text content, visual style + content
+/// url, etc.), Taffy's `final_layout.size` is reliable and we use it
+/// directly.
+fn effective_pseudo_size_px(
+    pseudo: &Node,
+    parent: &Node,
+    cb: Option<AbsCb>,
+    assets: Option<&AssetBundle>,
+) -> (f32, f32) {
+    let layout = pseudo.final_layout.size;
+    if layout.width > 0.0 || layout.height > 0.0 {
+        return (layout.width, layout.height);
+    }
+    if let Some(img) = try_build_absolute_pseudo_image(pseudo, parent, cb, assets) {
+        return (pt_to_px(img.width), pt_to_px(img.height));
+    }
+    (layout.width, layout.height)
 }
 
 /// Orchestrator that combines block-pseudo-image wrapping with absolute
