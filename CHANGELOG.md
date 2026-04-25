@@ -2,6 +2,30 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.6.0] - 2026-04-25
+
+<!-- Release notes generated using configuration in .github/release.yml at main -->
+
+### Features
+* feat(fulgur-wasm): wasm-bindgen wrapper crate + browser demo (scope 3 B-1) by @mitsuru in https://github.com/fulgur-rs/fulgur/pull/208
+* feat(fulgur-wasm): add Engine builder mirror with add_font (B-2) by @mitsuru in https://github.com/fulgur-rs/fulgur/pull/209
+* feat(fulgur-wasm): CSS / image bridge (B-3a) by @mitsuru in https://github.com/fulgur-rs/fulgur/pull/210
+* feat(fulgur-wasm): pass page size / metadata from JS via Engine.configure (B-3c) by @mitsuru in https://github.com/fulgur-rs/fulgur/pull/211
+* feat(wasm-demo): preview rendered PDF in-page via pdf.js by @mitsuru in https://github.com/fulgur-rs/fulgur/pull/212
+### Bug Fixes
+* fix(convert): correct y-coordinate for display:inline-block (fulgur-z2ho) by @mitsuru in https://github.com/fulgur-rs/fulgur/pull/190
+* fix(pageable): honour break-before:page in inline-root blocks (WPT content-004/005/006) by @mitsuru in https://github.com/fulgur-rs/fulgur/pull/194
+* fix(fulgur): paint position:absolute pseudo-elements at their CSS-resolved position by @mitsuru in https://github.com/fulgur-rs/fulgur/pull/192
+* fix(fulgur-lje5): wire CSS page-break-after/before to BreakAfter/BreakBefore by @mitsuru in https://github.com/fulgur-rs/fulgur/pull/188
+* fix(pageable): keep grid cell backgrounds/borders across page breaks (fulgur-86fo) by @mitsuru in https://github.com/fulgur-rs/fulgur/pull/205
+### Documentation
+* docs: coordinate system and unit conversion rules by @mitsuru in https://github.com/fulgur-rs/fulgur/pull/191
+* docs: record tagged PDF Krilla API design by @mitsuru in https://github.com/fulgur-rs/fulgur/pull/143
+* docs(release): document ZeroVer policy + skip_bindings + release-notes labels by @mitsuru in https://github.com/fulgur-rs/fulgur/pull/214
+
+
+**Full Changelog**: https://github.com/fulgur-rs/fulgur/compare/v0.5.14...v0.6.0
+
 ## [0.5.14] - 2026-04-23
 
 ### Bug Fixes
