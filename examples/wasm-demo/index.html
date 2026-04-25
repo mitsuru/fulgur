@@ -114,11 +114,13 @@
       const html = document.getElementById("html").value;
       const t0 = performance.now();
       try {
-        const titleValue = titleEl.value.trim();
+        // engine.configure は partial merge セマンティクス
+        // (key 省略 = 維持) なので、title は常に渡す。条件分岐で
+        // 省略すると、一度入力後に空に戻しても前回 title が残る。
         engine.configure({
           pageSize: pageSizeEl.value,
           landscape: landscapeEl.checked,
-          ...(titleValue ? { title: titleValue } : {}),
+          title: titleEl.value.trim(),
         });
         const bytes = engine.render(html);
         const elapsed = (performance.now() - t0).toFixed(1);
