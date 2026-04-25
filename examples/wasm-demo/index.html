@@ -121,19 +121,28 @@
     let pdfjsPromise = null;
     function loadPdfjs() {
       if (!pdfjsPromise) {
-        pdfjsPromise = import(`${PDFJS_BASE}/pdf.mjs`).then((mod) => {
-          mod.GlobalWorkerOptions.workerSrc = `${PDFJS_BASE}/pdf.worker.mjs`;
-          return mod;
-        });
+        pdfjsPromise = import(`${PDFJS_BASE}/pdf.mjs`)
+          .then((mod) => {
+            mod.GlobalWorkerOptions.workerSrc = `${PDFJS_BASE}/pdf.worker.mjs`;
+            return mod;
+          })
+          .catch((err) => {
+            // Reset cache so a transient CDN failure can be retried.
+            pdfjsPromise = null;
+            throw err;
+          });
       }
       return pdfjsPromise;
     }
 
     async function renderPreview(bytes) {
       const pdfjs = await loadPdfjs();
+      // Read width before clearing: `#preview:empty { display: none }` makes
+      // clientWidth go to 0 the moment we replaceChildren().
+      const containerWidth =
+        previewEl.clientWidth || previewEl.parentElement?.clientWidth || 720;
       previewEl.replaceChildren();
       const pdf = await pdfjs.getDocument({ data: bytes }).promise;
-      const containerWidth = previewEl.clientWidth || 720;
       const dpr = window.devicePixelRatio || 1;
       for (let i = 1; i <= pdf.numPages; i++) {
         const page = await pdf.getPage(i);
