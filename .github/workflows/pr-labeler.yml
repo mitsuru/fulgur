@@ -1,0 +1,65 @@
+name: PR Labeler
+
+on:
+  pull_request_target:
+    types: [opened, edited]
+
+permissions:
+  pull-requests: write
+  contents: read
+
+jobs:
+  label:
+    if: github.event.pull_request.state == 'open'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/github-script@v7
+        with:
+          script: |
+            const pr = context.payload.pull_request;
+            const title = pr.title || '';
+            const labels = pr.labels.map(l => l.name);
+
+            if (labels.some(l => l.startsWith('release-notes:'))) {
+              core.info(`PR #${pr.number} already has a release-notes:* label, skipping.`);
+              return;
+            }
+
+            if (/^release:/i.test(title)) {
+              core.info(`PR #${pr.number} has release: prefix, skipping.`);
+              return;
+            }
+
+            const m = title.match(/^([a-zA-Z]+)(?:\([^)]+\))?!?:/);
+            if (!m) {
+              core.info(`PR #${pr.number} has no conventional commits prefix: ${title}`);
+              return;
+            }
+            const type = m[1].toLowerCase();
+
+            const map = {
+              feat: 'release-notes:feature',
+              fix: 'release-notes:fix',
+              docs: 'release-notes:docs',
+              chore: 'release-notes:internal',
+              test: 'release-notes:internal',
+              ci: 'release-notes:internal',
+              refactor: 'release-notes:internal',
+              style: 'release-notes:internal',
+              build: 'release-notes:internal',
+              perf: 'release-notes:internal',
+            };
+
+            const label = map[type];
+            if (!label) {
+              core.info(`PR #${pr.number} has unmapped type "${type}", skipping.`);
+              return;
+            }
+
+            await github.rest.issues.addLabels({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: pr.number,
+              labels: [label],
+            });
+            core.info(`Added ${label} to PR #${pr.number}`);
