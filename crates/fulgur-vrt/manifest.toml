@@ -56,3 +56,6 @@ path = "svg/shapes.html"
 
 [[fixture]]
 path = "layout/review_card_inline_block.html"
+
+[[fixture]]
+path = "bugs/grid-row-promote-background.html"

@@ -116,6 +116,19 @@ callers don't get this guarantee by default — see the tracking issue
   - Short version: **touch fd 1 only from a crate that can guarantee
     single-threaded semantics**. That's CLI today; bindings are
     multi-threaded by design and must leave fd 1 alone.
+- **Worktree sparse-checkout**: `git worktree add` inherits a `/.beads/`-only
+  sparse-checkout pattern, which makes `git add` refuse modifications to
+  source files (`paths ... outside of your sparse-checkout definition`).
+  Two ways to deal with this:
+  - Right after `git worktree add <path> -b <branch>`, run
+    `git -C <path> sparse-checkout disable`. This is the recommended fix —
+    it sets `core.sparseCheckout=false` for that worktree only.
+  - If you've already started work and only need a one-off commit, use
+    `git add --sparse <files>` to force the index update.
+  The `EnterWorktree` tool's PostToolUse hook in `.claude/settings.json`
+  handles this automatically when it's used to enter a worktree, but
+  Bash-driven `git worktree add` (used by the `using-git-worktrees` skill)
+  doesn't trigger that hook.
 - Use `BTreeMap` (not `HashMap`) for iteration that affects PDF output (determinism)
 - Blitz: `!important` unreliable, `padding-top` on inline roots ignored (use `margin-top`)
 - `cargo fmt --check` enforced by CI
