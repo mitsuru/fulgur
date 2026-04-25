@@ -383,3 +383,14 @@ cargo clippy --workspace --all-targets -- -D warnings 2>&1 | tail -20
 **REQUIRED SUB-SKILL:** superpowers:finishing-a-development-branch
 
 ブランチ完了処理 (PR 作成 or merge オプション提示)。
+
+---
+
+## Implementation note (post-execution)
+
+実装時、VRT fixture の名前を以下のように変更した:
+
+- 計画時: `crates/fulgur-vrt/fixtures/bugs/grid-cells-background.html` (Task 4)
+- 実装時: `crates/fulgur-vrt/fixtures/bugs/grid-row-promote-background.html`
+
+理由: bug の本質が「grid 行内で parallel sibling が次ページへ promote された際に背景が消える」であり、ファイル名で「row promote」を明示した方が将来の読み手 (人間 / AI レビュアー) にとって意図が伝わりやすいため。`manifest.toml` のエントリも同名に統一済み。
