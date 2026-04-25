@@ -19,15 +19,17 @@
   <h1>fulgur WASM demo</h1>
   <p class="note">
     Browser-side HTML &rarr; PDF rendering, no server required.
-    This is the B-2 step (font bridge) &mdash; Noto Sans Regular is
-    fetched from <code>../.fonts/</code> and registered via
-    <code>Engine.add_font</code>. CSS resources, images, and richer
-    options follow in B-3.
+    This is the B-3a step (CSS + image bridge) &mdash; Noto Sans Regular,
+    <code>style.css</code>, and <code>icon.png</code> are fetched from the
+    static server and registered via <code>Engine.add_font</code> /
+    <code>add_css</code> / <code>add_image</code>. Page-size, metadata,
+    bundle-size and CJK fallback follow in B-3b+.
   </p>
 
   <label for="html">HTML input</label>
-  <textarea id="html"><style>body { font-family: 'Noto Sans'; }</style>
-<h1>Hello World</h1></textarea>
+  <textarea id="html"><h1>Hello World</h1>
+<p class="subtitle">CSS + image bridge demo (B-3a)</p>
+<img class="icon" src="icon.png" alt="icon"></textarea>
   <p>
     <button id="render" disabled>Loading WASM&hellip;</button>
   </p>
@@ -44,21 +46,45 @@
       statusEl.className = kind ?? "";
     }
 
+    async function fetchBytes(url) {
+      const response = await fetch(url);
+      if (!response.ok) {
+        throw new Error(`fetch ${url} failed: ${response.status}`);
+      }
+      return new Uint8Array(await response.arrayBuffer());
+    }
+
+    async function fetchText(url) {
+      const response = await fetch(url);
+      if (!response.ok) {
+        throw new Error(`fetch ${url} failed: ${response.status}`);
+      }
+      return await response.text();
+    }
+
     let engine;
 
     try {
       await init();
-      setStatus("Loading font…", "");
-      const fontResponse = await fetch("../.fonts/NotoSans-Regular.ttf");
-      if (!fontResponse.ok) {
-        throw new Error(`Font fetch failed: ${fontResponse.status}`);
-      }
-      const fontBytes = new Uint8Array(await fontResponse.arrayBuffer());
+      setStatus("Loading assets…", "");
+
+      const [fontBytes, cssText, iconBytes] = await Promise.all([
+        fetchBytes("../.fonts/NotoSans-Regular.ttf"),
+        fetchText("./style.css"),
+        fetchBytes("../image/icon.png"),
+      ]);
+
       engine = new Engine();
       engine.add_font(fontBytes);
+      engine.add_css(cssText);
+      engine.add_image("icon.png", iconBytes);
+
       button.disabled = false;
       button.textContent = "Render PDF";
-      setStatus("WASM ready (Noto Sans Regular registered).", "ok");
+      setStatus(
+        "WASM ready (font + style.css + icon.png registered).",
+        "ok"
+      );
     } catch (e) {
       setStatus(`Failed to initialise: ${e}`, "error");
       throw e;

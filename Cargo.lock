@@ -1145,6 +1145,7 @@ name = "fulgur-wasm"
 version = "0.5.14"
 dependencies = [
  "fulgur",
+ "lopdf",
  "wasm-bindgen",
 ]
 
