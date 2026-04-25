@@ -17,13 +17,20 @@ jobs:
         with:
           script: |
             const pr = context.payload.pull_request;
-            const title = pr.title || '';
-            const labels = pr.labels.map(l => l.name);
+            const action = context.payload.action;
+            const titleChanged = !!context.payload.changes?.title;
 
-            if (labels.some(l => l.startsWith('release-notes:'))) {
-              core.info(`PR #${pr.number} already has a release-notes:* label, skipping.`);
+            // On `edited`, only act when the title actually changed.
+            // This preserves manual label overrides applied via the UI:
+            // editing a label or PR body alone won't reclassify the PR.
+            if (action === 'edited' && !titleChanged) {
+              core.info(`PR #${pr.number}: edited without title change, skipping.`);
               return;
             }
+
+            const title = pr.title || '';
+            const labels = pr.labels.map(l => l.name);
+            const existing = labels.filter(l => l.startsWith('release-notes:'));
 
             if (/^release:/i.test(title)) {
               core.info(`PR #${pr.number} has release: prefix, skipping.`);
@@ -50,9 +57,14 @@ jobs:
               perf: 'release-notes:internal',
             };
 
-            const label = map[type];
-            if (!label) {
+            const desired = map[type];
+            if (!desired) {
               core.info(`PR #${pr.number} has unmapped type "${type}", skipping.`);
+              return;
+            }
+
+            if (existing.length === 1 && existing[0] === desired) {
+              core.info(`PR #${pr.number} already has ${desired}, skipping.`);
               return;
             }
 
@@ -60,6 +72,25 @@ jobs:
               owner: context.repo.owner,
               repo: context.repo.repo,
               issue_number: pr.number,
-              labels: [label],
+              labels: [desired],
             });
-            core.info(`Added ${label} to PR #${pr.number}`);
+            core.info(`Added ${desired} to PR #${pr.number}`);
+
+            for (const stale of existing) {
+              if (stale === desired) continue;
+              try {
+                await github.rest.issues.removeLabel({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: pr.number,
+                  name: stale,
+                });
+                core.info(`Removed stale ${stale} from PR #${pr.number}`);
+              } catch (err) {
+                if (err.status === 404) {
+                  core.info(`Label ${stale} already absent on PR #${pr.number}`);
+                } else {
+                  throw err;
+                }
+              }
+            }
