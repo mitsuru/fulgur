@@ -232,8 +232,23 @@ pub fn render_to_pdf_with_gcpm(
     running_store: &RunningElementStore,
     font_data: &[Arc<Vec<u8>>],
 ) -> Result<Vec<u8>> {
-    let content_width = config.content_width();
-    let content_height = config.content_height();
+    // Resolve the default (no-selector) CSS @page margin for initial pagination.
+    // :first/:left/:right overrides are applied per-page during rendering below.
+    let default_page_rules: Vec<_> = gcpm
+        .page_settings
+        .iter()
+        .filter(|r| r.page_selector.is_none())
+        .cloned()
+        .collect();
+    let (init_size, init_margin, init_landscape) =
+        crate::gcpm::page_settings::resolve_page_settings(&default_page_rules, 1, 0, config);
+    let init_size = if init_landscape {
+        init_size.landscape()
+    } else {
+        init_size
+    };
+    let content_width = init_size.width - init_margin.left - init_margin.right;
+    let content_height = init_size.height - init_margin.top - init_margin.bottom;
 
     // Pass 1: paginate body content
     let pages = paginate(root, content_width, content_height);
@@ -592,4 +607,189 @@ fn escape_attr(s: &str) -> String {
 /// Used to build margin-box CSS where running elements need to be visible.
 fn strip_display_none(css: &str) -> String {
     css.replace("display: none", "").replace("display:none", "")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // --- escape_attr ---
+
+    #[test]
+    fn escape_attr_no_special_chars() {
+        assert_eq!(escape_attr("plain text"), "plain text");
+    }
+
+    #[test]
+    fn escape_attr_ampersand() {
+        assert_eq!(escape_attr("foo&bar"), "foo&amp;bar");
+    }
+
+    #[test]
+    fn escape_attr_double_quote() {
+        assert_eq!(escape_attr(r#"foo"bar"#), "foo&quot;bar");
+    }
+
+    #[test]
+    fn escape_attr_less_than() {
+        assert_eq!(escape_attr("foo<bar"), "foo&lt;bar");
+    }
+
+    #[test]
+    fn escape_attr_greater_than() {
+        assert_eq!(escape_attr("foo>bar"), "foo&gt;bar");
+    }
+
+    #[test]
+    fn escape_attr_all_specials_combined() {
+        assert_eq!(
+            escape_attr(r#"<"a" & "b">"#),
+            "&lt;&quot;a&quot; &amp; &quot;b&quot;&gt;"
+        );
+    }
+
+    #[test]
+    fn escape_attr_empty_string() {
+        assert_eq!(escape_attr(""), "");
+    }
+
+    // --- strip_display_none ---
+
+    #[test]
+    fn strip_display_none_spaced_variant() {
+        let css = ".x { display: none; color: red; }";
+        let result = strip_display_none(css);
+        assert!(
+            !result.contains("display: none"),
+            "should remove 'display: none'"
+        );
+        assert!(
+            result.contains("color: red"),
+            "should preserve other properties"
+        );
+    }
+
+    #[test]
+    fn strip_display_none_unspaced_variant() {
+        let css = ".x { display:none; margin: 0; }";
+        let result = strip_display_none(css);
+        assert!(
+            !result.contains("display:none"),
+            "should remove 'display:none'"
+        );
+        assert!(
+            result.contains("margin: 0"),
+            "should preserve other properties"
+        );
+    }
+
+    #[test]
+    fn strip_display_none_no_match_is_noop() {
+        let css = "body { color: blue; }";
+        assert_eq!(strip_display_none(css), css);
+    }
+
+    #[test]
+    fn strip_display_none_both_variants_in_same_string() {
+        let css = "a { display: none; } b { display:none; }";
+        let result = strip_display_none(css);
+        assert!(!result.contains("display: none"));
+        assert!(!result.contains("display:none"));
+    }
+
+    // --- width_key ---
+
+    #[test]
+    fn width_key_matches_to_bits() {
+        let w = 42.5_f32;
+        assert_eq!(width_key(w), w.to_bits());
+    }
+
+    #[test]
+    fn width_key_distinct_values_differ() {
+        assert_ne!(width_key(1.0), width_key(2.0));
+    }
+
+    #[test]
+    fn width_key_zero() {
+        assert_eq!(width_key(0.0_f32), 0_f32.to_bits());
+    }
+
+    // --- parse_datetime ---
+
+    #[test]
+    fn parse_datetime_valid_year_only() {
+        assert!(parse_datetime("2024").is_some());
+    }
+
+    #[test]
+    fn parse_datetime_valid_year_month() {
+        assert!(parse_datetime("2024-06").is_some());
+    }
+
+    #[test]
+    fn parse_datetime_valid_year_month_day() {
+        assert!(parse_datetime("2024-06-15").is_some());
+    }
+
+    #[test]
+    fn parse_datetime_valid_full_datetime() {
+        assert!(parse_datetime("2024-06-15T10:30:45").is_some());
+    }
+
+    #[test]
+    fn parse_datetime_valid_full_datetime_with_z() {
+        assert!(parse_datetime("2024-06-15T10:30:45Z").is_some());
+    }
+
+    #[test]
+    fn parse_datetime_valid_midnight() {
+        assert!(parse_datetime("2024-01-01T00:00:00").is_some());
+    }
+
+    #[test]
+    fn parse_datetime_valid_hour_only_in_time() {
+        // only hour field present in time part → still valid
+        assert!(parse_datetime("2024-01-01T12").is_some());
+    }
+
+    #[test]
+    fn parse_datetime_valid_hour_minute_in_time() {
+        assert!(parse_datetime("2024-01-01T12:30").is_some());
+    }
+
+    #[test]
+    fn parse_datetime_invalid_empty_string() {
+        assert!(parse_datetime("").is_none());
+    }
+
+    #[test]
+    fn parse_datetime_invalid_non_numeric_year() {
+        assert!(parse_datetime("abcd").is_none());
+    }
+
+    #[test]
+    fn parse_datetime_invalid_non_numeric_month() {
+        assert!(parse_datetime("2024-ab").is_none());
+    }
+
+    #[test]
+    fn parse_datetime_invalid_non_numeric_day() {
+        assert!(parse_datetime("2024-06-ab").is_none());
+    }
+
+    #[test]
+    fn parse_datetime_invalid_non_numeric_hour() {
+        assert!(parse_datetime("2024-06-15Tabc:30:45").is_none());
+    }
+
+    #[test]
+    fn parse_datetime_invalid_non_numeric_minute() {
+        assert!(parse_datetime("2024-06-15T10:abc:45").is_none());
+    }
+
+    #[test]
+    fn parse_datetime_invalid_non_numeric_second() {
+        assert!(parse_datetime("2024-06-15T10:30:abc").is_none());
+    }
 }

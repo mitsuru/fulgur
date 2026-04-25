@@ -489,7 +489,11 @@ fn build_list_item_body(
             let (before_pseudo, after_pseudo) =
                 build_block_pseudo_images(doc, node, content_box, ctx.assets);
             let has_pseudo = before_pseudo.is_some() || after_pseudo.is_some();
-            if style.needs_block_wrapper() || has_pseudo {
+            let pagination = extract_pagination_from_column_css(ctx, node);
+            let needs_wrapper = style.needs_block_wrapper()
+                || has_pseudo
+                || pagination != crate::pageable::Pagination::default();
+            if needs_wrapper {
                 let (child_x, child_y) = style.content_inset();
                 let mut p = paragraph;
                 p.visible = visible;
@@ -505,7 +509,7 @@ fn build_list_item_body(
                     paragraph_children,
                 );
                 let mut block = BlockPageable::with_positioned_children(children)
-                    .with_pagination(extract_pagination_from_column_css(ctx, node))
+                    .with_pagination(pagination)
                     .with_style(style)
                     .with_visible(visible)
                     .with_id(extract_block_id(node));
@@ -537,7 +541,11 @@ fn build_list_item_body(
             let (before_pseudo, after_pseudo) =
                 build_block_pseudo_images(doc, node, content_box, ctx.assets);
             let has_pseudo = before_pseudo.is_some() || after_pseudo.is_some();
-            if style.needs_block_wrapper() || has_pseudo {
+            let pagination = extract_pagination_from_column_css(ctx, node);
+            if style.needs_block_wrapper()
+                || has_pseudo
+                || pagination != crate::pageable::Pagination::default()
+            {
                 let (child_x, child_y) = style.content_inset();
                 let paragraph_children = vec![PositionedChild {
                     child: Box::new(paragraph),
@@ -551,7 +559,7 @@ fn build_list_item_body(
                     paragraph_children,
                 );
                 let mut block = BlockPageable::with_positioned_children(children)
-                    .with_pagination(extract_pagination_from_column_css(ctx, node))
+                    .with_pagination(pagination)
                     .with_style(style)
                     .with_visible(visible)
                     .with_id(extract_block_id(node));
@@ -564,7 +572,8 @@ fn build_list_item_body(
         } else {
             // Inline root with no text and no inline pseudo images —
             // fall through to the non-inline-root path below.
-            let children: &[usize] = &node.children;
+            let layout_children_guard_1 = node.layout_children.borrow();
+            let children: &[usize] = layout_children_guard_1.as_deref().unwrap_or(&node.children);
             let positioned_children = collect_positioned_children(doc, children, ctx, depth);
             let (before_pseudo, after_pseudo) =
                 build_block_pseudo_images(doc, node, content_box, ctx.assets);
@@ -583,7 +592,8 @@ fn build_list_item_body(
             Box::new(block)
         }
     } else {
-        let children: &[usize] = &node.children;
+        let layout_children_guard_2 = node.layout_children.borrow();
+        let children: &[usize] = layout_children_guard_2.as_deref().unwrap_or(&node.children);
         let positioned_children = collect_positioned_children(doc, children, ctx, depth);
         let (before_pseudo, after_pseudo) =
             build_block_pseudo_images(doc, node, content_box, ctx.assets);
@@ -768,7 +778,10 @@ fn convert_node_inner(
 
         let color = get_text_color(doc, node_id);
 
-        let children: &[usize] = &node.children;
+        let layout_children_guard_inside = node.layout_children.borrow();
+        let children: &[usize] = layout_children_guard_inside
+            .as_deref()
+            .unwrap_or(&node.children);
         if children.is_empty() {
             // Empty <li>: create a standalone paragraph with just the marker.
             // Try image marker first (list-style-image), then text fallback.
@@ -973,8 +986,11 @@ fn convert_node_inner(
             let (before_pseudo, after_pseudo) =
                 build_block_pseudo_images(doc, node, content_box, ctx.assets);
             let has_pseudo = before_pseudo.is_some() || after_pseudo.is_some();
-            let has_pagination_hints = ctx.column_styles.contains_key(&node.id);
-            if style.needs_block_wrapper() || has_pseudo || has_pagination_hints {
+            let pagination = extract_pagination_from_column_css(ctx, node);
+            if style.needs_block_wrapper()
+                || has_pseudo
+                || pagination != crate::pageable::Pagination::default()
+            {
                 let (child_x, child_y) = style.content_inset();
                 // Propagate visibility to the inner paragraph — it's not a real CSS child
                 // but the node's own text content, so it must respect the node's visibility.
@@ -993,7 +1009,7 @@ fn convert_node_inner(
                     paragraph_children,
                 );
                 let mut block = BlockPageable::with_positioned_children(children)
-                    .with_pagination(extract_pagination_from_column_css(ctx, node))
+                    .with_pagination(pagination)
                     .with_style(style)
                     .with_opacity(opacity)
                     .with_visible(visible)
@@ -1030,8 +1046,11 @@ fn convert_node_inner(
             let (before_pseudo, after_pseudo) =
                 build_block_pseudo_images(doc, node, content_box, ctx.assets);
             let has_pseudo = before_pseudo.is_some() || after_pseudo.is_some();
-            let has_pagination_hints = ctx.column_styles.contains_key(&node.id);
-            if style.needs_block_wrapper() || has_pseudo || has_pagination_hints {
+            let pagination = extract_pagination_from_column_css(ctx, node);
+            if style.needs_block_wrapper()
+                || has_pseudo
+                || pagination != crate::pageable::Pagination::default()
+            {
                 let (child_x, child_y) = style.content_inset();
                 let paragraph_children = vec![PositionedChild {
                     child: Box::new(paragraph),
@@ -1045,7 +1064,7 @@ fn convert_node_inner(
                     paragraph_children,
                 );
                 let mut block = BlockPageable::with_positioned_children(children)
-                    .with_pagination(extract_pagination_from_column_css(ctx, node))
+                    .with_pagination(pagination)
                     .with_style(style)
                     .with_opacity(opacity)
                     .with_visible(visible)
@@ -1059,7 +1078,8 @@ fn convert_node_inner(
         // Fall through: inline root with no text and no inline pseudo images
     }
 
-    let children: &[usize] = &node.children;
+    let layout_children_guard = node.layout_children.borrow();
+    let children: &[usize] = layout_children_guard.as_deref().unwrap_or(&node.children);
 
     if children.is_empty() {
         let style = extract_block_style(node, ctx.assets);
@@ -1070,16 +1090,16 @@ fn convert_node_inner(
         let (before_pseudo, after_pseudo) =
             build_block_pseudo_images(doc, node, content_box, ctx.assets);
         let has_pseudo = before_pseudo.is_some() || after_pseudo.is_some();
-        // Also upgrade to BlockPageable when the node carries pagination hints
-        // (break-after / break-before / break-inside). SpacerPageable does not
-        // implement `pagination()` so the hints would be silently lost.
-        let has_pagination_hints = ctx.column_styles.contains_key(&node.id);
-        if style.needs_block_wrapper() || has_pseudo || has_pagination_hints {
+        let pagination = extract_pagination_from_column_css(ctx, node);
+        if style.needs_block_wrapper()
+            || has_pseudo
+            || pagination != crate::pageable::Pagination::default()
+        {
             let (opacity, visible) = extract_opacity_visible(node);
             let positioned_children =
                 wrap_with_block_pseudo_images(before_pseudo, after_pseudo, content_box, Vec::new());
             let mut block = BlockPageable::with_positioned_children(positioned_children)
-                .with_pagination(extract_pagination_from_column_css(ctx, node))
+                .with_pagination(pagination)
                 .with_style(style)
                 .with_opacity(opacity)
                 .with_visible(visible)
@@ -1164,9 +1184,16 @@ fn collect_positioned_children(
         // branch can emit it. Without this, `<span class="icon"></span>`
         // + `span::before { content: url(...); display: block }` silently
         // drops the image even though the empty-children branch is wired up.
+        let child_effective_is_empty = child_node
+            .layout_children
+            .borrow()
+            .as_deref()
+            .unwrap_or(&child_node.children)
+            .is_empty();
+
         if ch == 0.0
             && cw == 0.0
-            && child_node.children.is_empty()
+            && child_effective_is_empty
             && !node_has_block_pseudo_image(doc, child_node)
             && !node_has_inline_pseudo_image(doc, child_node)
             && !ctx.column_styles.contains_key(&child_id)
@@ -1183,14 +1210,18 @@ fn collect_positioned_children(
         // Zero-size container (thead, tbody, tr, etc.) — flatten children
         // into the parent. Harvest the container's own string-set entries
         // before recursing so they aren't dropped.
-        if ch == 0.0 && cw == 0.0 && !child_node.children.is_empty() {
+        if ch == 0.0 && cw == 0.0 && !child_effective_is_empty {
             emit_orphan_string_set_markers(child_id, cx, cy, ctx, &mut result);
             emit_counter_op_markers(child_id, cx, cy, ctx, &mut result);
             emit_orphan_bookmark_marker(child_id, cx, cy, ctx, &mut result);
             if let Some(marker) = take_running_marker(child_id, ctx) {
                 pending_running_markers.push(marker);
             }
-            let mut nested = collect_positioned_children(doc, &child_node.children, ctx, depth + 1);
+            let child_lc_guard = child_node.layout_children.borrow();
+            let child_effective_children =
+                child_lc_guard.as_deref().unwrap_or(&child_node.children);
+            let mut nested =
+                collect_positioned_children(doc, child_effective_children, ctx, depth + 1);
             // Flush pending running markers to the first real nested child so
             // they travel with the flattened content on page break. Without
             // this, the markers would skip over the container's children and
@@ -1300,6 +1331,7 @@ where
 
     let style = extract_block_style(node, assets);
     let (opacity, visible) = extract_opacity_visible(node);
+    let pagination = extract_pagination_from_column_css(ctx, node);
 
     if style.has_visual_style() {
         let (cx, cy) = style.content_inset();
@@ -1318,7 +1350,7 @@ where
             y: cy,
         };
         let mut block = BlockPageable::with_positioned_children(vec![child])
-            .with_pagination(extract_pagination_from_column_css(ctx, node))
+            .with_pagination(pagination)
             .with_style(style)
             .with_opacity(opacity)
             .with_visible(visible)
@@ -1326,9 +1358,10 @@ where
         block.wrap(width, height);
         block.layout_size = Some(Size { width, height });
         Box::new(block)
-    } else if ctx.column_styles.contains_key(&node.id) {
-        // No visual style, but has pagination hints (break-after/before/inside).
-        // Wrap in a transparent BlockPageable so the hints reach the paginator.
+    } else if pagination != crate::pageable::Pagination::default() {
+        // Replaced element with no visual style but a non-default Pagination
+        // (e.g. `<img style="break-before: page">`): wrap in a thin
+        // BlockPageable so paginate() honours the break.
         let inner = build_inner(width, height, opacity, visible);
         let child = PositionedChild {
             child: inner,
@@ -1336,7 +1369,7 @@ where
             y: 0.0,
         };
         let mut block = BlockPageable::with_positioned_children(vec![child])
-            .with_pagination(extract_pagination_from_column_css(ctx, node))
+            .with_pagination(pagination)
             .with_opacity(opacity)
             .with_visible(visible)
             .with_id(extract_block_id(node));
@@ -1986,7 +2019,9 @@ fn collect_table_cells(
         emit_orphan_bookmark_marker(node_id, x, y, ctx, out);
     }
 
-    for &child_id in &node.children {
+    let layout_children_guard = node.layout_children.borrow();
+    let effective_children = layout_children_guard.as_deref().unwrap_or(&node.children);
+    for &child_id in effective_children {
         let Some(child_node) = doc.get_node(child_id) else {
             continue;
         };
@@ -2000,7 +2035,13 @@ fn collect_table_cells(
         let (cx, cy, cw, ch) = layout_in_pt(&child_node.final_layout);
 
         // Zero-size container (tr, thead, tbody) — recurse into children
-        if ch == 0.0 && cw == 0.0 && !child_node.children.is_empty() {
+        let child_effective_is_empty = child_node
+            .layout_children
+            .borrow()
+            .as_deref()
+            .unwrap_or(&child_node.children)
+            .is_empty();
+        if ch == 0.0 && cw == 0.0 && !child_effective_is_empty {
             let child_is_header = is_header || is_table_section(child_node, "thead");
             collect_table_cells(
                 doc,
