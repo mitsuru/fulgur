@@ -265,6 +265,8 @@ jobs:
     # `cargo check --workspace` / clippy では空コンパイルされるため型エラーが
     # 検出されない。0.6.0 release で `fulgur::Error::Other` の match arm 不足が
     # release-* job まで気付かれなかった問題 (PR #217) の再発防止。
+    # 型エラー検出が目的のため Linux 単一・matrix 無し。クロス OS build/link
+    # 検証は release-python.yml / release-ruby.yml の責務。
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -278,10 +280,6 @@ jobs:
         with:
           shared-key: ubuntu-latest-fulgur-bindings
           save-if: ${{ github.ref == 'refs/heads/main' }}
-      - name: cargo check pyfulgur (extension-module)
-        run: cargo check -p pyfulgur --features extension-module
-      - name: cargo check fulgur-ruby (ruby-api)
-        run: cargo check -p fulgur-ruby --features ruby-api
       - name: cargo clippy pyfulgur (extension-module)
         run: cargo clippy -p pyfulgur --features extension-module --all-targets -- -D warnings
       - name: cargo clippy fulgur-ruby (ruby-api)
