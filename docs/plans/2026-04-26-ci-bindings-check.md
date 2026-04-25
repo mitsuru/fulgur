@@ -94,7 +94,7 @@ mismatches between the core fulgur crate and the bindings (e.g. a new
 `Error` variant) only surface during the release-python.yml /
 release-ruby.yml build — too late.
 
-Add a dedicated Linux job that runs `cargo check` and
+Add a dedicated Linux job that runs
 `cargo clippy --all-targets -- -D warnings` against both bindings with
 their feature flags enabled. Uses `oxidize-rb/actions/setup-ruby-and-rust`
 (same pin as release-ruby.yml) for the Ruby toolchain; pyo3
