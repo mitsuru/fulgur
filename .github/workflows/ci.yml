@@ -130,6 +130,27 @@ jobs:
           use_oidc: true
           fail_ci_if_error: false
 
+  wasm-check:
+    name: WASM build check
+    runs-on: ubuntu-latest
+    # Strategic gate: keeps the `fulgur` library buildable on
+    # `wasm32-unknown-unknown` so the future `fulgur-wasm` wrapper crate
+    # (browser HTML→PDF, AI agent sandboxes) stays one step away.
+    # Failure means a dependency or new code added a non-WASM-compatible
+    # surface (filesystem, native-only API, missing target cfg) — fix or
+    # cfg-gate it before merging. Tracking: fulgur-iym, fulgur-g5bn.
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: ubuntu-latest-fulgur-wasm
+      # Do NOT set RUSTFLAGS=-C link-arg=-fuse-ld=mold here; env RUSTFLAGS
+      # is target-agnostic and would force mold onto the wasm32 build.
+      - run: cargo check --target wasm32-unknown-unknown -p fulgur
+
   vrt:
     name: Visual Regression Tests
     runs-on: ubuntu-latest

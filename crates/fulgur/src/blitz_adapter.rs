@@ -23,7 +23,9 @@
 use blitz_dom::DocumentConfig;
 use blitz_dom::net::Resource;
 use blitz_html::HtmlDocument;
-use blitz_traits::net::{NetProvider, Url};
+use blitz_traits::net::NetProvider;
+#[cfg(not(target_arch = "wasm32"))]
+use blitz_traits::net::Url;
 use blitz_traits::shell::{ColorScheme, Viewport};
 use parley::FontContext;
 use std::path::Path;
@@ -108,10 +110,22 @@ pub fn parse_html_with_local_resources(
         base_path.map(|p| p.to_path_buf()),
     ));
     let provider: Arc<dyn NetProvider<Resource>> = net_provider.clone();
+    // `Url::from_directory_path` and `Path::canonicalize` are gated to
+    // non-wasm targets in `url`/`std`. On WASM, base-URL derivation is
+    // skipped because there is no native filesystem to canonicalise a
+    // path against; callers are expected to deliver pre-loaded bytes
+    // through `AssetBundle` (e.g. fed from JS `fetch` / `FileReader` /
+    // OPFS via a wasm-bindgen wrapper).
+    #[cfg(not(target_arch = "wasm32"))]
     let base_url = base_path
         .and_then(|p| p.canonicalize().ok())
         .and_then(|p| Url::from_directory_path(&p).ok())
         .map(|u| u.to_string());
+    #[cfg(target_arch = "wasm32")]
+    let base_url: Option<String> = {
+        let _ = base_path;
+        None
+    };
 
     let mut doc = parse_inner(
         html,

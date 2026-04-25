@@ -31,6 +31,14 @@ log = "0.4"
 lopdf = "0.40.0"
 serde = { version = "1", features = ["derive"] }
 
+# WASM (wasm32-unknown-unknown) build support: pulled in transitively by lopdf/rand.
+# Feature unification propagates `wasm_js` to the lopdf-side dependency so the
+# crate selects the `crypto.getRandomValues()` backend instead of failing with
+# `compile_error!`. Browser-class targets only — WASI requires a different
+# backend selection. Tracking: fulgur-iym (strategic v0.7.0).
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+getrandom = { version = "0.4", default-features = false, features = ["wasm_js"] }
+
 [dev-dependencies]
 tempfile = "3.27.0"
 image = { version = "0.25", default-features = false, features = ["png"] }
