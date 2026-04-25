@@ -74,6 +74,11 @@ jobs:
           sed -i "s/^version = \".*\"/version = \"$VERSION\"/" crates/fulgur-cli/Cargo.toml
           sed -i "s/fulgur = { version = \"[^\"]*\", path/fulgur = { version = \"$VERSION\", path/" crates/fulgur-cli/Cargo.toml
 
+          # fulgur-wasm (WebAssembly binding; publish = false but kept in
+          # lockstep per docs/RELEASE_SETUP.md). `fulgur` dep is path-only,
+          # so no version-sync sed is needed.
+          sed -i "s/^version = \".*\"/version = \"$VERSION\"/" crates/fulgur-wasm/Cargo.toml
+
           # pyfulgur (Python binding)
           sed -i "s/^version = \".*\"/version = \"$VERSION\"/" crates/pyfulgur/Cargo.toml
           sed -i "s/^version = \".*\"/version = \"$VERSION\"/" crates/pyfulgur/pyproject.toml
