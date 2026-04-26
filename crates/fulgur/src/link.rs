@@ -268,11 +268,13 @@ mod tests {
         {
             let mut page = doc.start_page_with(page_settings());
             let mut registry = DestinationRegistry::new();
+            registry.set_current_page(0);
             registry.record("anchor", 0.0, 300.0);
             let occs = vec![
                 ext_occ("https://a.example", vec![make_quad(0.0, 0.0, 60.0, 12.0)]), // emitted
                 int_occ("anchor", vec![make_quad(0.0, 20.0, 60.0, 12.0)]), // emitted (resolved)
                 int_occ("gone", vec![make_quad(0.0, 40.0, 60.0, 12.0)]),   // skipped (unresolved)
+                ext_occ("https://empty.example", vec![]),                  // skipped (empty quads)
             ];
             emit_link_annotations(&mut page, &occs, &registry);
         }
