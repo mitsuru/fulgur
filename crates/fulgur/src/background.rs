@@ -411,13 +411,20 @@ fn draw_linear_gradient(
 
     let krilla_stops: Vec<krilla::paint::Stop> = stops
         .iter()
-        .map(|s| krilla::paint::Stop {
-            // `s.offset` is convert-time-clamped to [0, 1] in resolve_linear_gradient,
-            // so the explicit clamp + expect documents the invariant.
-            offset: krilla::num::NormalizedF32::new(s.offset.clamp(0.0, 1.0))
-                .expect("offset is clamped to [0, 1]"),
-            color: krilla::color::rgb::Color::new(s.rgba[0], s.rgba[1], s.rgba[2]).into(),
-            opacity: crate::pageable::alpha_to_opacity(s.rgba[3]),
+        .map(|s| {
+            let offset_f = match s.position {
+                crate::pageable::GradientStopPosition::Fraction(f) => f.clamp(0.0, 1.0),
+                // Task 1: convert 側が Fraction のみ生成するため到達しない。
+                // Task 4 で resolve_gradient_stops 経由に切り替わる。
+                crate::pageable::GradientStopPosition::Auto
+                | crate::pageable::GradientStopPosition::LengthPx(_) => 0.0,
+            };
+            krilla::paint::Stop {
+                offset: krilla::num::NormalizedF32::new(offset_f)
+                    .expect("offset is clamped to [0, 1]"),
+                color: krilla::color::rgb::Color::new(s.rgba[0], s.rgba[1], s.rgba[2]).into(),
+                opacity: crate::pageable::alpha_to_opacity(s.rgba[3]),
+            }
         })
         .collect();
 
@@ -540,11 +547,20 @@ fn draw_radial_gradient(
 
     let krilla_stops: Vec<krilla::paint::Stop> = stops
         .iter()
-        .map(|s| krilla::paint::Stop {
-            offset: krilla::num::NormalizedF32::new(s.offset.clamp(0.0, 1.0))
-                .expect("offset is clamped to [0, 1]"),
-            color: krilla::color::rgb::Color::new(s.rgba[0], s.rgba[1], s.rgba[2]).into(),
-            opacity: crate::pageable::alpha_to_opacity(s.rgba[3]),
+        .map(|s| {
+            let offset_f = match s.position {
+                crate::pageable::GradientStopPosition::Fraction(f) => f.clamp(0.0, 1.0),
+                // Task 1: convert 側が Fraction のみ生成するため到達しない。
+                // Task 4 で resolve_gradient_stops 経由に切り替わる。
+                crate::pageable::GradientStopPosition::Auto
+                | crate::pageable::GradientStopPosition::LengthPx(_) => 0.0,
+            };
+            krilla::paint::Stop {
+                offset: krilla::num::NormalizedF32::new(offset_f)
+                    .expect("offset is clamped to [0, 1]"),
+                color: krilla::color::rgb::Color::new(s.rgba[0], s.rgba[1], s.rgba[2]).into(),
+                opacity: crate::pageable::alpha_to_opacity(s.rgba[3]),
+            }
         })
         .collect();
 

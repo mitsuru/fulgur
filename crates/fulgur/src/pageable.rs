@@ -735,14 +735,25 @@ pub enum BgClip {
     Text,
 }
 
-/// A single color stop in a CSS gradient, after position resolution.
+/// CSS gradient color stop の位置。
 ///
-/// `offset` is the resolved fraction along the gradient line in `[0.0, 1.0]`.
-/// CSS allows `auto` stop positions which `convert::resolve_linear_gradient`
-/// fills in via even spacing between adjacent fixed stops.
+/// - `Fraction` は `[0, 1]` 域内の % / 0%/100% 由来 (convert 時に解決)。
+/// - `LengthPx` は `<length>` 形式で記述された値 (例 `50px`)。draw 時に
+///   gradient line 長さで割って fraction 化する。
+/// - `Auto` は CSS auto。draw 時に CSS Images §3.5.1 fixup で前後の fixed
+///   stop から補間される。
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum GradientStopPosition {
+    Auto,
+    Fraction(f32),
+    LengthPx(f32),
+}
+
+/// A single color stop in a CSS gradient. Position は `GradientStopPosition`
+/// で保持され、draw 時に gradient line 長さで fraction に解決される。
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct GradientStop {
-    pub offset: f32,
+    pub position: GradientStopPosition,
     pub rgba: [u8; 4],
 }
 

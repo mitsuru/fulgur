@@ -3215,7 +3215,6 @@ fn resolve_color_stops(
     current_color: &style::color::AbsoluteColor,
     gradient_kind: &'static str,
 ) -> Option<Vec<crate::pageable::GradientStop>> {
-    use crate::pageable::GradientStop;
     use style::values::generics::image::GradientItem;
 
     let mut raw: Vec<(Option<f32>, [u8; 4])> = Vec::with_capacity(items.len());
@@ -3297,8 +3296,10 @@ fn resolve_color_stops(
     Some(
         raw.into_iter()
             .zip(positions)
-            .map(|((_, rgba), pos)| GradientStop {
-                offset: pos.unwrap().clamp(0.0, 1.0),
+            .map(|((_, rgba), pos)| crate::pageable::GradientStop {
+                position: crate::pageable::GradientStopPosition::Fraction(
+                    pos.unwrap().clamp(0.0, 1.0),
+                ),
                 rgba,
             })
             .collect(),
