@@ -812,14 +812,29 @@ fn compute_tile_positions(
     // `tile_positions_fast_slow_parity_*` tests below, which call
     // `compute_tile_positions_slow` directly to compare and assert that any
     // extra slow-path tiles lie entirely outside the clip rect.
+    // Per-axis cover predicate: Repeat axes require *strict* containment
+    // because any uncovered sliver on the cover side is filled by the
+    // adjacent repeated tile in the slow path. Without strict, the
+    // fast path silently drops that sliver (e.g., pos=0.0005, img=99.9995,
+    // clip=(0,100): the [0, 0.0005) strip is covered by the slow path's
+    // boundary-overlap tile but not by a single fast-path tile at pos).
+    // NoRepeat / Space axes have no adjacent tile to fall back on, so the
+    // 1e-3 coverage tolerance is safe — it only collapses already-covered
+    // cases.
+    let covers_x = match repeat_x {
+        BgRepeat::Repeat => pos_x <= clip_x && pos_x + img_w >= clip_x + clip_w,
+        _ => pos_x <= clip_x + 1e-3 && pos_x + img_w + 1e-3 >= clip_x + clip_w,
+    };
+    let covers_y = match repeat_y {
+        BgRepeat::Repeat => pos_y <= clip_y && pos_y + img_h >= clip_y + clip_h,
+        _ => pos_y <= clip_y + 1e-3 && pos_y + img_h + 1e-3 >= clip_y + clip_h,
+    };
     if repeat_x != BgRepeat::Round
         && repeat_y != BgRepeat::Round
         && img_w > 0.0
         && img_h > 0.0
-        && pos_x <= clip_x + 1e-3
-        && pos_y <= clip_y + 1e-3
-        && pos_x + img_w + 1e-3 >= clip_x + clip_w
-        && pos_y + img_h + 1e-3 >= clip_y + clip_h
+        && covers_x
+        && covers_y
     {
         return vec![(pos_x, pos_y, img_w, img_h)];
     }
@@ -1649,6 +1664,65 @@ mod tests {
             100.0,
         );
         assert!(tiles.is_empty());
+    }
+
+    #[test]
+    fn tile_positions_repeat_strict_cover_preserves_sliver() {
+        // Regression for coderabbit job 442 Major: with Repeat × Repeat
+        // and pos = 0.0005, img = 99.9995, clip = (0, 100), the slow
+        // path's boundary-overlap tile covers the [0.0, 0.0005) strip
+        // via the offset modulo. The pre-fix fast-path collapsed to a
+        // single tile at pos=0.0005 and silently dropped the sliver.
+        // After the fix (strict cover for Repeat axes), the fast-path
+        // declines and the slow path runs.
+        let fast = compute_tile_positions(
+            BgRepeat::Repeat,
+            BgRepeat::Repeat,
+            0.0005,
+            0.0005,
+            99.9995,
+            99.9995,
+            0.0,
+            0.0,
+            100.0,
+            100.0,
+        );
+        // fast-path must NOT collapse to 1 tile here — it should fall
+        // through to the slow path which emits multiple boundary tiles
+        // covering the sliver.
+        assert!(
+            fast.len() > 1,
+            "Repeat axis with sliver-uncovered strip must not collapse: \
+             got {} tiles, expected slow-path multi-tile",
+            fast.len()
+        );
+        // Verify at least one tile starts at or before clip_x = 0 (the
+        // boundary tile that covers the sliver).
+        assert!(
+            fast.iter()
+                .any(|&(tx, _, tw, _)| tx <= 0.0 && tx + tw >= 0.0),
+            "no boundary tile covers the [0, 0.0005) strip: {fast:?}"
+        );
+    }
+
+    #[test]
+    fn tile_positions_repeat_strict_cover_with_no_sliver() {
+        // Sanity: Repeat axes still get the fast-path when image truly
+        // covers the clip from pos. (pos=0, img=100, clip=(0,100)) →
+        // 1 tile.
+        let fast = compute_tile_positions(
+            BgRepeat::Repeat,
+            BgRepeat::Repeat,
+            0.0,
+            0.0,
+            100.0,
+            100.0,
+            0.0,
+            0.0,
+            100.0,
+            100.0,
+        );
+        assert_eq!(fast.len(), 1);
     }
 
     #[test]
