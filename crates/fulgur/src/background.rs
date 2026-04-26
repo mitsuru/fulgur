@@ -204,17 +204,48 @@ fn draw_background_layer(
         .surface
         .push_clip_path(&clip_path, &krilla::paint::FillRule::default());
 
+    let (img_w, img_h) = match &layer.content {
+        BgImageContent::LinearGradient { .. } | BgImageContent::RadialGradient { .. } => {
+            resolve_gradient_size(&layer.size, ow, oh)
+        }
+        BgImageContent::Raster { .. } | BgImageContent::Svg { .. } => resolve_size(layer, ow, oh),
+    };
+    if img_w <= 0.0 || img_h <= 0.0 {
+        canvas.surface.pop();
+        return;
+    }
+
+    let pos_x = ox + resolve_position(&layer.position_x, ow, img_w);
+    let pos_y = oy + resolve_position(&layer.position_y, oh, img_h);
+
+    let tiles = compute_tile_positions(
+        layer.repeat_x,
+        layer.repeat_y,
+        pos_x,
+        pos_y,
+        img_w,
+        img_h,
+        cx,
+        cy,
+        cw,
+        ch,
+    );
+    if tiles.is_empty() {
+        canvas.surface.pop();
+        return;
+    }
+
     match &layer.content {
         BgImageContent::LinearGradient { direction, stops } => {
-            // Phase 1: gradient covers the full origin rect (no
-            // background-size / background-repeat support yet).
-            let angle_rad = match direction {
-                crate::pageable::LinearGradientDirection::Angle(a) => *a,
-                crate::pageable::LinearGradientDirection::Corner(corner) => {
-                    corner_to_angle_rad(*corner, ow, oh)
-                }
-            };
-            draw_linear_gradient(canvas, angle_rad, stops, ox, oy, ow, oh);
+            for (tx, ty, tw, th) in &tiles {
+                let angle_rad = match direction {
+                    crate::pageable::LinearGradientDirection::Angle(a) => *a,
+                    crate::pageable::LinearGradientDirection::Corner(corner) => {
+                        corner_to_angle_rad(*corner, *tw, *th)
+                    }
+                };
+                draw_linear_gradient(canvas, angle_rad, stops, *tx, *ty, *tw, *th);
+            }
         }
         BgImageContent::RadialGradient {
             shape,
@@ -223,75 +254,44 @@ fn draw_background_layer(
             position_y,
             stops,
         } => {
-            draw_radial_gradient(
-                canvas, *shape, size, position_x, position_y, stops, ox, oy, ow, oh,
-            );
+            for (tx, ty, tw, th) in &tiles {
+                draw_radial_gradient(
+                    canvas, *shape, size, position_x, position_y, stops, *tx, *ty, *tw, *th,
+                );
+            }
         }
-        BgImageContent::Raster { .. } | BgImageContent::Svg { .. } => {
-            let (img_w, img_h) = resolve_size(layer, ow, oh);
-            if img_w <= 0.0 || img_h <= 0.0 {
+        BgImageContent::Raster { data, format } => {
+            let data: krilla::Data = Arc::clone(data).into();
+            let Ok(image) = format.to_krilla_image(data) else {
                 canvas.surface.pop();
                 return;
-            }
-
-            let pos_x = ox + resolve_position(&layer.position_x, ow, img_w);
-            let pos_y = oy + resolve_position(&layer.position_y, oh, img_h);
-
-            let tiles = compute_tile_positions(
-                layer.repeat_x,
-                layer.repeat_y,
-                pos_x,
-                pos_y,
-                img_w,
-                img_h,
-                cx,
-                cy,
-                cw,
-                ch,
-            );
-            if tiles.is_empty() {
+            };
+            for (tx, ty, tw, th) in &tiles {
+                let Some(size) = krilla::geom::Size::from_wh(*tw, *th) else {
+                    continue;
+                };
+                let transform = krilla::geom::Transform::from_translate(*tx, *ty);
+                canvas.surface.push_transform(&transform);
+                canvas.surface.draw_image(image.clone(), size);
                 canvas.surface.pop();
-                return;
             }
-
-            match &layer.content {
-                BgImageContent::Raster { data, format } => {
-                    let data: krilla::Data = Arc::clone(data).into();
-                    let Ok(image) = format.to_krilla_image(data) else {
-                        canvas.surface.pop();
-                        return;
-                    };
-                    for (tx, ty, tw, th) in &tiles {
-                        let Some(size) = krilla::geom::Size::from_wh(*tw, *th) else {
-                            continue;
-                        };
-                        let transform = krilla::geom::Transform::from_translate(*tx, *ty);
-                        canvas.surface.push_transform(&transform);
-                        canvas.surface.draw_image(image.clone(), size);
-                        canvas.surface.pop();
-                    }
+        }
+        BgImageContent::Svg { tree } => {
+            use krilla_svg::{SurfaceExt, SvgSettings};
+            for (tx, ty, tw, th) in &tiles {
+                let Some(size) = krilla::geom::Size::from_wh(*tw, *th) else {
+                    continue;
+                };
+                let transform = krilla::geom::Transform::from_translate(*tx, *ty);
+                canvas.surface.push_transform(&transform);
+                if canvas
+                    .surface
+                    .draw_svg(tree, size, SvgSettings::default())
+                    .is_none()
+                {
+                    log::warn!("failed to draw SVG background tile");
                 }
-                BgImageContent::Svg { tree } => {
-                    use krilla_svg::{SurfaceExt, SvgSettings};
-                    for (tx, ty, tw, th) in &tiles {
-                        let Some(size) = krilla::geom::Size::from_wh(*tw, *th) else {
-                            continue;
-                        };
-                        let transform = krilla::geom::Transform::from_translate(*tx, *ty);
-                        canvas.surface.push_transform(&transform);
-                        if canvas
-                            .surface
-                            .draw_svg(tree, size, SvgSettings::default())
-                            .is_none()
-                        {
-                            log::warn!("failed to draw SVG background tile");
-                        }
-                        canvas.surface.pop();
-                    }
-                }
-                BgImageContent::LinearGradient { .. } | BgImageContent::RadialGradient { .. } => {
-                    unreachable!("handled above")
-                }
+                canvas.surface.pop();
             }
         }
     }
@@ -602,8 +602,6 @@ fn ellipse_corner_scale(
 /// area, so `auto` / `cover` / `contain` all return `(origin_w, origin_h)`.
 /// `Explicit` with one axis `None` falls back to the corresponding origin axis
 /// (still no aspect to derive from).
-// Used by Task 2 — wired into draw_background_layer
-#[allow(dead_code)]
 fn resolve_gradient_size(size: &BgSize, origin_w: f32, origin_h: f32) -> (f32, f32) {
     match size {
         BgSize::Auto | BgSize::Cover | BgSize::Contain => (origin_w, origin_h),
