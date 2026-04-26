@@ -2862,24 +2862,14 @@ fn extract_block_style(node: &Node, assets: Option<&AssetBundle>) -> BlockStyle 
 
         // Background color — access the computed value directly
         let bg = styles.clone_background_color();
-        let bg_abs = bg.resolve_to_absolute(&current_color);
-        let r = (bg_abs.components.0.clamp(0.0, 1.0) * 255.0) as u8;
-        let g = (bg_abs.components.1.clamp(0.0, 1.0) * 255.0) as u8;
-        let b = (bg_abs.components.2.clamp(0.0, 1.0) * 255.0) as u8;
-        let a = (bg_abs.alpha.clamp(0.0, 1.0) * 255.0) as u8;
-        if a > 0 {
-            style.background_color = Some([r, g, b, a]);
+        let bg_rgba = absolute_to_rgba(bg.resolve_to_absolute(&current_color));
+        if bg_rgba[3] > 0 {
+            style.background_color = Some(bg_rgba);
         }
 
         // Border color (use top border color for all sides for simplicity)
         let bc = styles.clone_border_top_color();
-        let bc_abs = bc.resolve_to_absolute(&current_color);
-        style.border_color = [
-            (bc_abs.components.0.clamp(0.0, 1.0) * 255.0) as u8,
-            (bc_abs.components.1.clamp(0.0, 1.0) * 255.0) as u8,
-            (bc_abs.components.2.clamp(0.0, 1.0) * 255.0) as u8,
-            (bc_abs.alpha.clamp(0.0, 1.0) * 255.0) as u8,
-        ];
+        style.border_color = absolute_to_rgba(bc.resolve_to_absolute(&current_color));
 
         // Border radii. Stylo evaluates length-percentage values in CSS px
         // space, so we feed it the CSS-px border-box basis and convert the
@@ -3099,11 +3089,16 @@ fn extract_asset_name(url: &str) -> &str {
 }
 
 fn absolute_to_rgba(c: style::color::AbsoluteColor) -> [u8; 4] {
-    let r = (c.components.0.clamp(0.0, 1.0) * 255.0) as u8;
-    let g = (c.components.1.clamp(0.0, 1.0) * 255.0) as u8;
-    let b = (c.components.2.clamp(0.0, 1.0) * 255.0) as u8;
-    let a = (c.alpha.clamp(0.0, 1.0) * 255.0) as u8;
-    [r, g, b, a]
+    // `.round()` (not `as u8` truncation) so e.g. `rgb(127.5,…)` lands on 128
+    // instead of 127. Truncation introduces a half-channel down-bias for
+    // every fractional component, which is most visible in gradient stops.
+    let q = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as u8;
+    [
+        q(c.components.0),
+        q(c.components.1),
+        q(c.components.2),
+        q(c.alpha),
+    ]
 }
 
 /// Convert a Stylo computed `Gradient` into fulgur's `BgImageContent`.
@@ -3149,6 +3144,12 @@ fn resolve_linear_gradient(
     if flags.contains(GradientFlags::REPEATING) {
         return None;
     }
+    // Non-default `color_interpolation_method` (e.g. `in oklch`) would change
+    // the rendered colors. Phase 1 interpolates in sRGB only, so bail rather
+    // than silently misrender.
+    if !flags.contains(GradientFlags::HAS_DEFAULT_COLOR_INTERPOLATION_METHOD) {
+        return None;
+    }
 
     let direction = match direction {
         LineDirection::Angle(a) => LinearGradientDirection::Angle(a.radians()),
@@ -3171,6 +3172,9 @@ fn resolve_linear_gradient(
     };
 
     // Pass 1: collect color + (optional) % position. Length stops bail.
+    // Positions outside [0, 1] (e.g. `linear-gradient(red -50%, blue 100%)`)
+    // are valid CSS but require recomputing the gradient line / stops to
+    // represent them in krilla's `[0, 1]` shading space — deferred to Phase 2.
     let mut raw: Vec<(Option<f32>, [u8; 4])> = Vec::with_capacity(items.len());
     for item in items.iter() {
         match item {
@@ -3180,6 +3184,9 @@ fn resolve_linear_gradient(
             }
             GradientItem::ComplexColorStop { color, position } => {
                 let pct = position.to_percentage().map(|p| p.0)?;
+                if !(0.0..=1.0).contains(&pct) {
+                    return None;
+                }
                 let abs = color.resolve_to_absolute(current_color);
                 raw.push((Some(pct), absolute_to_rgba(abs)));
             }
@@ -3195,6 +3202,8 @@ fn resolve_linear_gradient(
     // - First stop defaults to 0%, last to 100%.
     // - Each fixed stop must be ≥ the previous fixed stop (clamp non-monotonic).
     // - Auto stops between fixed positions are evenly spaced.
+    // All explicit positions are now in [0, 1], so 0.0 is a sound monotonicity
+    // baseline.
     let n = raw.len();
     let mut positions: Vec<Option<f32>> = raw.iter().map(|(p, _)| *p).collect();
     if positions[0].is_none() {
@@ -3203,8 +3212,6 @@ fn resolve_linear_gradient(
     if positions[n - 1].is_none() {
         positions[n - 1] = Some(1.0);
     }
-    // Clamp monotonicity: if a fixed stop's position is less than the previous
-    // resolved position, raise it (CSS spec requires non-decreasing stops).
     let mut last_resolved = 0.0_f32;
     for v in positions.iter_mut().flatten() {
         if *v < last_resolved {

@@ -381,9 +381,15 @@ fn draw_linear_gradient(
     // caller, so painting a rectangle covering the clip rect's bounding box
     // produces the gradient exactly inside the (possibly rounded) clip area.
     let Some(rect_path) = build_rect_path(cx, cy, cw, ch) else {
+        // Reset fill so subsequent draws don't inherit the gradient paint.
+        canvas.surface.set_fill(None);
         return;
     };
     canvas.surface.draw_path(&rect_path);
+    // Clear the gradient fill so callers that don't set their own fill don't
+    // accidentally inherit it. Matches the pattern in `pageable.rs` border
+    // drawing.
+    canvas.surface.set_fill(None);
 }
 
 /// Resolve `background-size` for a layer relative to the origin area.
