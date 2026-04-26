@@ -824,18 +824,23 @@ pub enum BgImageContent {
     },
     /// SVG vector image — rendered via krilla-svg draw_svg.
     Svg { tree: Arc<usvg::Tree> },
-    /// CSS `linear-gradient(...)`.
+    /// CSS `linear-gradient(...)` / `repeating-linear-gradient(...)`.
+    /// `repeating=true` の場合、stops は draw 時に CSS Images 3 §3.6 の
+    /// 周期展開 (period = last_pos - first_pos) を経て [0, 1] に正規化される。
     LinearGradient {
         direction: LinearGradientDirection,
         stops: Vec<GradientStop>,
+        repeating: bool,
     },
-    /// CSS `radial-gradient(...)`. position は origin rect 内の中心。
+    /// CSS `radial-gradient(...)` / `repeating-radial-gradient(...)`.
+    /// position は origin rect 内の中心。`repeating` の意味は LinearGradient と同じ。
     RadialGradient {
         shape: RadialGradientShape,
         size: RadialGradientSize,
         position_x: BgLengthPercentage,
         position_y: BgLengthPercentage,
         stops: Vec<GradientStop>,
+        repeating: bool,
     },
 }
 

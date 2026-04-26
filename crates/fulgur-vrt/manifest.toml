@@ -108,3 +108,11 @@ margin_pt = 0.0
 [[fixture]]
 path = "paint/radial-gradient-repeat-round.html"
 margin_pt = 0.0
+
+[[fixture]]
+path = "paint/repeating-linear-gradient.html"
+margin_pt = 0.0
+
+[[fixture]]
+path = "paint/repeating-radial-gradient.html"
+margin_pt = 0.0

@@ -3155,9 +3155,7 @@ fn resolve_linear_gradient(
         Gradient::Radial { .. } | Gradient::Conic { .. } => return None,
     };
 
-    if flags.contains(GradientFlags::REPEATING) {
-        return None;
-    }
+    let repeating = flags.contains(GradientFlags::REPEATING);
     // Non-default `color_interpolation_method` (e.g. `in oklch`) would change
     // the rendered colors. Phase 1 interpolates in sRGB only, so bail rather
     // than silently misrender.
@@ -3195,7 +3193,11 @@ fn resolve_linear_gradient(
     let stops = resolve_color_stops(items, current_color, "linear-gradient")?;
 
     Some((
-        BgImageContent::LinearGradient { direction, stops },
+        BgImageContent::LinearGradient {
+            direction,
+            stops,
+            repeating,
+        },
         0.0,
         0.0,
     ))
@@ -3277,9 +3279,11 @@ fn resolve_color_stops(
 /// - stops: linear と共通の resolve_color_stops を使用
 ///
 /// Bail conditions (return None) — match resolve_linear_gradient:
-/// - REPEATING flag (fulgur-12z0 の対象)
 /// - non-default color interpolation method
 /// - length-typed / 範囲外 stop position, interpolation hint (resolve_color_stops 内)
+///
+/// `repeating-radial-gradient(...)` は `repeating: true` で受け、draw 時に
+/// stop の周期展開で表現する (Krilla の RadialGradient は SpreadMethod::Pad のみ)。
 fn resolve_radial_gradient(
     g: &style::values::computed::Gradient,
     current_color: &style::color::AbsoluteColor,
@@ -3299,9 +3303,7 @@ fn resolve_radial_gradient(
         Gradient::Linear { .. } | Gradient::Conic { .. } => return None,
     };
 
-    if flags.contains(GradientFlags::REPEATING) {
-        return None;
-    }
+    let repeating = flags.contains(GradientFlags::REPEATING);
     if !flags.contains(GradientFlags::HAS_DEFAULT_COLOR_INTERPOLATION_METHOD) {
         return None;
     }
@@ -3349,6 +3351,7 @@ fn resolve_radial_gradient(
             position_x,
             position_y,
             stops,
+            repeating,
         },
         0.0,
         0.0,
