@@ -903,6 +903,95 @@ fn compute_tile_positions_slow(
     tiles
 }
 
+/// 一様タイルグリッドのジオメトリ。
+#[derive(Debug, Clone, Copy, PartialEq)]
+#[allow(dead_code)] // Task 3 (Pattern dispatch) consumes these fields.
+struct UniformGrid {
+    /// 最初のタイルの (x, y) — グリッド原点。
+    origin: (f32, f32),
+    /// セル (タイル) のサイズ。
+    cell: (f32, f32),
+    /// グリッドのステップ (cell + 任意の gap)。`cell == step` で repeat / round、
+    /// `step > cell` で space (タイル間 gap あり)。
+    step: (f32, f32),
+    /// X 方向のタイル数, Y 方向のタイル数。`count.0 * count.1 == tiles.len()`。
+    count: (usize, usize),
+}
+
+/// 全タイルが (cell サイズ一致 + ステップ一様 + count.x×count.y == tiles.len()) を
+/// 満たすなら `UniformGrid` を返す。Pattern dedup 経路の適用判定に使う。
+/// `tiles.len() < 2` のときは Pattern 構築コストが無駄なので `None`。
+#[allow(dead_code)] // Task 3 (Pattern dispatch) wires this into the gradient draw path.
+fn try_uniform_grid(tiles: &[(f32, f32, f32, f32)]) -> Option<UniformGrid> {
+    if tiles.len() < 2 {
+        return None;
+    }
+    let eps = 1e-3_f32;
+
+    // セルサイズ一致チェック
+    let (tw0, th0) = (tiles[0].2, tiles[0].3);
+    if !tiles
+        .iter()
+        .all(|t| (t.2 - tw0).abs() < eps && (t.3 - th0).abs() < eps)
+    {
+        return None;
+    }
+
+    // ユニークな x / y 座標を昇順で収集 (epsilon マージ)
+    let mut xs: Vec<f32> = Vec::new();
+    for t in tiles {
+        if !xs.iter().any(|&x| (x - t.0).abs() < eps) {
+            xs.push(t.0);
+        }
+    }
+    xs.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+
+    let mut ys: Vec<f32> = Vec::new();
+    for t in tiles {
+        if !ys.iter().any(|&y| (y - t.1).abs() < eps) {
+            ys.push(t.1);
+        }
+    }
+    ys.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+
+    // count.x × count.y がタイル数と一致 (=完全グリッド) であること
+    if xs.len() * ys.len() != tiles.len() {
+        return None;
+    }
+
+    // X / Y 方向のステップ一様性をチェック
+    let step_x = if xs.len() >= 2 {
+        let s = xs[1] - xs[0];
+        for w in xs.windows(2) {
+            if (w[1] - w[0] - s).abs() > eps {
+                return None;
+            }
+        }
+        s
+    } else {
+        // 単行 (count.x == 1): ステップは未定義だが、cell サイズで埋める
+        tw0
+    };
+    let step_y = if ys.len() >= 2 {
+        let s = ys[1] - ys[0];
+        for w in ys.windows(2) {
+            if (w[1] - w[0] - s).abs() > eps {
+                return None;
+            }
+        }
+        s
+    } else {
+        th0
+    };
+
+    Some(UniformGrid {
+        origin: (xs[0], ys[0]),
+        cell: (tw0, th0),
+        step: (step_x, step_y),
+        count: (xs.len(), ys.len()),
+    })
+}
+
 fn resolve_repeat_axis(
     repeat: BgRepeat,
     position: f32,
@@ -1934,5 +2023,93 @@ mod tests {
         assert_eq!(space, 0.0);
         assert_eq!(start, 5.0);
         assert_eq!(end, 5.0);
+    }
+
+    // ─── try_uniform_grid ─────────────────────────────────────────────────────
+
+    #[test]
+    fn uniform_grid_single_tile_returns_none() {
+        // Single tile (no-repeat) is not worth the Pattern overhead.
+        let tiles = vec![(10.0, 20.0, 30.0, 40.0)];
+        assert!(try_uniform_grid(&tiles).is_none());
+    }
+
+    #[test]
+    fn uniform_grid_repeat_round_8x6_detected() {
+        // 8 columns × 6 rows, cell = step = (10, 15)
+        let mut tiles = Vec::new();
+        for j in 0..6 {
+            for i in 0..8 {
+                tiles.push((i as f32 * 10.0, j as f32 * 15.0, 10.0, 15.0));
+            }
+        }
+        let g = try_uniform_grid(&tiles).expect("detect 8×6 grid");
+        assert_eq!(g.count, (8, 6));
+        assert!((g.cell.0 - 10.0).abs() < 1e-3);
+        assert!((g.cell.1 - 15.0).abs() < 1e-3);
+        assert!((g.step.0 - 10.0).abs() < 1e-3);
+        assert!((g.step.1 - 15.0).abs() < 1e-3);
+        assert!((g.origin.0 - 0.0).abs() < 1e-3);
+        assert!((g.origin.1 - 0.0).abs() < 1e-3);
+    }
+
+    #[test]
+    fn uniform_grid_space_with_gaps_detected() {
+        // 3 columns × 2 rows, cell = (10, 10), step = (15, 20)
+        let tiles = vec![
+            (0.0, 0.0, 10.0, 10.0),
+            (15.0, 0.0, 10.0, 10.0),
+            (30.0, 0.0, 10.0, 10.0),
+            (0.0, 20.0, 10.0, 10.0),
+            (15.0, 20.0, 10.0, 10.0),
+            (30.0, 20.0, 10.0, 10.0),
+        ];
+        let g = try_uniform_grid(&tiles).expect("detect 3×2 spaced grid");
+        assert_eq!(g.count, (3, 2));
+        assert!((g.cell.0 - 10.0).abs() < 1e-3);
+        assert!((g.step.0 - 15.0).abs() < 1e-3);
+        assert!((g.step.1 - 20.0).abs() < 1e-3);
+    }
+
+    #[test]
+    fn uniform_grid_mismatched_cell_size_returns_none() {
+        // Second tile has different height → not uniform.
+        let tiles = vec![(0.0, 0.0, 10.0, 10.0), (10.0, 0.0, 10.0, 12.0)];
+        assert!(try_uniform_grid(&tiles).is_none());
+    }
+
+    #[test]
+    fn uniform_grid_irregular_step_returns_none() {
+        // X steps: 10, 11 → not uniform.
+        let tiles = vec![
+            (0.0, 0.0, 5.0, 5.0),
+            (10.0, 0.0, 5.0, 5.0),
+            (21.0, 0.0, 5.0, 5.0),
+        ];
+        assert!(try_uniform_grid(&tiles).is_none());
+    }
+
+    #[test]
+    fn uniform_grid_single_row_repeat_x() {
+        // 4 tiles in a single row → 4×1 grid.
+        let tiles = vec![
+            (0.0, 5.0, 10.0, 10.0),
+            (10.0, 5.0, 10.0, 10.0),
+            (20.0, 5.0, 10.0, 10.0),
+            (30.0, 5.0, 10.0, 10.0),
+        ];
+        let g = try_uniform_grid(&tiles).expect("detect 4×1 grid");
+        assert_eq!(g.count, (4, 1));
+    }
+
+    #[test]
+    fn uniform_grid_count_mismatch_returns_none() {
+        // 3 tiles claimed but only 2 unique x positions × 2 unique y → 4 expected.
+        let tiles = vec![
+            (0.0, 0.0, 5.0, 5.0),
+            (10.0, 0.0, 5.0, 5.0),
+            (0.0, 10.0, 5.0, 5.0),
+        ];
+        assert!(try_uniform_grid(&tiles).is_none());
     }
 }
