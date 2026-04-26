@@ -17,6 +17,7 @@
 use fulgur_vrt::diff::{self};
 use fulgur_vrt::manifest::Tolerance;
 use fulgur_vrt::pdf_render::{RenderSpec, pdf_to_rgba, render_html_to_pdf};
+use image::RgbaImage;
 use std::fs;
 use std::path::PathBuf;
 
@@ -43,6 +44,49 @@ fn lerp_u8(a: u8, b: u8, t: f32) -> u8 {
     let av = a as f32;
     let bv = b as f32;
     (av + (bv - av) * t).round().clamp(0.0, 255.0) as u8
+}
+
+/// Convert a (CSS x, CSS y) coordinate inside a margin-offset box to raster
+/// pixel coords at 150dpi. CSS px → raster: `1 CSS px = 25/16 raster px`
+/// (96 px/in → 150 px/in)、box の (0, 0) 起点はマージン分オフセット。
+fn css_to_raster(css_x: u32, css_y: u32) -> (u32, u32) {
+    let scale = 25.0 / 16.0;
+    let margin_raster = (GRADIENT_MARGIN_PX as f32 * scale) as u32;
+    let rx = margin_raster + (css_x as f32 * scale) as u32;
+    let ry = margin_raster + (css_y as f32 * scale) as u32;
+    (rx, ry)
+}
+
+/// Sentinel pixel-color check. Reads RGBA at the raster coord that maps to
+/// CSS `(css_x, css_y)` (with the standard `GRADIENT_MARGIN_PX` offset) and
+/// asserts it is within `tol` of `expected` per channel.
+///
+/// Used alongside the test↔ref equivalence diff to defend against the
+/// false-positive mode noted in the file header: if both `px` and `%` renders
+/// silently break the same way (e.g. layer entirely dropped → both white) the
+/// equivalence still passes, but a sentinel for a known plateau color flags
+/// the failure.
+fn assert_pixel_color(
+    img: &RgbaImage,
+    css_x: u32,
+    css_y: u32,
+    expected: (u8, u8, u8),
+    tol: u8,
+    label: &str,
+) {
+    let (rx, ry) = css_to_raster(css_x, css_y);
+    let p = img.get_pixel(rx, ry);
+    let (r, g, b) = (p[0], p[1], p[2]);
+    let (er, eg, eb) = expected;
+    let max_diff = (r as i32 - er as i32)
+        .abs()
+        .max((g as i32 - eg as i32).abs())
+        .max((b as i32 - eb as i32).abs());
+    assert!(
+        max_diff <= tol as i32,
+        "{label}: pixel at CSS ({css_x}, {css_y}) → raster ({rx}, {ry}) \
+         expected ~({er}, {eg}, {eb}) ± {tol}, got ({r}, {g}, {b}), max_diff = {max_diff}"
+    );
 }
 
 /// Build a strip-approximation reference HTML. `c0` is the color at the
@@ -211,7 +255,7 @@ fn run_gradient_px_stop_reftest(
     test_html: &str,
     ref_html: &str,
     tol: Tolerance,
-) {
+) -> RgbaImage {
     let spec = RenderSpec {
         page_size: "A4",
         margin_pt: Some(0.0),
@@ -262,6 +306,8 @@ fn run_gradient_px_stop_reftest(
         test_dir.join("page-1.png").display(),
         ref_dir.join("page-1.png").display(),
     );
+
+    test_img
 }
 
 /// `linear-gradient(to right, red 0px, blue 50px, blue 350px, green 400px)` のような
@@ -302,12 +348,26 @@ fn linear_gradient_px_stop_matches_percentage_reference() {
         max_diff_pixels_ratio: 0.005,
     };
 
-    run_gradient_px_stop_reftest(
+    let test_img = run_gradient_px_stop_reftest(
         "linear-gradient",
         "vrt-gradient-px-stops-harness",
         &test_html,
         &ref_html,
         tol,
+    );
+
+    // Sentinel: CSS x=200 は box の中央で stop の `blue 50px` (12.5%) と
+    // `blue 350px` (87.5%) のあいだに広がる純 blue plateau に位置する。
+    // y は box 高 192 の中央 (96)。両方の render が同じ way で壊れた場合
+    // (e.g. layer drop → 白背景) 等価性 diff だけでは false-positive に倒れるが、
+    // この pixel sentinel が確実に拾う。
+    assert_pixel_color(
+        &test_img,
+        200,
+        96,
+        (0, 0, 255),
+        8,
+        "linear blue plateau center",
     );
 }
 
@@ -348,11 +408,82 @@ fn radial_gradient_px_stop_matches_percentage_reference() {
         max_diff_pixels_ratio: 0.005,
     };
 
-    run_gradient_px_stop_reftest(
+    let test_img = run_gradient_px_stop_reftest(
         "radial-gradient",
         "vrt-radial-gradient-px-stops-harness",
         &test_html,
         &ref_html,
         tol,
+    );
+
+    // Sentinel: 中心は CSS (100, 100) で `red 0px` 由来の純 red、半径 75 CSS px の
+    // 点 (CSS (175, 100)) は `blue 50px` (50%) と `blue 100px` (100%) のあいだの
+    // 純 blue plateau。両者を assert することで「全 layer drop → 白」のような
+    // 共通破綻モードを false-positive で通さない。
+    assert_pixel_color(&test_img, 100, 100, (255, 0, 0), 8, "radial center red");
+    assert_pixel_color(
+        &test_img,
+        175,
+        100,
+        (0, 0, 255),
+        8,
+        "radial blue plateau (radius 75)",
+    );
+}
+
+/// `linear-gradient(60deg, ...)` を非正方形 (400×200) box にかけて
+/// `|W·sinθ| + |H·cosθ|` 経路を実際に走らせる reftest。
+///
+/// `to right` (= 90deg, sin=1, cos=0) では gradient line length が box width
+/// に縮退して新しい formula を実質テストできない。60deg では
+/// `L = 400·sin(60°) + 200·cos(60°) = 200·√3 + 100 ≈ 446.41 CSS px` となり、
+/// box width とは ~10% 違うので「常に W を line length にする」バグは確実に
+/// 弾ける。
+///
+/// 戦略: test (px) と ref (precomputed %) の equivalence + box 中央の sentinel。
+/// 60deg でも box 中心は対称性から t=0.5 で blue plateau (22.4% < 50% < 78.4%)。
+#[test]
+fn linear_gradient_px_stop_angled_matches_percentage_reference() {
+    let test_html = build_gradient_html(
+        "VRT test: angled linear-gradient with px-typed stops",
+        400,
+        200,
+        "linear-gradient(60deg, red 0px, blue 100px, blue 350px, green 446px)",
+    );
+    // L = 200·√3 + 100 ≈ 446.41016151..., precomputed % to 4 decimal places:
+    //   100 / L ≈ 22.4015%
+    //   350 / L ≈ 78.4051%
+    //   446 / L ≈ 99.9082%
+    let ref_html = build_gradient_html(
+        "VRT ref: angled linear-gradient with percentage-typed stops",
+        400,
+        200,
+        "linear-gradient(60deg, red 0%, blue 22.4015%, blue 78.4051%, green 99.9082%)",
+    );
+
+    // 角度付き gradient は raster boundary で AA が広がるので、to right より少し緩い。
+    // それでも line length 計算が `W` ベースだとフラクションが ~10% ずれて
+    // ピクセル diff が一桁% に出るので、これでバグは捕捉できる。
+    let tol = Tolerance {
+        max_channel_diff: 6,
+        max_diff_pixels_ratio: 0.01,
+    };
+
+    let test_img = run_gradient_px_stop_reftest(
+        "linear-gradient angled (60deg)",
+        "vrt-gradient-px-stops-angled-harness",
+        &test_html,
+        &ref_html,
+        tol,
+    );
+
+    // Sentinel: 60deg の box 中央 (CSS 200, 100) は対称性で t=0.5 → blue plateau。
+    assert_pixel_color(
+        &test_img,
+        200,
+        100,
+        (0, 0, 255),
+        12,
+        "60deg angled gradient blue plateau center",
     );
 }

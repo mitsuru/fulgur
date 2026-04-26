@@ -737,7 +737,10 @@ pub enum BgClip {
 
 /// CSS gradient color stop の位置。
 ///
-/// - `Fraction` は `[0, 1]` 域内の % / 0%/100% 由来 (convert 時に解決)。
+/// - `Fraction` は `%` 由来の比率値 (convert 時に `pct.0` として保持)。
+///   convert は値域チェックを行わないため範囲外も入りうる。最終的な
+///   範囲検証 (`[0, 1]` 外なら Layer drop) は draw 時の
+///   `background::resolve_gradient_stops` が担う (CSS Images §3.5.1)。
 /// - `LengthPx` は `<length>` 形式で記述された値 (例 `50px`)。draw 時に
 ///   gradient line 長さで割って fraction 化する。
 /// - `Auto` は CSS auto。draw 時に CSS Images §3.5.1 fixup で前後の fixed
