@@ -517,7 +517,12 @@ fn draw_linear_gradient(
     let x2 = cx_box + sin * half;
     let y2 = cy_box + cos_neg * half;
 
-    let Some(krilla_stops) = resolve_gradient_stops(stops, length, "linear-gradient") else {
+    // length は pt 単位 (ow, oh が pt) だが、`GradientStopPosition::LengthPx` は
+    // CSS px で保持されている。`resolve_gradient_stops` は同一単位空間での
+    // `px / line_length` で fraction 化するので、line_length も CSS px に揃える。
+    // (例: 400px box → length = 300pt → px 換算で 400 → 50px / 400 = 0.125)
+    let length_px = crate::convert::pt_to_px(length);
+    let Some(krilla_stops) = resolve_gradient_stops(stops, length_px, "linear-gradient") else {
         return;
     };
 
@@ -638,8 +643,11 @@ fn draw_radial_gradient(
         return;
     }
 
-    // Radial gradient line length = rx (CSS Images §3.6.1, ellipse でも +X 軸)
-    let Some(krilla_stops) = resolve_gradient_stops(stops, rx, "radial-gradient") else {
+    // Radial gradient line length = rx (CSS Images §3.6.1, ellipse でも +X 軸)。
+    // rx は pt 単位 (ow/oh が pt) なので、`LengthPx` (CSS px) との比較のために
+    // CSS px に揃える。
+    let rx_px = crate::convert::pt_to_px(rx);
+    let Some(krilla_stops) = resolve_gradient_stops(stops, rx_px, "radial-gradient") else {
         return;
     };
 
