@@ -286,3 +286,120 @@ fn linear_gradient_px_stop_matches_percentage_reference() {
         ref_dir.join("page-1.png").display(),
     );
 }
+
+/// 200×200 box の上に任意の `background` プロパティ値を載せた HTML を生成する。
+/// radial gradient の reftest 用に正方形固定レイアウトを採用する。
+fn build_radial_gradient_html(title: &str, background: &str) -> String {
+    format!(
+        r#"<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>{title}</title>
+<style>
+  html, body {{ margin: 0; padding: 0; background: white; }}
+  .g {{
+    width: 200px;
+    height: 200px;
+    margin: {m}px;
+    background: {bg};
+  }}
+</style>
+</head>
+<body>
+  <div class="g"></div>
+</body>
+</html>"#,
+        title = title,
+        m = GRADIENT_MARGIN_PX,
+        bg = background,
+    )
+}
+
+/// `radial-gradient(circle 100px at center, red 0px, blue 50px, blue 100px)` のような
+/// `<length>` 型 stop が、対応する `<percentage>` 解決 (CSS Images §3.6.1) と等価な
+/// PDF を生成することを確認する。
+///
+/// 戦略: test と ref をどちらも fulgur で描画する。test 側は px 指定で
+/// `LengthPx → Fraction` 変換 (radial gradient の場合の基準は ending shape の半径
+/// = `rx` = 100 CSS px) を経由し、ref 側は最初から `<percentage>` で書く。
+/// CSS Images §3.6.1 で「radial gradient の gradient line length は ending shape
+/// の中心から境界までの長さ」と定義されており、circle 100px 指定では rx = 100px。
+/// したがって 0px / 50px / 100px はそれぞれ 0% / 50% / 100% に解決される。
+///
+/// このテストは Task 5 で linear path に対して修正された pt → CSS px 変換が
+/// radial path でも正しく機能していることを保証する (`gradient_line_length_px`
+/// は radial の場合は `rx_px` を渡している)。
+#[test]
+fn radial_gradient_px_stop_matches_percentage_reference() {
+    // 200×200 box, circle 100px at center: rx = 100 CSS px
+    // 0px = 0%, 50px = 50%, 100px = 100% に解決される piecewise gradient
+    let test_html = build_radial_gradient_html(
+        "VRT test: radial-gradient with px-typed stops",
+        "radial-gradient(circle 100px at center, red 0px, blue 50px, blue 100px)",
+    );
+    let ref_html = build_radial_gradient_html(
+        "VRT ref: radial-gradient with percentage-typed stops",
+        "radial-gradient(circle 100px at center, red 0%, blue 50%, blue 100%)",
+    );
+
+    let spec = RenderSpec {
+        page_size: "A4",
+        margin_pt: Some(0.0),
+        dpi: 150,
+    };
+
+    let test_pdf = render_html_to_pdf(&test_html, spec).expect("render test pdf");
+    let ref_pdf = render_html_to_pdf(&ref_html, spec).expect("render ref pdf");
+
+    let crate_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let work_dir = crate_root
+        .parent()
+        .and_then(|p| p.parent())
+        .expect("workspace root")
+        .join("target/vrt-radial-gradient-px-stops-harness");
+    fs::create_dir_all(&work_dir).expect("create work dir");
+
+    let test_dir = work_dir.join("test");
+    let ref_dir = work_dir.join("ref");
+    let _ = fs::remove_dir_all(&test_dir);
+    let _ = fs::remove_dir_all(&ref_dir);
+    fs::create_dir_all(&test_dir).expect("create test dir");
+    fs::create_dir_all(&ref_dir).expect("create ref dir");
+
+    let test_pdf_path = test_dir.join("test.pdf");
+    let ref_pdf_path = ref_dir.join("ref.pdf");
+    fs::write(&test_pdf_path, &test_pdf).expect("write test pdf");
+    fs::write(&ref_pdf_path, &ref_pdf).expect("write ref pdf");
+
+    let test_img = pdf_to_rgba(&test_pdf_path, spec.dpi, &test_dir).expect("rasterize test");
+    let ref_img = pdf_to_rgba(&ref_pdf_path, spec.dpi, &ref_dir).expect("rasterize ref");
+
+    // px → fraction 変換が正しければ test と ref は同一の color stop function を
+    // 持つので、tolerance はラスタライズ往復のノイズだけ吸収すれば十分。
+    // 4 ch / 0.5% は実質「ほぼ完全一致」を要求する厳しい設定で、
+    // LengthPx 解決のオフバイ誤差 (例えば rx の pt/px 取り違えによる 4/3× ずれ)
+    // は確実に弾ける。
+    let tol = Tolerance {
+        max_channel_diff: 4,
+        max_diff_pixels_ratio: 0.005,
+    };
+
+    let report = diff::compare(&ref_img, &test_img, tol);
+
+    assert!(
+        report.pass,
+        "radial-gradient px-stop test↔ref harness failed: {} of {} pixels differ ({:.3}%), max channel diff = {} (tolerance: max_diff={}, ratio<={:.3}%). \
+         test PDF: {}\n  ref PDF: {}\n  test img: {}\n  ref img:  {}",
+        report.diff_pixels,
+        report.total_pixels,
+        report.ratio() * 100.0,
+        report.max_channel_diff,
+        tol.max_channel_diff,
+        tol.max_diff_pixels_ratio * 100.0,
+        test_pdf_path.display(),
+        ref_pdf_path.display(),
+        test_dir.join("page-1.png").display(),
+        ref_dir.join("page-1.png").display(),
+    );
+}
