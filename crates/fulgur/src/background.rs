@@ -245,13 +245,13 @@ fn draw_background_layer(
                 crate::pageable::LinearGradientDirection::Angle(a) => {
                     let angle = *a;
                     for (tx, ty, tw, th) in &tiles {
-                        draw_linear_gradient(canvas, angle, stops, *tx, *ty, *tw, *th);
+                        draw_linear_gradient(canvas.surface, angle, stops, *tx, *ty, *tw, *th);
                     }
                 }
                 crate::pageable::LinearGradientDirection::Corner(corner) => {
                     for (tx, ty, tw, th) in &tiles {
                         let angle = corner_to_angle_rad(*corner, *tw, *th);
-                        draw_linear_gradient(canvas, angle, stops, *tx, *ty, *tw, *th);
+                        draw_linear_gradient(canvas.surface, angle, stops, *tx, *ty, *tw, *th);
                     }
                 }
             }
@@ -267,7 +267,16 @@ fn draw_background_layer(
             // for cx/cy/rx/ry. No uniformity assumption needed.
             for (tx, ty, tw, th) in &tiles {
                 draw_radial_gradient(
-                    canvas, *shape, size, position_x, position_y, stops, *tx, *ty, *tw, *th,
+                    canvas.surface,
+                    *shape,
+                    size,
+                    position_x,
+                    position_y,
+                    stops,
+                    *tx,
+                    *ty,
+                    *tw,
+                    *th,
                 );
             }
         }
@@ -341,7 +350,7 @@ fn corner_to_angle_rad(corner: crate::pageable::LinearGradientCorner, w: f32, h:
 /// gradient axis, ensuring the line spans corner-to-corner regardless of angle
 /// (CSS Images §3.1).
 fn draw_linear_gradient(
-    canvas: &mut Canvas<'_, '_>,
+    surface: &mut krilla::surface::Surface<'_>,
     angle_rad: f32,
     stops: &[crate::pageable::GradientStop],
     ox: f32,
@@ -395,12 +404,12 @@ fn draw_linear_gradient(
         anti_alias: false,
     };
 
-    canvas.surface.set_fill(Some(krilla::paint::Fill {
+    surface.set_fill(Some(krilla::paint::Fill {
         paint: lg.into(),
         rule: Default::default(),
         opacity: krilla::num::NormalizedF32::ONE,
     }));
-    canvas.surface.set_stroke(None);
+    surface.set_stroke(None);
 
     // Per CSS Images §3, the gradient image has the size of the positioning
     // (origin) area; areas inside `clip` but outside `origin` should be
@@ -410,12 +419,12 @@ fn draw_linear_gradient(
     // clip_path bounds it, so what's rendered is `origin ∩ clip`, which is
     // the spec-correct visible region.
     let Some(rect_path) = build_rect_path(ox, oy, ow, oh) else {
-        canvas.surface.set_fill(None);
+        surface.set_fill(None);
         return;
     };
-    canvas.surface.draw_path(&rect_path);
+    surface.draw_path(&rect_path);
     // Don't leak the gradient paint to the next draw on this surface.
-    canvas.surface.set_fill(None);
+    surface.set_fill(None);
 }
 
 /// Draw a CSS radial-gradient over the origin rect.
@@ -424,7 +433,7 @@ fn draw_linear_gradient(
 /// `RadialGradient` (円のみサポート) に楕円を transform で表現する。
 #[allow(clippy::too_many_arguments)]
 fn draw_radial_gradient(
-    canvas: &mut Canvas<'_, '_>,
+    surface: &mut krilla::surface::Surface<'_>,
     shape: crate::pageable::RadialGradientShape,
     size: &crate::pageable::RadialGradientSize,
     position_x: &BgLengthPercentage,
@@ -539,19 +548,19 @@ fn draw_radial_gradient(
         anti_alias: false,
     };
 
-    canvas.surface.set_fill(Some(krilla::paint::Fill {
+    surface.set_fill(Some(krilla::paint::Fill {
         paint: rg.into(),
         rule: Default::default(),
         opacity: krilla::num::NormalizedF32::ONE,
     }));
-    canvas.surface.set_stroke(None);
+    surface.set_stroke(None);
 
     let Some(rect_path) = build_rect_path(ox, oy, ow, oh) else {
-        canvas.surface.set_fill(None);
+        surface.set_fill(None);
         return;
     };
-    canvas.surface.draw_path(&rect_path);
-    canvas.surface.set_fill(None);
+    surface.draw_path(&rect_path);
+    surface.set_fill(None);
 }
 
 /// `BgLengthPercentage` を origin rect 内の点座標に変換 (radial 中心位置用)。
