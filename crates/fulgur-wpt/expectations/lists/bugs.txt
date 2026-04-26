@@ -28,6 +28,32 @@ PASS  css/css-grid/grid-definition/grid-layout-basic.html             # fulgur-8
 PASS  css/css-images/linear-gradient-1.html             # fulgur-yax4: linear-gradient (3-stop axis direction)
 PASS  css/css-images/linear-gradient-non-square.html    # fulgur-yax4: linear-gradient (4 diagonals on non-square)
 
+# fulgur-gm56: radial-gradient Phase 2 実装 (shape/size/position + %-positioned
+# stops + auto stop spacing) は実装済み。視覚比較は VRT
+# (`crates/fulgur-vrt/tests/radial_gradient_harness.rs`) で circle + closest-side を
+# 独立検証済み。upstream WPT 側の reftest を seed する際の制約:
+#
+# - upstream の純粋な radial-gradient reftest は test/ref を 100x100 で描く構成が多く、
+#   harness が A4 raster (~890k px) に rasterize する都合で、test の `<meta name=fuzzy>`
+#   上限 (例 maxDifference=0-1; totalPixels=0-40000) を page area に対する ratio に
+#   換算すると ~4.5% になり、100x100 box が完全に違っていても PASS と判定されてしまう
+#   (harness 側の既知のスケール問題。`crates/fulgur-wpt/src/harness.rs:91-108` 参照)。
+#   このため Phase 2 で実装している機能だけを使う「視覚的に正しい一致」reftest が
+#   subset 内で見つからず、PASS 列挙は false positive を避けるため見送り。
+# - tiled-radial-gradients.html は radial-gradient 自体は正しく描画される (ellipse +
+#   closest-side + transparent stop) が、background-size / background-position が
+#   layer まで伝播していない (Phase 1 から残る制約 — `background.rs:209` のコメント参照)
+#   ため tile 2 個目を描けず FAIL。bg-size 伝播は Phase 3 範囲。FAIL annotation で
+#   regression net 化し、Phase 3 で PASS に昇格させる primary 検証として保持する。
+# - multiple-position-color-stop-radial-2.html は test/ref 双方が radial-gradient のみで
+#   Stylo の 2-position color stop (`red 0% 25%`) parse 展開を検証する優良候補だが、
+#   `<link rel="match" href="/css/css-images/...">` が root-relative href で、現在の
+#   harness (`crates/fulgur-wpt/src/reftest.rs:191`) は wpt_root context を持たず NoMatch
+#   SKIP に倒れる。harness 側修正が入った段階で PASS に昇格できる見込みのため SKIP で
+#   保留する。
+FAIL  css/css-images/tiled-radial-gradients.html                  # fulgur-gm56: bg-size/position が layer に伝播しない (Phase 3)
+SKIP  css/css-images/multiple-position-color-stop-radial-2.html   # fulgur-gm56: harness が root-relative rel=match href 未対応 (NoMatch)
+
 # fulgur-z2ho: inline-block 末尾要素がブロック兄弟の後に来た時の配置バグ。
 # 本件は fulgur 内部の Pageable handoff バグで厳密一致 reftest は不在。
 # §9.2.1.1 (anonymous block-level handling) を検証する近接機構として登録。
