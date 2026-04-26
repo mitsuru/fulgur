@@ -102,15 +102,19 @@ mod tests {
     ///
     /// lopdf is already a direct dependency of the fulgur crate, so this can be
     /// used in unit tests without adding any new dependencies.
+    ///
+    /// Panics on unexpected PDF structural shapes so tests fail loudly rather
+    /// than silently returning 0 and hiding regressions.
     fn page0_annotation_count(doc: krilla::Document) -> usize {
         let bytes = doc.finish().unwrap();
         let pdf = lopdf::Document::load_mem(&bytes).unwrap();
-        let page_id = pdf.page_iter().next().unwrap();
+        let page_id = pdf.page_iter().next().expect("PDF produced no pages");
         let page_obj = pdf.get_object(page_id).unwrap();
         let page_dict = match page_obj {
             lopdf::Object::Dictionary(d) => d,
-            _ => return 0,
+            other => panic!("page 0 object is not a dictionary: {other:?}"),
         };
+        // Absent /Annots key is the legitimate "no annotations on this page" case.
         let annots_obj = match page_dict.get(b"Annots") {
             Ok(obj) => obj,
             Err(_) => return 0,
@@ -120,9 +124,10 @@ mod tests {
             lopdf::Object::Array(arr) => arr.len(),
             lopdf::Object::Reference(r) => match pdf.get_object(*r) {
                 Ok(lopdf::Object::Array(arr)) => arr.len(),
-                _ => 0,
+                Ok(other) => panic!("Annots reference resolves to non-array: {other:?}"),
+                Err(e) => panic!("failed to dereference Annots: {e}"),
             },
-            _ => 0,
+            other => panic!("Annots has unexpected type: {other:?}"),
         }
     }
 
