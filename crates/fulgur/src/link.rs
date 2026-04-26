@@ -98,130 +98,179 @@ mod tests {
         }
     }
 
+    /// Serialize the finished document and count `/Annots` entries on page 0.
+    ///
+    /// lopdf is already a direct dependency of the fulgur crate, so this can be
+    /// used in unit tests without adding any new dependencies.
+    fn page0_annotation_count(doc: krilla::Document) -> usize {
+        let bytes = doc.finish().unwrap();
+        let pdf = lopdf::Document::load_mem(&bytes).unwrap();
+        let page_id = pdf.page_iter().next().unwrap();
+        let page_obj = pdf.get_object(page_id).unwrap();
+        let page_dict = match page_obj {
+            lopdf::Object::Dictionary(d) => d,
+            _ => return 0,
+        };
+        let annots_obj = match page_dict.get(b"Annots") {
+            Ok(obj) => obj,
+            Err(_) => return 0,
+        };
+        // /Annots may be a direct array or an indirect reference.
+        match annots_obj {
+            lopdf::Object::Array(arr) => arr.len(),
+            lopdf::Object::Reference(r) => match pdf.get_object(*r) {
+                Ok(lopdf::Object::Array(arr)) => arr.len(),
+                _ => 0,
+            },
+            _ => 0,
+        }
+    }
+
     // ── empty occurrences ──────────────────────────────────────────────────
 
     #[test]
-    fn empty_occurrences_does_not_panic() {
+    fn empty_occurrences_produces_no_annotations() {
         let mut doc = krilla::Document::new();
-        let mut page = doc.start_page_with(page_settings());
-        let registry = DestinationRegistry::new();
-
-        emit_link_annotations(&mut page, &[], &registry);
+        {
+            let mut page = doc.start_page_with(page_settings());
+            let registry = DestinationRegistry::new();
+            emit_link_annotations(&mut page, &[], &registry);
+        }
+        assert_eq!(page0_annotation_count(doc), 0);
     }
 
     // ── external links ─────────────────────────────────────────────────────
 
     #[test]
-    fn external_link_single_quad() {
+    fn external_link_single_quad_emits_one_annotation() {
         let mut doc = krilla::Document::new();
-        let mut page = doc.start_page_with(page_settings());
-        let registry = DestinationRegistry::new();
-        let occ = ext_occ(
-            "https://example.com",
-            vec![make_quad(10.0, 20.0, 80.0, 14.0)],
-        );
-
-        emit_link_annotations(&mut page, &[occ], &registry);
+        {
+            let mut page = doc.start_page_with(page_settings());
+            let registry = DestinationRegistry::new();
+            let occ = ext_occ(
+                "https://example.com",
+                vec![make_quad(10.0, 20.0, 80.0, 14.0)],
+            );
+            emit_link_annotations(&mut page, &[occ], &registry);
+        }
+        assert_eq!(page0_annotation_count(doc), 1);
     }
 
     #[test]
-    fn external_link_with_alt_text() {
+    fn external_link_with_alt_text_emits_one_annotation() {
         let mut doc = krilla::Document::new();
-        let mut page = doc.start_page_with(page_settings());
-        let registry = DestinationRegistry::new();
-        let occ = LinkOccurrence {
-            page_idx: 0,
-            target: LinkTarget::External(Arc::new("https://alt.example".to_string())),
-            alt_text: Some("Visit example".to_string()),
-            quads: vec![make_quad(0.0, 0.0, 100.0, 12.0)],
-        };
-
-        emit_link_annotations(&mut page, &[occ], &registry);
+        {
+            let mut page = doc.start_page_with(page_settings());
+            let registry = DestinationRegistry::new();
+            let occ = LinkOccurrence {
+                page_idx: 0,
+                target: LinkTarget::External(Arc::new("https://alt.example".to_string())),
+                alt_text: Some("Visit example".to_string()),
+                quads: vec![make_quad(0.0, 0.0, 100.0, 12.0)],
+            };
+            emit_link_annotations(&mut page, &[occ], &registry);
+        }
+        assert_eq!(page0_annotation_count(doc), 1);
     }
 
     #[test]
-    fn external_link_multi_quad_wraps_across_lines() {
+    fn external_link_multi_quad_emits_one_annotation() {
         let mut doc = krilla::Document::new();
-        let mut page = doc.start_page_with(page_settings());
-        let registry = DestinationRegistry::new();
-        let occ = ext_occ(
-            "https://long.example",
-            vec![
-                make_quad(0.0, 0.0, 200.0, 14.0),
-                make_quad(0.0, 14.0, 150.0, 14.0),
-            ],
-        );
-
-        emit_link_annotations(&mut page, &[occ], &registry);
+        {
+            let mut page = doc.start_page_with(page_settings());
+            let registry = DestinationRegistry::new();
+            // Two quads for a link wrapping across lines — still one occurrence, one annotation.
+            let occ = ext_occ(
+                "https://long.example",
+                vec![
+                    make_quad(0.0, 0.0, 200.0, 14.0),
+                    make_quad(0.0, 14.0, 150.0, 14.0),
+                ],
+            );
+            emit_link_annotations(&mut page, &[occ], &registry);
+        }
+        assert_eq!(page0_annotation_count(doc), 1);
     }
 
     // ── internal links ─────────────────────────────────────────────────────
 
     #[test]
-    fn internal_link_resolved_in_registry() {
+    fn internal_link_resolved_emits_one_annotation() {
         let mut doc = krilla::Document::new();
-        let mut page = doc.start_page_with(page_settings());
-        let mut registry = DestinationRegistry::new();
-        registry.set_current_page(2);
-        registry.record("section1", 0.0, 120.0);
-        let occ = int_occ("section1", vec![make_quad(10.0, 40.0, 80.0, 12.0)]);
-
-        emit_link_annotations(&mut page, &[occ], &registry);
+        {
+            let mut page = doc.start_page_with(page_settings());
+            let mut registry = DestinationRegistry::new();
+            // Use page 0 so the destination is valid within this single-page document.
+            registry.set_current_page(0);
+            registry.record("section1", 0.0, 120.0);
+            let occ = int_occ("section1", vec![make_quad(10.0, 40.0, 80.0, 12.0)]);
+            emit_link_annotations(&mut page, &[occ], &registry);
+        }
+        assert_eq!(page0_annotation_count(doc), 1);
     }
 
     #[test]
-    fn internal_link_unresolved_is_skipped_without_panic() {
+    fn internal_link_unresolved_emits_no_annotation() {
         let mut doc = krilla::Document::new();
-        let mut page = doc.start_page_with(page_settings());
-        let registry = DestinationRegistry::new(); // "missing" is not registered
-        let occ = int_occ("missing", vec![make_quad(0.0, 0.0, 50.0, 12.0)]);
-
-        // Should log to stderr via eprintln! and continue — must not panic.
-        emit_link_annotations(&mut page, &[occ], &registry);
+        {
+            let mut page = doc.start_page_with(page_settings());
+            let registry = DestinationRegistry::new(); // "missing" is not registered
+            let occ = int_occ("missing", vec![make_quad(0.0, 0.0, 50.0, 12.0)]);
+            // eprintln! log is emitted; the occurrence must be skipped entirely.
+            emit_link_annotations(&mut page, &[occ], &registry);
+        }
+        assert_eq!(page0_annotation_count(doc), 0);
     }
 
     // ── empty-quads guard ──────────────────────────────────────────────────
 
     #[test]
-    fn occurrence_with_empty_quads_is_skipped() {
+    fn occurrence_with_empty_quads_emits_no_annotation() {
         let mut doc = krilla::Document::new();
-        let mut page = doc.start_page_with(page_settings());
-        let registry = DestinationRegistry::new();
-        let occ = ext_occ("https://no-quads.example", vec![]);
-
-        emit_link_annotations(&mut page, &[occ], &registry);
+        {
+            let mut page = doc.start_page_with(page_settings());
+            let registry = DestinationRegistry::new();
+            let occ = ext_occ("https://no-quads.example", vec![]);
+            emit_link_annotations(&mut page, &[occ], &registry);
+        }
+        assert_eq!(page0_annotation_count(doc), 0);
     }
 
     #[test]
     fn empty_quads_does_not_suppress_later_valid_occurrences() {
         let mut doc = krilla::Document::new();
-        let mut page = doc.start_page_with(page_settings());
-        let registry = DestinationRegistry::new();
-        let occs = vec![
-            ext_occ("https://first.example", vec![]),
-            ext_occ(
-                "https://second.example",
-                vec![make_quad(0.0, 0.0, 80.0, 12.0)],
-            ),
-        ];
-
-        emit_link_annotations(&mut page, &occs, &registry);
+        {
+            let mut page = doc.start_page_with(page_settings());
+            let registry = DestinationRegistry::new();
+            let occs = vec![
+                ext_occ("https://first.example", vec![]),
+                ext_occ(
+                    "https://second.example",
+                    vec![make_quad(0.0, 0.0, 80.0, 12.0)],
+                ),
+            ];
+            emit_link_annotations(&mut page, &occs, &registry);
+        }
+        // First occurrence has empty quads (skipped); second is valid → 1 annotation.
+        assert_eq!(page0_annotation_count(doc), 1);
     }
 
     // ── mixed occurrences ─────────────────────────────────────────────────
 
     #[test]
-    fn mixed_external_and_internal_occurrences() {
+    fn mixed_occurrences_skips_unresolved_and_empty_quads() {
         let mut doc = krilla::Document::new();
-        let mut page = doc.start_page_with(page_settings());
-        let mut registry = DestinationRegistry::new();
-        registry.record("anchor", 0.0, 300.0);
-        let occs = vec![
-            ext_occ("https://a.example", vec![make_quad(0.0, 0.0, 60.0, 12.0)]),
-            int_occ("anchor", vec![make_quad(0.0, 20.0, 60.0, 12.0)]),
-            int_occ("gone", vec![make_quad(0.0, 40.0, 60.0, 12.0)]),
-        ];
-
-        emit_link_annotations(&mut page, &occs, &registry);
+        {
+            let mut page = doc.start_page_with(page_settings());
+            let mut registry = DestinationRegistry::new();
+            registry.record("anchor", 0.0, 300.0);
+            let occs = vec![
+                ext_occ("https://a.example", vec![make_quad(0.0, 0.0, 60.0, 12.0)]), // emitted
+                int_occ("anchor", vec![make_quad(0.0, 20.0, 60.0, 12.0)]), // emitted (resolved)
+                int_occ("gone", vec![make_quad(0.0, 40.0, 60.0, 12.0)]),   // skipped (unresolved)
+            ];
+            emit_link_annotations(&mut page, &occs, &registry);
+        }
+        assert_eq!(page0_annotation_count(doc), 2);
     }
 }
