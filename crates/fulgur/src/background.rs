@@ -418,6 +418,8 @@ fn renormalize_stops_to_unit_range(stops: Vec<(f32, [u8; 4])>) -> Vec<(f32, [u8;
         unreachable!("stops are monotonic and t is in [stops[0].0, stops[last].0]")
     };
 
+    // 上流 (`resolve_gradient_stops` の Auto fill / fr(0.0) / px(0.0) 等) は
+    // exact 0.0 / 1.0 を保証するため、浮動小数 `==` 比較で十分。
     let has_stop_at_zero = stops.iter().any(|(p, _)| *p == 0.0);
     let has_stop_at_one = stops.iter().any(|(p, _)| *p == 1.0);
 
@@ -539,12 +541,10 @@ fn resolve_gradient_stops(
         .map(|(s, p)| (p.expect("all slots resolved"), s.rgba))
         .collect();
     let renormalized = renormalize_stops_to_unit_range(resolved);
-
-    if renormalized.len() < 2 {
-        // 退化ケース (理論上は起こらない: helper は常に len >= 2 を返すが、
-        // krilla の gradient は 2 stops 以上必要なので念のためガード)
-        return None;
-    }
+    debug_assert!(
+        renormalized.len() >= 2,
+        "renormalize_stops_to_unit_range guarantees len >= 2"
+    );
 
     Some(
         renormalized
