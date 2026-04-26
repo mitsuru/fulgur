@@ -775,6 +775,17 @@ fn compute_tile_positions(
     clip_w: f32,
     clip_h: f32,
 ) -> Vec<(f32, f32, f32, f32)> {
+    // NoRepeat × NoRepeat short-circuit: the slow path's NoRepeat branch
+    // unconditionally emits exactly one tile at (pos, pos, img, img),
+    // regardless of clip overlap. Skip the resolve_repeat_axis indirection
+    // entirely — pure simplification, no correctness change.
+    if repeat_x == BgRepeat::NoRepeat && repeat_y == BgRepeat::NoRepeat {
+        if img_w <= 0.0 || img_h <= 0.0 {
+            return Vec::new();
+        }
+        return vec![(pos_x, pos_y, img_w, img_h)];
+    }
+
     // Degenerate fast-path: a single image already fully covers the clip rect
     // from its position. Without this, the boundary tile loop in `repeat`
     // mode emits up to 4 tiles for the common "image fills box" case (e.g.
