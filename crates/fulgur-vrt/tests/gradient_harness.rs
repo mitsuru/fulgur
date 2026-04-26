@@ -519,6 +519,113 @@ fn linear_gradient_out_of_range_low_matches_strip_reference() {
     );
 }
 
+/// `repeating-linear-gradient(to right, red 0%, blue 25%)` が、CSS 仕様
+/// (CSS Images 3 §3.6) で等価な明示展開
+/// `linear-gradient(to right, red 0%, blue 25%, red 25%, blue 50%, red 50%,
+///  blue 75%, red 75%, blue 100%)`
+/// と同一の PDF を生成することを確認する (fulgur-12z0)。
+///
+/// 戦略: test (`repeating-*`) と ref (展開形) どちらも fulgur で描画する。
+/// 両者は同じ piecewise color stop に解決されるはずなので、ピクセル等価で
+/// あるべき。strip 近似は経由しないので tolerance は raster 往復のノイズだけ
+/// 吸収すれば十分 (px-stop reftest と同じ思想)。
+#[test]
+fn repeating_linear_gradient_matches_explicit_expansion() {
+    let test_html = build_gradient_html(
+        "VRT test: repeating-linear-gradient",
+        GRADIENT_WIDTH_PX,
+        GRADIENT_HEIGHT_PX,
+        "repeating-linear-gradient(to right, #e53935 0%, #1e88e5 25%)",
+    );
+    // 等価展開: red 0, blue 25, red 25, blue 50, red 50, blue 75, red 75, blue 100
+    let ref_html = build_gradient_html(
+        "VRT ref: explicitly expanded linear-gradient",
+        GRADIENT_WIDTH_PX,
+        GRADIENT_HEIGHT_PX,
+        "linear-gradient(to right, #e53935 0%, #1e88e5 25%, #e53935 25%, \
+         #1e88e5 50%, #e53935 50%, #1e88e5 75%, #e53935 75%, #1e88e5 100%)",
+    );
+
+    let tol = Tolerance {
+        max_channel_diff: 4,
+        max_diff_pixels_ratio: 0.005,
+    };
+
+    let test_img = run_gradient_px_stop_reftest(
+        "repeating-linear-gradient",
+        "vrt-repeating-linear-gradient-harness",
+        &test_html,
+        &ref_html,
+        tol,
+    );
+
+    // Sentinel: 各周期境界 (CSS x = 0, 100, 200, 300) は red の hard edge、
+    // 中間 (x = 50, 150, 250, 350) は red→blue 補間中央でほぼ purple。
+    // x = 100 は red の hard stop 直後 (= red plateau の始端) を狙う。
+    // y は box 高 192 の中央 96。
+    assert_pixel_color(
+        &test_img,
+        100,
+        96,
+        (0xe5, 0x39, 0x35),
+        12,
+        "repeating period boundary at 25%",
+    );
+}
+
+/// `repeating-radial-gradient(circle 100px at center, red 0px, blue 25px)` が
+/// 等価な明示展開と同一の PDF を生成することを確認する (fulgur-12z0)。
+///
+/// 戦略: linear と同じく test/ref を fulgur で並走させ、ピクセル等価を見る。
+/// radial 側は krilla の SpreadMethod::Pad しかサポートしないため、stop の
+/// 周期展開で repeating semantics を表現する実装になっている。
+#[test]
+fn repeating_radial_gradient_matches_explicit_expansion() {
+    // 200×200 box, circle 100px at center: rx = 100 CSS px
+    // 0px → 0%, 25px → 25% に解決される piecewise gradient
+    let test_html = build_gradient_html(
+        "VRT test: repeating-radial-gradient",
+        200,
+        200,
+        "repeating-radial-gradient(circle 100px at center, #e53935 0px, #1e88e5 25px)",
+    );
+    let ref_html = build_gradient_html(
+        "VRT ref: explicitly expanded radial-gradient",
+        200,
+        200,
+        "radial-gradient(circle 100px at center, \
+         #e53935 0px, #1e88e5 25px, #e53935 25px, #1e88e5 50px, \
+         #e53935 50px, #1e88e5 75px, #e53935 75px, #1e88e5 100px)",
+    );
+
+    let tol = Tolerance {
+        max_channel_diff: 4,
+        max_diff_pixels_ratio: 0.005,
+    };
+
+    let test_img = run_gradient_px_stop_reftest(
+        "repeating-radial-gradient",
+        "vrt-repeating-radial-gradient-harness",
+        &test_html,
+        &ref_html,
+        tol,
+    );
+
+    // Sentinel: 中心 CSS (100, 100) は r=0 で red、半径 25px の点
+    // (CSS (125, 100)) は周期境界の red hard edge (周期 1 の終端 blue 25px と
+    // 周期 2 の始端 red 25px が並ぶので、後者を採用するのが renormalize の
+    // p0==p1 ハンドリング。) → 視覚上は red 平坦域の始端。
+    assert_pixel_color(&test_img, 100, 100, (0xe5, 0x39, 0x35), 12, "radial center");
+    assert_pixel_color(
+        &test_img,
+        125,
+        100,
+        (0xe5, 0x39, 0x35),
+        12,
+        "radial period boundary at 25px",
+    );
+}
+
 /// `linear-gradient(90deg, #e53935 0%, #1e88e5 200%)` の renormalize 動作確認。
 ///
 /// 範囲外 stop 200% は drop され、offset 1 の色は CSS Images 3 §3.5.1 に従い

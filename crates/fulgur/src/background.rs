@@ -236,7 +236,11 @@ fn draw_background_layer(
     }
 
     match &layer.content {
-        BgImageContent::LinearGradient { direction, stops } => {
+        BgImageContent::LinearGradient {
+            direction,
+            stops,
+            repeating,
+        } => {
             // Try to detect a uniform tile grid and emit a single Tiling Pattern
             // resource (one Function 2 + Shading 2 + Pattern triplet) rather
             // than N independent gradient draws. Falls back to the per-tile
@@ -251,7 +255,16 @@ fn draw_background_layer(
                     }
                 };
                 draw_gradient_tiling_pattern(canvas, grid, |surface, _tw, _th| {
-                    draw_linear_gradient(surface, angle, stops, 0.0, 0.0, grid.cell.0, grid.cell.1);
+                    draw_linear_gradient(
+                        surface,
+                        angle,
+                        stops,
+                        *repeating,
+                        0.0,
+                        0.0,
+                        grid.cell.0,
+                        grid.cell.1,
+                    );
                 });
             } else {
                 // Fallback: per-tile loop. Match before the loop (Angle hoists,
@@ -261,13 +274,31 @@ fn draw_background_layer(
                     crate::pageable::LinearGradientDirection::Angle(a) => {
                         let angle = *a;
                         for (tx, ty, tw, th) in &tiles {
-                            draw_linear_gradient(canvas.surface, angle, stops, *tx, *ty, *tw, *th);
+                            draw_linear_gradient(
+                                canvas.surface,
+                                angle,
+                                stops,
+                                *repeating,
+                                *tx,
+                                *ty,
+                                *tw,
+                                *th,
+                            );
                         }
                     }
                     crate::pageable::LinearGradientDirection::Corner(corner) => {
                         for (tx, ty, tw, th) in &tiles {
                             let angle = corner_to_angle_rad(*corner, *tw, *th);
-                            draw_linear_gradient(canvas.surface, angle, stops, *tx, *ty, *tw, *th);
+                            draw_linear_gradient(
+                                canvas.surface,
+                                angle,
+                                stops,
+                                *repeating,
+                                *tx,
+                                *ty,
+                                *tw,
+                                *th,
+                            );
                         }
                     }
                 }
@@ -279,6 +310,7 @@ fn draw_background_layer(
             position_x,
             position_y,
             stops,
+            repeating,
         } => {
             // Same dedup story as Linear: uniform grids share (cell_w, cell_h)
             // so cx/cy/rx/ry are identical across tiles → a single Pattern
@@ -286,7 +318,8 @@ fn draw_background_layer(
             if let Some(grid) = try_uniform_grid(&tiles) {
                 draw_gradient_tiling_pattern(canvas, grid, |surface, tw, th| {
                     draw_radial_gradient(
-                        surface, *shape, size, position_x, position_y, stops, 0.0, 0.0, tw, th,
+                        surface, *shape, size, position_x, position_y, stops, *repeating, 0.0, 0.0,
+                        tw, th,
                     );
                 });
             } else {
@@ -300,6 +333,7 @@ fn draw_background_layer(
                         position_x,
                         position_y,
                         stops,
+                        *repeating,
                         *tx,
                         *ty,
                         *tw,
@@ -461,13 +495,16 @@ fn lerp_u8(a: u8, b: u8, alpha: f32) -> u8 {
 ///   2. 先頭/末尾の `Auto` を 0.0 / 1.0 に確定
 ///   3. monotonic clamp (前 fixed より小さければ前 fixed に合わせる)
 ///   4. 中間の `Auto` 群を前後 fixed の等間隔補間で埋める
-///   5. 最終 fraction が `[0, 1]` 外なら `renormalize_stops_to_unit_range` で
+///   5. `repeating=true` なら fixup 後の `(p_first, p_last)` を周期に取り、
+///      `[0, 1]` を覆うだけ stop 列を平行コピー (CSS Images 3 §3.6)
+///   6. 最終 fraction が `[0, 1]` 外なら `renormalize_stops_to_unit_range` で
 ///      端点合成し正規化する (CSS Images 3 §3.5.1; fulgur-n3zk)
 ///
 /// `line_length <= 0` の場合は length stop が解決不能なので None。
 fn resolve_gradient_stops(
     stops: &[crate::pageable::GradientStop],
     line_length: f32,
+    repeating: bool,
 ) -> Option<Vec<krilla::paint::Stop>> {
     use crate::pageable::GradientStopPosition;
 
@@ -534,13 +571,24 @@ fn resolve_gradient_stops(
         i = end;
     }
 
-    // renormalize: 範囲外 fraction は端点合成で [0, 1] 内表現に変換 (fulgur-n3zk)
     let resolved: Vec<(f32, [u8; 4])> = stops
         .iter()
         .zip(positions)
         .map(|(s, p)| (p.expect("all slots resolved"), s.rgba))
         .collect();
-    let renormalized = renormalize_stops_to_unit_range(resolved);
+
+    // 周期展開: repeating-* gradient は first/last stop 間の差を周期に取り、
+    // `[0, 1]` を覆うように copy を平行移動して並べる。renormalize 段で
+    // 範囲外 stop は端点補間にクリップされるので、ここでは [0, 1] を
+    // 充分カバーするだけ生成すればよい。
+    let expanded = if repeating {
+        expand_repeating_stops(resolved)?
+    } else {
+        resolved
+    };
+
+    // renormalize: 範囲外 fraction は端点合成で [0, 1] 内表現に変換 (fulgur-n3zk)
+    let renormalized = renormalize_stops_to_unit_range(expanded);
     debug_assert!(
         renormalized.len() >= 2,
         "renormalize_stops_to_unit_range guarantees len >= 2"
@@ -558,6 +606,70 @@ fn resolve_gradient_stops(
     )
 }
 
+/// `repeating-linear-gradient` / `repeating-radial-gradient` の周期展開。
+///
+/// 入力: fixup 後の monotonically non-decreasing `(pos, rgba)` ベクタ (`len >= 2`)。
+/// 出力: `[0, 1]` 範囲を覆うように first/last 差を周期として平行コピーした列。
+/// `renormalize_stops_to_unit_range` 段で out-of-range stop が端点補間に丸められる
+/// 前提なので、ここでは充分なオーバーラップを与える。
+///
+/// `period <= 0` (degenerate) は最後の色で塗られる単色とみなして None を返す。
+/// `period > 0` でも安全上限 `MAX_PERIODS` を超えたら最終周期で打ち切り
+/// (`repeating-linear-gradient(red 0%, blue 0.01%)` のような病的入力でも有界化)。
+fn expand_repeating_stops(stops: Vec<(f32, [u8; 4])>) -> Option<Vec<(f32, [u8; 4])>> {
+    debug_assert!(stops.len() >= 2, "caller guaranteed len >= 2");
+
+    let p_first = stops.first().expect("len >= 2").0;
+    let p_last = stops.last().expect("len >= 2").0;
+    let period = p_last - p_first;
+
+    // CSS Images 3 §3.6: period が 0 または負 (monotonic clamp 通過後の
+    // 等位置 hard stop) の場合、繰り返しは degenerate。最後の色で塗りつぶす
+    // 1-stop に相当するが、krilla は最低 2 stop 必要なので呼び出し側で
+    // None を伝搬して layer drop させる (= white background がそのまま見える
+    // のに近い挙動)。
+    if period <= 0.0 || !period.is_finite() {
+        return None;
+    }
+
+    // 安全上限。256 周期あれば line_length 比 0.4% の周期まで描き切れ、
+    // それ以下は実質連続色なので品質劣化しない。`stops.len() = 100` 等の
+    // pathological 入力 × MAX_PERIODS でも合計 5 万 stop 以下に留まる。
+    const MAX_PERIODS: i32 = 256;
+
+    // forward: p_last + k*period >= 1 となる最小の k
+    // backward: p_first + k*period <= 0 となる最小の |k|  (k は負方向)
+    let forward = if p_last >= 1.0 {
+        0
+    } else {
+        ((1.0 - p_last) / period).ceil() as i32
+    };
+    let backward = if p_first <= 0.0 {
+        0
+    } else {
+        ((p_first - 0.0) / period).ceil() as i32
+    };
+
+    let forward = forward.min(MAX_PERIODS);
+    let backward = backward.min(MAX_PERIODS);
+
+    let total_copies = (forward + backward + 1) as usize;
+    let mut out: Vec<(f32, [u8; 4])> = Vec::with_capacity(total_copies * stops.len());
+
+    // k = -backward .. = forward の順に shift 量 k*period を加えて並べる。
+    // 同位置で隣接する周期境界の color が違う場合 (e.g. period 末尾 blue →
+    // 次周期先頭 red) は hard stop として出力に残し、renormalize の線形補間
+    // (`p0 == p1` 時は後者の色を採用) と整合する。
+    for k in -backward..=forward {
+        let shift = (k as f32) * period;
+        for &(p, rgba) in &stops {
+            out.push((p + shift, rgba));
+        }
+    }
+
+    Some(out)
+}
+
 /// Draw a CSS linear-gradient over the origin rect.
 ///
 /// CSS angle convention (radians): 0 = "to top", π/2 = "to right",
@@ -568,10 +680,12 @@ fn resolve_gradient_stops(
 /// `|W·sin θ| + |H·cos θ|` — this is the projection of both diagonals onto the
 /// gradient axis, ensuring the line spans corner-to-corner regardless of angle
 /// (CSS Images §3.1).
+#[allow(clippy::too_many_arguments)]
 fn draw_linear_gradient(
     surface: &mut krilla::surface::Surface<'_>,
     angle_rad: f32,
     stops: &[crate::pageable::GradientStop],
+    repeating: bool,
     ox: f32,
     oy: f32,
     ow: f32,
@@ -605,7 +719,7 @@ fn draw_linear_gradient(
     // `px / line_length` で fraction 化するので、line_length も CSS px に揃える。
     // (例: 400px box → length = 300pt → px 換算で 400 → 50px / 400 = 0.125)
     let length_px = crate::convert::pt_to_px(length);
-    let Some(krilla_stops) = resolve_gradient_stops(stops, length_px) else {
+    let Some(krilla_stops) = resolve_gradient_stops(stops, length_px, repeating) else {
         return;
     };
 
@@ -655,6 +769,7 @@ fn draw_radial_gradient(
     position_x: &BgLengthPercentage,
     position_y: &BgLengthPercentage,
     stops: &[crate::pageable::GradientStop],
+    repeating: bool,
     ox: f32,
     oy: f32,
     ow: f32,
@@ -730,7 +845,7 @@ fn draw_radial_gradient(
     // rx は pt 単位 (ow/oh が pt) なので、`LengthPx` (CSS px) との比較のために
     // CSS px に揃える。
     let rx_px = crate::convert::pt_to_px(rx);
-    let Some(krilla_stops) = resolve_gradient_stops(stops, rx_px) else {
+    let Some(krilla_stops) = resolve_gradient_stops(stops, rx_px, repeating) else {
         return;
     };
 
@@ -2608,7 +2723,7 @@ mod resolve_gradient_stops_tests {
             stop(fr(0.0), [255, 0, 0, 255]),
             stop(fr(1.0), [0, 0, 255, 255]),
         ];
-        let out = resolve_gradient_stops(&stops, 100.0).unwrap();
+        let out = resolve_gradient_stops(&stops, 100.0, false).unwrap();
         assert_eq!(out.len(), 2);
         assert!((out[0].offset.get() - 0.0).abs() < 1e-6);
         assert!((out[1].offset.get() - 1.0).abs() < 1e-6);
@@ -2621,7 +2736,7 @@ mod resolve_gradient_stops_tests {
             stop(px(50.0), [0, 0, 255, 255]),
         ];
         // line_length = 100 → 50px = 0.5
-        let out = resolve_gradient_stops(&stops, 100.0).unwrap();
+        let out = resolve_gradient_stops(&stops, 100.0, false).unwrap();
         assert_eq!(out.len(), 2);
         assert!((out[1].offset.get() - 0.5).abs() < 1e-6);
     }
@@ -2629,7 +2744,7 @@ mod resolve_gradient_stops_tests {
     #[test]
     fn auto_position_filled_at_endpoints() {
         let stops = vec![stop(Auto, [255, 0, 0, 255]), stop(Auto, [0, 0, 255, 255])];
-        let out = resolve_gradient_stops(&stops, 100.0).unwrap();
+        let out = resolve_gradient_stops(&stops, 100.0, false).unwrap();
         assert!((out[0].offset.get() - 0.0).abs() < 1e-6);
         assert!((out[1].offset.get() - 1.0).abs() < 1e-6);
     }
@@ -2641,7 +2756,7 @@ mod resolve_gradient_stops_tests {
             stop(Auto, [0, 255, 0, 255]),
             stop(fr(1.0), [0, 0, 255, 255]),
         ];
-        let out = resolve_gradient_stops(&stops, 100.0).unwrap();
+        let out = resolve_gradient_stops(&stops, 100.0, false).unwrap();
         assert!((out[1].offset.get() - 0.5).abs() < 1e-6);
     }
 
@@ -2654,7 +2769,7 @@ mod resolve_gradient_stops_tests {
             stop(px(50.0), [0, 0, 255, 255]),
             stop(Auto, [0, 255, 0, 255]),
         ];
-        let out = resolve_gradient_stops(&stops, 100.0).unwrap();
+        let out = resolve_gradient_stops(&stops, 100.0, false).unwrap();
         assert_eq!(out.len(), 3);
         assert!((out[0].offset.get() - 0.0).abs() < 1e-6);
         assert!((out[1].offset.get() - 0.5).abs() < 1e-6);
@@ -2671,7 +2786,7 @@ mod resolve_gradient_stops_tests {
             stop(fr(0.0), [255, 0, 0, 255]),
             stop(px(50.0), [0, 0, 255, 255]),
         ];
-        let out = resolve_gradient_stops(&stops, 30.0).unwrap();
+        let out = resolve_gradient_stops(&stops, 30.0, false).unwrap();
         assert_eq!(out.len(), 2, "renormalize keeps 2 stops");
         assert!((out[0].offset.get() - 0.0).abs() < 1e-6);
         assert!((out[1].offset.get() - 1.0).abs() < 1e-6);
@@ -2685,7 +2800,7 @@ mod resolve_gradient_stops_tests {
             stop(fr(-0.1), [255, 0, 0, 255]),
             stop(fr(1.0), [0, 0, 255, 255]),
         ];
-        let out = resolve_gradient_stops(&stops, 100.0).unwrap();
+        let out = resolve_gradient_stops(&stops, 100.0, false).unwrap();
         assert_eq!(out.len(), 2, "renormalize keeps 2 stops");
         assert!((out[0].offset.get() - 0.0).abs() < 1e-6);
         assert!((out[1].offset.get() - 1.0).abs() < 1e-6);
@@ -2698,7 +2813,7 @@ mod resolve_gradient_stops_tests {
             stop(fr(0.6), [255, 0, 0, 255]),
             stop(fr(0.3), [0, 0, 255, 255]),
         ];
-        let out = resolve_gradient_stops(&stops, 100.0).unwrap();
+        let out = resolve_gradient_stops(&stops, 100.0, false).unwrap();
         assert!((out[0].offset.get() - 0.6).abs() < 1e-6);
         assert!((out[1].offset.get() - 0.6).abs() < 1e-6);
     }
@@ -2709,8 +2824,132 @@ mod resolve_gradient_stops_tests {
             stop(px(50.0), [255, 0, 0, 255]),
             stop(fr(1.0), [0, 0, 255, 255]),
         ];
-        let out = resolve_gradient_stops(&stops, 0.0);
+        let out = resolve_gradient_stops(&stops, 0.0, false);
         assert!(out.is_none());
+    }
+
+    /// `repeating-linear-gradient(red 0%, blue 25%)`: period = 0.25。
+    /// 4 周期分 + 端点合成で `[0, 1]` を覆う。0% / 25% / 50% / 75% / 100% は
+    /// hard stop boundary を保ち、隣接 (red→blue→red→...) のパターンが見える。
+    #[test]
+    fn repeating_simple_period() {
+        let stops = vec![
+            stop(fr(0.0), [255, 0, 0, 255]),
+            stop(fr(0.25), [0, 0, 255, 255]),
+        ];
+        let out = resolve_gradient_stops(&stops, 100.0, true).unwrap();
+        // 期待: forward = ceil(0.75/0.25) = 3, backward = 0
+        // → k = 0, 1, 2, 3 で各周期の (red, blue) を配置
+        // (0, red), (0.25, blue), (0.25, red), (0.5, blue), (0.5, red),
+        // (0.75, blue), (0.75, red), (1.0, blue) の 8 stops
+        assert_eq!(out.len(), 8, "got offsets: {:?}", offsets(&out));
+        let expected = [
+            (0.0, [255, 0, 0, 255]),
+            (0.25, [0, 0, 255, 255]),
+            (0.25, [255, 0, 0, 255]),
+            (0.5, [0, 0, 255, 255]),
+            (0.5, [255, 0, 0, 255]),
+            (0.75, [0, 0, 255, 255]),
+            (0.75, [255, 0, 0, 255]),
+            (1.0, [0, 0, 255, 255]),
+        ];
+        for (i, (eo, ec)) in expected.iter().enumerate() {
+            assert!(
+                (out[i].offset.get() - eo).abs() < 1e-5,
+                "stop[{i}] offset got {} expected {eo}",
+                out[i].offset.get()
+            );
+            // krilla::paint::Stop にコンポーネントアクセスがないので
+            // RGB は output 個数だけ確認 (色の検証は VRT 側で行う)
+            let _ = ec;
+        }
+    }
+
+    /// `repeating-linear-gradient(red 25%, blue 50%)`: period = 0.25、
+    /// 周期境界が box の端点に揃わない。前後両方向に展開され、renormalize で
+    /// 端点合成される。
+    #[test]
+    fn repeating_offset_period_extends_both_directions() {
+        let stops = vec![
+            stop(fr(0.25), [255, 0, 0, 255]),
+            stop(fr(0.5), [0, 0, 255, 255]),
+        ];
+        let out = resolve_gradient_stops(&stops, 100.0, true).unwrap();
+        // backward = ceil(0.25/0.25) = 1, forward = ceil(0.5/0.25) = 2
+        // 展開列: k=-1 (0.0 red, 0.25 blue), k=0 (0.25 red, 0.5 blue),
+        //         k=1 (0.5 red, 0.75 blue), k=2 (0.75 red, 1.0 blue)
+        // = (0.0, red), (0.25, blue), (0.25, red), (0.5, blue), (0.5, red),
+        //   (0.75, blue), (0.75, red), (1.0, blue) → all in [0, 1] なので
+        // renormalize fast path で 8 stops そのまま。
+        assert_eq!(out.len(), 8);
+        let first = out.first().unwrap().offset.get();
+        let last = out.last().unwrap().offset.get();
+        assert!((first - 0.0).abs() < 1e-5, "first offset {first}");
+        assert!((last - 1.0).abs() < 1e-5, "last offset {last}");
+    }
+
+    /// `repeating-linear-gradient(red 0%, blue 0%)`: period = 0 (degenerate)。
+    /// None を返してレイヤー drop。
+    #[test]
+    fn repeating_period_zero_returns_none() {
+        let stops = vec![
+            stop(fr(0.0), [255, 0, 0, 255]),
+            stop(fr(0.0), [0, 0, 255, 255]),
+        ];
+        let out = resolve_gradient_stops(&stops, 100.0, true);
+        assert!(out.is_none(), "period=0 should return None");
+    }
+
+    /// `repeating-linear-gradient(red 0%, blue 100%)`: period = 1.0。
+    /// 1 周期で `[0, 1]` を完全カバー、non-repeating と同じ結果。
+    #[test]
+    fn repeating_full_period_equals_single_pass() {
+        let stops = vec![
+            stop(fr(0.0), [255, 0, 0, 255]),
+            stop(fr(1.0), [0, 0, 255, 255]),
+        ];
+        let repeat = resolve_gradient_stops(&stops, 100.0, true).unwrap();
+        let plain = resolve_gradient_stops(&stops, 100.0, false).unwrap();
+        // どちらも 2 stops で同じ位置。
+        assert_eq!(repeat.len(), plain.len());
+        for (r, p) in repeat.iter().zip(plain.iter()) {
+            assert!((r.offset.get() - p.offset.get()).abs() < 1e-5);
+        }
+    }
+
+    /// `repeating-linear-gradient(red, blue, green)`: 3 stops, Auto fixup 後
+    /// (0.0, 0.5, 1.0) → period = 1.0。1 周期で完結。
+    #[test]
+    fn repeating_three_color_stops() {
+        let stops = vec![
+            stop(Auto, [255, 0, 0, 255]),
+            stop(Auto, [0, 255, 0, 255]),
+            stop(Auto, [0, 0, 255, 255]),
+        ];
+        let out = resolve_gradient_stops(&stops, 100.0, true).unwrap();
+        // forward = backward = 0 → 1 copy = 3 stops
+        assert_eq!(out.len(), 3);
+        assert!((out[0].offset.get() - 0.0).abs() < 1e-5);
+        assert!((out[1].offset.get() - 0.5).abs() < 1e-5);
+        assert!((out[2].offset.get() - 1.0).abs() < 1e-5);
+    }
+
+    /// `repeating-radial-gradient(red 0px, blue 25px)` を radius=100px で評価。
+    /// 0/25 px → 0.0/0.25 fraction で linear と同じ展開。
+    #[test]
+    fn repeating_with_length_px_stops() {
+        let stops = vec![
+            stop(px(0.0), [255, 0, 0, 255]),
+            stop(px(25.0), [0, 0, 255, 255]),
+        ];
+        let out = resolve_gradient_stops(&stops, 100.0, true).unwrap();
+        // line_length=100, 25px → 0.25 fraction → repeating_simple_period と
+        // 同じ展開: 8 stops
+        assert_eq!(out.len(), 8);
+    }
+
+    fn offsets(stops: &[krilla::paint::Stop]) -> Vec<f32> {
+        stops.iter().map(|s| s.offset.get()).collect()
     }
 }
 
