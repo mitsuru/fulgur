@@ -40,11 +40,9 @@ FAIL  css/css-images/linear-gradient-non-square.html    # Tracking: beads fulgur
 #   (harness 側の既知のスケール問題。`crates/fulgur-wpt/src/harness.rs:91-108` 参照)。
 #   このため Phase 2 で実装している機能だけを使う「視覚的に正しい一致」reftest が
 #   subset 内で見つからず、PASS 列挙は false positive を避けるため見送り。
-# - tiled-radial-gradients.html は radial-gradient 自体は正しく描画される (ellipse +
-#   closest-side + transparent stop) が、background-size / background-position が
-#   layer まで伝播していない (Phase 1 から残る制約 — `background.rs:209` のコメント参照)
-#   ため tile 2 個目を描けず FAIL。bg-size 伝播は Phase 3 範囲。FAIL annotation で
-#   regression net 化し、Phase 3 で PASS に昇格させる primary 検証として保持する。
+# - tiled-radial-gradients.html は fulgur-4ono で bg-size/position/repeat の
+#   gradient layer 伝播が有効化されたため PASS に昇格 (radial-gradient 自体は
+#   ellipse + closest-side + transparent stop で Phase 1 / Phase 2 通じて正常)。
 # - multiple-position-color-stop-radial-2.html は test/ref 双方が radial-gradient のみで
 #   Stylo の 2-position color stop (`red 0% 25%`) parse 展開を検証する優良候補だが、
 #   `<link rel="match" href="/css/css-images/...">` が root-relative href で、現在の

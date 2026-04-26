@@ -147,7 +147,10 @@ git commit -m "feat(gradient): add resolve_gradient_size helper for no-intrinsic
 
 ## Task 2: `draw_background_layer` を gradient 経路で統合
 
-**事前周知 — Phase 1 byte-wise regression は想定内**: 新コードでは default `repeat: Repeat` / `size: auto` の gradient でも `compute_tile_positions` が **`image == clip` 縮退ケースで 4 tile** を生成する (epsilon `+ 0.01` の境界)。3 tile は clip 外で視覚的に等価だが PDF byte は変化する。Phase 2 の意図的挙動として既存 gradient golden を `FULGUR_VRT_UPDATE=1` で再生成し、commit message に明示する方針。`compute_tile_positions` 自体は image / SVG 経路と共有するため、ここに 1-tile fast-path を入れると image 側にも影響するので避ける。
+**事前周知 — byte-wise regression と最終形**:
+
+- **Task 2 単独**: 新コードでは default `repeat: Repeat` / `size: auto` の gradient でも `compute_tile_positions` が **`image == clip` 縮退ケースで 4 tile** を生成する (epsilon `+ 0.01` の境界)。3 tile は clip 外で視覚的に等価だが PDF byte は変化する。Task 2 の commit ではこの byte 差分を意図的なものとして既存 gradient golden を `FULGUR_VRT_UPDATE=1` で再生成する。
+- **後続の refine commit (`perf(background): collapse single-image-covers-clip case to one tile`) が compute_tile_positions に degenerate fast-path を追加** し、`image >= clip` (Round 除く) の場合は 1 tile に縮退するように改修。これにより最終的な PDF byte stream は Phase 1 と完全一致 (sha256 一致確認済) になり、Task 2 で再生成した golden は再度 main HEAD に戻る。本セクションは「Task 2 単独で push したら 4 tile になる」という中間状態を残しているが、PR レビューの過程で fast-path を追加したため、最終形は 1 tile / byte-identical with main となる。
 
 **Files:**
 - Modify: `crates/fulgur/src/background.rs:179-300` — `draw_background_layer`
@@ -284,7 +287,7 @@ cargo test -p fulgur --lib 2>&1 | tail -10
 
 Expected: 既存 ~340 + 新規 5 = ~345 テスト pass、0 fail。
 
-**重要な確認**: Phase 1 の動作互換 — `background-size: auto` / `repeat: repeat (デフォルト) で position: 0 0` の場合、tile は `(ox, oy, ow, oh)` の単一 tile 1 個になり Phase 1 と完全に同じ pixel が出るはず。既存 gradient 単体テスト(`crates/fulgur-vrt` の既存 gradient_harness)が PDF byte-wise で一致することが regression 0 の決め手。
+**重要な確認**: Task 2 単独では `image == clip` 縮退ケースで `compute_tile_positions` が 4 tile (boundary epsilon の overshoot) を生成し、PDF byte は Phase 1 から変化する (3 tile は clip 外で視覚等価)。`background-size: auto` / `repeat: repeat (デフォルト) で position: 0 0` の場合の **最終的な byte-wise 一致** は後続の fast-path refine commit で達成される — Task 2 の VRT step (Step 4) では一旦 golden を再生成するが、refine 後に Phase 1 と同じ hash に戻る。
 
 **Step 4: 既存 VRT を実行 → 想定通り regression なら golden 更新**
 
