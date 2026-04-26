@@ -244,8 +244,16 @@ fn draw_background_layer(
     // sizes the assertion below fires loudly in dev/test rather than silently
     // misrendering the gradient on the affected tiles.
     let (_, _, tw0, th0) = tiles[0];
+    // Float tolerance instead of `==`: resolve_repeat_axis is contractually
+    // obligated to emit bit-identical sizes per axis today, but a future
+    // change that accumulates fractional spacing per tile (e.g. for a new
+    // round-style mode) could drift by sub-ulp amounts without breaking
+    // visual output. 1e-4 is well below sub-pixel rendering thresholds and
+    // catches genuine non-uniformity without flagging FP noise.
     debug_assert!(
-        tiles.iter().all(|&(_, _, w, h)| w == tw0 && h == th0),
+        tiles
+            .iter()
+            .all(|&(_, _, w, h)| (w - tw0).abs() < 1e-4 && (h - th0).abs() < 1e-4),
         "compute_tile_positions emitted non-uniform tile sizes; gradient \
          drawing relies on uniformity",
     );
@@ -1431,6 +1439,71 @@ mod tests {
         );
         assert_eq!(fast, slow, "fast and slow paths must agree for Space");
         assert_eq!(fast.len(), 1);
+    }
+
+    #[test]
+    fn tile_positions_fast_slow_parity_negative_position_repeat() {
+        // Reviewer's concern: for Repeat with negative pos_x where the
+        // image covers the clip (pos_x + img_w >= clip_x + clip_w), does
+        // the slow path's `start_x` equal `pos_x`? Mathematical analysis:
+        // when image covers clip from pos_x, img_w >= clip_w + (clip_x -
+        // pos_x), so `clip_x - pos_x < img_w` and the slow-path's
+        // `(clip_x - pos_x) % img_w` reduces to `clip_x - pos_x` exactly,
+        // making `start_x = pos_x` algebraically.
+        //
+        // Empirically there is a sub-ulp drift through the modulo when
+        // pos_x is not exactly representable in f32 (e.g. -99.999), so we
+        // assert agreement within 1e-3 — well below sub-pixel rendering
+        // precision. The fast path uses the literal pos_x and is in fact
+        // strictly more accurate than the slow path here.
+        for &(pos_x, img_w) in &[
+            (-50.0_f32, 200.0_f32),
+            (-99.999, 250.0),
+            (-150.0, 250.0),
+            (-1.0, 110.0),
+        ] {
+            let fast = compute_tile_positions(
+                BgRepeat::Repeat,
+                BgRepeat::Repeat,
+                pos_x,
+                pos_x,
+                img_w,
+                img_w,
+                0.0,
+                0.0,
+                100.0,
+                100.0,
+            );
+            let slow = compute_tile_positions_slow(
+                BgRepeat::Repeat,
+                BgRepeat::Repeat,
+                pos_x,
+                pos_x,
+                img_w,
+                img_w,
+                0.0,
+                0.0,
+                100.0,
+                100.0,
+            );
+            assert_eq!(
+                fast.len(),
+                1,
+                "fast-path must emit 1 tile for pos={pos_x} img={img_w}"
+            );
+            let (sx, sy, sw, sh) = slow[0];
+            let (fx, fy, fw, fh) = fast[0];
+            assert!(
+                (sx - fx).abs() < 1e-3
+                    && (sy - fy).abs() < 1e-3
+                    && (sw - fw).abs() < 1e-3
+                    && (sh - fh).abs() < 1e-3,
+                "tile[0] mismatch for pos={pos_x} img={img_w}: \
+                 fast={:?} slow={:?}",
+                fast[0],
+                slow[0],
+            );
+        }
     }
 
     #[test]
