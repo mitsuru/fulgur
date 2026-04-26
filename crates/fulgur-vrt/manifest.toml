@@ -104,3 +104,7 @@ margin_pt = 0.0
 [[fixture]]
 path = "paint/gradient-to-top-right-tile-aspect.html"
 margin_pt = 0.0
+
+[[fixture]]
+path = "paint/radial-gradient-repeat-round.html"
+margin_pt = 0.0

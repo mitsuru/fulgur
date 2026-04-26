@@ -1474,6 +1474,17 @@ mod tests {
             (-99.999, 250.0),
             (-150.0, 250.0),
             (-1.0, 110.0),
+            // Reviewer concern (job 442 Medium): pos_x = -150, img_w = 260
+            // claim: slow start_x = 0, fast tile at -150 → mismatch.
+            // Actual slow: offset = 150 % 260 = 150, start_x = 0 - 150 = -150.
+            // Both fast and slow yield -150. Lock this case explicitly.
+            (-150.0, 260.0),
+            // Larger absolute pos_x where image still covers clip:
+            // pos = -250, img = 360, clip = (0, 100). Slow offset =
+            // 250 % 360 = 250, start_x = 0 - 250 = -250 (still equals pos_x
+            // because 250 < 360, i.e. clip_x - pos_x < img_w as required by
+            // the cover-clip predicate).
+            (-250.0, 360.0),
         ] {
             let fast = compute_tile_positions(
                 BgRepeat::Repeat,
