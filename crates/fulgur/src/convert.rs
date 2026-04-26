@@ -3203,10 +3203,14 @@ fn resolve_linear_gradient(
 
 /// CSS gradient items から GradientStop ベクタを解決する。linear / radial 共通。
 ///
-/// - length-typed stop position は None を返す (gradient line 長さ依存のため Phase 2)
-/// - 範囲外 stop position も None (recompute が必要、Phase 2)
-/// - interpolation hint も None (Phase 2)
-/// - auto position は CSS Images §3.5.1 に従い等間隔で埋める
+/// position は `GradientStopPosition` で保持され (Auto / Fraction / LengthPx)、
+/// draw 時に `background::resolve_gradient_stops` で gradient line 長さを
+/// 使って fraction 化される。convert 時の fixup は行わない。
+///
+/// Bail 条件:
+/// - stops.len() < 2 (規定上 invalid)
+/// - interpolation hint (Phase 2 別 issue)
+/// - position が percentage でも length でもない (calc() 等 — Phase 2)
 fn resolve_color_stops(
     items: &[style::values::generics::image::GenericGradientItem<
         style::values::computed::Color,
@@ -3215,34 +3219,36 @@ fn resolve_color_stops(
     current_color: &style::color::AbsoluteColor,
     gradient_kind: &'static str,
 ) -> Option<Vec<crate::pageable::GradientStop>> {
-    use crate::pageable::GradientStop;
+    use crate::pageable::{GradientStop, GradientStopPosition};
     use style::values::generics::image::GradientItem;
 
-    let mut raw: Vec<(Option<f32>, [u8; 4])> = Vec::with_capacity(items.len());
+    let mut out: Vec<GradientStop> = Vec::with_capacity(items.len());
     for item in items.iter() {
         match item {
             GradientItem::SimpleColorStop(c) => {
                 let abs = c.resolve_to_absolute(current_color);
-                raw.push((None, absolute_to_rgba(abs)));
+                out.push(GradientStop {
+                    position: GradientStopPosition::Auto,
+                    rgba: absolute_to_rgba(abs),
+                });
             }
             GradientItem::ComplexColorStop { color, position } => {
-                let Some(pct) = position.to_percentage().map(|p| p.0) else {
+                let abs = color.resolve_to_absolute(current_color);
+                let pos = if let Some(pct) = position.to_percentage() {
+                    GradientStopPosition::Fraction(pct.0)
+                } else if let Some(len) = position.to_length() {
+                    GradientStopPosition::LengthPx(len.px())
+                } else {
                     log::warn!(
-                        "{gradient_kind}: length-typed stop position is not yet \
-                         supported (Phase 2). Layer dropped."
+                        "{gradient_kind}: stop position is neither percentage \
+                         nor length (calc() etc.). Layer dropped."
                     );
                     return None;
                 };
-                if !(0.0..=1.0).contains(&pct) {
-                    log::warn!(
-                        "{gradient_kind}: stop position {pct:.4} is outside [0, 1]. \
-                         Negative / >100% positions require recomputing the gradient \
-                         line (Phase 2). Layer dropped."
-                    );
-                    return None;
-                }
-                let abs = color.resolve_to_absolute(current_color);
-                raw.push((Some(pct), absolute_to_rgba(abs)));
+                out.push(GradientStop {
+                    position: pos,
+                    rgba: absolute_to_rgba(abs),
+                });
             }
             GradientItem::InterpolationHint(_) => {
                 log::warn!(
@@ -3254,55 +3260,11 @@ fn resolve_color_stops(
         }
     }
 
-    if raw.len() < 2 {
+    if out.len() < 2 {
         return None;
     }
 
-    let n = raw.len();
-    let mut positions: Vec<Option<f32>> = raw.iter().map(|(p, _)| *p).collect();
-    if positions[0].is_none() {
-        positions[0] = Some(0.0);
-    }
-    if positions[n - 1].is_none() {
-        positions[n - 1] = Some(1.0);
-    }
-    let mut last_resolved = 0.0_f32;
-    for v in positions.iter_mut().flatten() {
-        if *v < last_resolved {
-            *v = last_resolved;
-        }
-        last_resolved = *v;
-    }
-    let mut i = 0;
-    while i < n {
-        if positions[i].is_some() {
-            i += 1;
-            continue;
-        }
-        let start = i;
-        let mut end = start;
-        while end < n && positions[end].is_none() {
-            end += 1;
-        }
-        let p_prev = positions[start - 1].expect("first slot resolved");
-        let p_next = positions[end].expect("last slot resolved");
-        let span = (end - start + 1) as f32;
-        for (k, slot) in positions.iter_mut().enumerate().take(end).skip(start) {
-            let t = (k - start + 1) as f32 / span;
-            *slot = Some(p_prev + (p_next - p_prev) * t);
-        }
-        i = end;
-    }
-
-    Some(
-        raw.into_iter()
-            .zip(positions)
-            .map(|((_, rgba), pos)| GradientStop {
-                offset: pos.unwrap().clamp(0.0, 1.0),
-                rgba,
-            })
-            .collect(),
-    )
+    Some(out)
 }
 
 /// Convert a Stylo computed `Gradient::Radial` into fulgur's `BgImageContent::RadialGradient`.
