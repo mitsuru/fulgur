@@ -235,34 +235,26 @@ fn draw_background_layer(
         return;
     }
 
-    // All tiles within a layer share the same (tw, th) — compute_tile_positions
-    // emits uniform tile sizes per `resolve_repeat_axis` (even Round produces a
-    // single tile_size per axis). Both gradient branches rely on this for
-    // correctness: linear hoists corner_to_angle_rad out of the loop, and
-    // radial computes per-tile shape geometry (cx, cy, rx, ry) from (tw, th).
-    // If a future change to compute_tile_positions emits non-uniform tile
-    // sizes the assertion below fires loudly in dev/test rather than silently
-    // misrendering the gradient on the affected tiles.
-    let (_, _, tw0, th0) = tiles[0];
-    // Promoted from debug_assert to runtime assert: silent non-uniform tile
-    // sizes would mis-render gradients (linear hoists Corner-direction
-    // angle, radial computes per-tile shape geometry from tw/th) and the
-    // O(N) float-compare cost is negligible against the per-tile draw
-    // overhead. Float tolerance instead of `==`: resolve_repeat_axis is
-    // contractually obligated to emit bit-identical sizes today, but a
-    // future change that accumulates fractional spacing per tile could
-    // drift by sub-ulp amounts without breaking visual output. 1e-4 is
-    // well below sub-pixel rendering thresholds.
-    assert!(
-        tiles
-            .iter()
-            .all(|&(_, _, w, h)| (w - tw0).abs() < 1e-4 && (h - th0).abs() < 1e-4),
-        "compute_tile_positions emitted non-uniform tile sizes; gradient \
-         drawing relies on uniformity",
-    );
-
     match &layer.content {
         BgImageContent::LinearGradient { direction, stops } => {
+            // Gradients require uniform tile sizes within a layer because
+            // both this branch (Corner-direction angle hoisted out of the
+            // loop) and the radial branch below (per-tile shape geometry
+            // cx/cy/rx/ry derived from tw/th) treat (tw0, th0) as canonical.
+            // Raster and SVG tiles don't depend on uniformity (each tile
+            // uses its own tw/th independently), so the assert is scoped to
+            // the gradient arms where the invariant is load-bearing — not
+            // run on the raster/SVG hot path. Float tolerance protects
+            // against a future change that accumulates fractional spacing
+            // per tile drifting by sub-ulp without breaking visual output.
+            let (_, _, tw0, th0) = tiles[0];
+            assert!(
+                tiles
+                    .iter()
+                    .all(|&(_, _, w, h)| (w - tw0).abs() < 1e-4 && (h - th0).abs() < 1e-4),
+                "compute_tile_positions emitted non-uniform tile sizes; \
+                 LinearGradient relies on uniformity",
+            );
             let angle_rad = match direction {
                 crate::pageable::LinearGradientDirection::Angle(a) => *a,
                 crate::pageable::LinearGradientDirection::Corner(corner) => {
@@ -280,6 +272,15 @@ fn draw_background_layer(
             position_y,
             stops,
         } => {
+            // See LinearGradient arm for rationale on this assert.
+            let (_, _, tw0, th0) = tiles[0];
+            assert!(
+                tiles
+                    .iter()
+                    .all(|&(_, _, w, h)| (w - tw0).abs() < 1e-4 && (h - th0).abs() < 1e-4),
+                "compute_tile_positions emitted non-uniform tile sizes; \
+                 RadialGradient relies on uniformity",
+            );
             for (tx, ty, tw, th) in &tiles {
                 draw_radial_gradient(
                     canvas, *shape, size, position_x, position_y, stops, *tx, *ty, *tw, *th,
@@ -1180,6 +1181,20 @@ mod tests {
         );
         let (w, h) = resolve_gradient_size(&size, 200.0, 100.0);
         assert!((w - 50.0).abs() < 1e-6);
+        assert!((h - 25.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn resolve_gradient_size_explicit_asymmetric_percentages() {
+        // Each axis resolves against its own origin dimension independently,
+        // so `(50%, 25%)` on a 200×100 origin yields (100, 25), not a
+        // uniform scale. Locks the percentage basis.
+        let size = BgSize::Explicit(
+            Some(BgLengthPercentage::Percentage(0.5)),
+            Some(BgLengthPercentage::Percentage(0.25)),
+        );
+        let (w, h) = resolve_gradient_size(&size, 200.0, 100.0);
+        assert!((w - 100.0).abs() < 1e-6);
         assert!((h - 25.0).abs() < 1e-6);
     }
 
